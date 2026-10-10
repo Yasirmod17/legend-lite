@@ -369,6 +369,15 @@ class Document(Paged):
         self.assertEqual(after_chart['spec']['options'], {**chart_view['spec']['options'], 'labels': True})
         self.assertEqual(after['sheets'], doc['sheets'])
 
+    def test_a_kpi_is_a_chart_of_the_grid_its_number_and_its_trend(self):
+        page, grid, _ = self.built()
+        kpi = grid.chart('kpi', options={'target': 300, 'better': 'lower'}, title='Notional')
+        self.assertEqual(page.to_dict()['views'][-1]['spec'], {
+            'version': 1, 'mark': 'kpi', 'y': [{'column': 'notional', 'fn': 'sum'}],
+            'options': {'target': 300, 'better': 'lower'}})
+        kpi.plot(x='region')
+        self.assertEqual(page.to_dict()['views'][-1]['spec']['x'], 'region')
+
     def test_a_document_python_cannot_work_on_is_refused_saying_why(self):
         page, _, _ = self.built()
         doc = page.to_dict()

@@ -14,10 +14,11 @@ import {
   chartQuery,
   defaultChart,
   followCube,
+  kpiQueries,
   type ChartMark,
   type ChartSpec,
 } from '../chart-spec.ts';
-import { chartOption, themeOf, treemapOfGrid, type GridShown, type LabelOf, type MarkKey } from '../chart-option.ts';
+import { chartOption, kpiDrawing, themeOf, treemapOfGrid, type GridShown, type LabelOf, type MarkKey } from '../chart-option.ts';
 // ECharts (about 218 KB gzipped) is loaded the first time a chart draws, never by a grid alone (plan F7)
 import type { ChartPicture, MountedChart } from '../chart-render.ts';
 import type { ResultTable } from '../../../engine-client/src/result.ts';
@@ -58,6 +59,8 @@ export class ChartPanel {
   #canvas!: HTMLElement;
   #status!: HTMLElement;
   #chart: MountedChart | null = null;
+  /** A KPI's trend line, mounted under its number (the number is the canvas's own, not a chart). */
+  #trend: MountedChart | null = null;
   #timer: ReturnType<typeof setTimeout> | undefined;
   #inflight: AbortController | null = null;
   #disposed = false;
@@ -126,6 +129,8 @@ export class ChartPanel {
     this.#inflight?.abort();
     this.#chart?.dispose();
     this.#chart = null;
+    this.#trend?.dispose();
+    this.#trend = null;
   }
 
   // -- layout ---------------------------------------------------------------
@@ -193,6 +198,35 @@ export class ChartPanel {
     const markField = field(doc, 'Chart:', dropdown<ChartMark>(doc, spec.mark, CHART_MARKS, (v) => {
       if (v) this.#set({ mark: v }, true);
     }));
+    if (spec.mark === 'kpi') {
+      // a number, what it measures, its trend by a column (or none), and a target with which way is good
+      form.append(
+        markField,
+        field(doc, 'Value:', dropdown<string>(doc, first?.column, measures.map((c) => ({ value: c.name, label: c.name })),
+          (v) => { if (v) this.#set({ y: [{ column: v, fn: this.#spec?.y[0]?.fn ?? 'sum' }] }, true); })),
+        field(doc, 'Aggregate:', dropdown<AggregateFn>(doc, first?.fn, fns, (v) => {
+          const now = this.#spec?.y[0];
+          if (v && now) this.#set({ y: [{ column: now.column, fn: v }] });
+        })),
+        field(doc, 'Trend by:', dropdown<string>(doc, spec.x, dims, (v) => {
+          if (!this.#spec) return;
+          const { x: _old, ...rest } = this.#spec;
+          this.#spec = v ? { ...rest, x: v } : rest;
+          this.#options.onSpec?.();
+          this.refresh();
+        }, { allowNone: true })),
+        field(doc, 'Target:', numberInput(doc, spec.options.target, (v) => {
+          if (!this.#spec) return;
+          const { target: _old, ...rest } = this.#spec.options;
+          this.#set({ options: v === undefined ? rest : { ...rest, target: v } });
+        }, { width: 110 })),
+        field(doc, 'Good when:', dropdown(doc, spec.options.better ?? 'higher', [
+          { value: 'higher', label: 'Above target' },
+          { value: 'lower', label: 'Below target' },
+        ] as const, (v) => { if (v) this.#setOption('better', v); })),
+      );
+      return;
+    }
     if (spec.mark === 'treemap') {
       // what is on screen decides the rest: nothing else to choose
       const note = doc.createElement('p');
@@ -297,6 +331,7 @@ export class ChartPanel {
     // A TREEMAP DRAWS THE GRID AS SHOWN, with no query of its own (the old treemap's way, the user
     // 2026-09-30): following, the rows on screen now; frozen, the rows it last drew.
     if (spec.mark === 'treemap') {
+      this.#clearKpi();
       const now = this.frozen && this.#shownKept ? this.#shownKept : this.#options.shown?.() ?? this.#shownKept;
       if (!now) {
         this.#say('A treemap draws the grid\'s rows; the grid has none to draw yet.', true);
@@ -318,6 +353,11 @@ export class ChartPanel {
       this.#say(problems.join(' '), true);
       return;
     }
+    if (spec.mark === 'kpi') {
+      await this.#drawKpi(spec, cube);
+      return;
+    }
+    this.#clearKpi();
     this.#inflight?.abort();
     const abort = new AbortController();
     this.#inflight = abort;
@@ -345,6 +385,71 @@ export class ChartPanel {
     } finally {
       if (this.#inflight === abort) this.#canvas.removeAttribute('aria-busy');
     }
+  }
+
+  /**
+   * A KPI: its number as the grid writes it, against its target (good or not), and under them its trend's line -- its
+   * value from one query, the trend from another, both the cube's own (chart-spec.ts `kpiQueries`).
+   */
+  async #drawKpi(spec: ChartSpec, cube: CubeSnapshot): Promise<void> {
+    this.#inflight?.abort();
+    const abort = new AbortController();
+    this.#inflight = abort;
+    this.#canvas.setAttribute('aria-busy', 'true');
+    try {
+      const { total, trend } = kpiQueries(cube, spec);
+      const [rows, line] = await Promise.all([
+        this.#options.run(total.query, total.snapshot, abort.signal),
+        trend ? this.#options.run(trend.query, trend.snapshot, abort.signal) : Promise.resolve(null),
+      ]);
+      if (abort.signal.aborted || this.#disposed) return;
+      const drawing = kpiDrawing(spec, rows, line, themeOf(this.#canvas), this.#options.label);
+      // a chart drawn before (another kind) gives way to the number
+      this.#chart?.dispose();
+      this.#chart = null;
+      this.#trend?.dispose();
+      this.#trend = null;
+      const doc = this.#doc;
+      const box = doc.createElement('div');
+      box.className = 'dc-kpi';
+      const value = doc.createElement('div');
+      value.className = 'dc-kpi-value';
+      value.textContent = drawing.value;
+      box.append(value);
+      if (drawing.target) {
+        const against = doc.createElement('div');
+        against.className = `dc-kpi-target ${drawing.target.good ? 'dc-kpi-good' : 'dc-kpi-bad'}`;
+        against.textContent = drawing.target.text;
+        box.append(against);
+      }
+      const place = doc.createElement('div');
+      place.className = 'dc-kpi-trend';
+      if (drawing.trend) box.append(place);
+      this.#canvas.replaceChildren(box);
+      this.#canvas.setAttribute('aria-label', drawing.description);
+      this.#canvas.classList.add('dc-chartpanel-kpi');
+      if (drawing.trend) {
+        const { mountChart } = await import('../chart-render.ts');
+        if (abort.signal.aborted || this.#disposed) return;
+        this.#trend = mountChart(place);
+        this.#trend.show(drawing.trend);
+      }
+      this.#say(drawing.notes.join(' '));
+    } catch (e) {
+      if (abort.signal.aborted || this.#disposed) return;
+      this.#say(e instanceof Error ? e.message : String(e), true);
+    } finally {
+      if (this.#inflight === abort) this.#canvas.removeAttribute('aria-busy');
+    }
+  }
+
+  /** A KPI drawn before gives way to a chart: its number and its trend gone. */
+  #clearKpi(): void {
+    if (!this.#canvas.classList.contains('dc-chartpanel-kpi')) return;
+    this.#trend?.dispose();
+    this.#trend = null;
+    this.#canvas.replaceChildren();
+    this.#canvas.classList.remove('dc-chartpanel-kpi');
   }
 
   #say(text: string, bad = false): void {

@@ -184,6 +184,31 @@
 .dc-page-bar.dc-collapsed .dc-page-alone { overflow: hidden; }
 .dc-page-bar.dc-collapsed .dc-page-alone .dc-tile-cube > :not(.dc-titlebar-zones) { visibility: hidden; }
 
+/* A KPI (ui/chart-panel.ts): its number, large; against its target, good or not; its trend's line under them */
+.dc-chartpanel-chart.dc-chartpanel-kpi { display: flex; }
+.dc-kpi {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: var(--dc-pad-1);
+  padding: var(--dc-pad-2);
+  min-width: 0;
+}
+.dc-kpi-value {
+  font-size: clamp(20px, 6vmin, 44px);
+  line-height: 1.1;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dc-kpi-target { font-size: var(--dc-text-sm-size); }
+.dc-kpi-good { color: var(--dc-kpi-good, #0b7a3e); }
+.dc-kpi-bad { color: var(--dc-kpi-bad, #b42318); }
+.dc-kpi-trend { flex: 1 1 40px; min-height: 40px; max-height: 120px; }
+
 /* -- the title bar ------------------------------------------------- */
 
 /* Their h-7 bar in neutral-100: the report's name in text-lg

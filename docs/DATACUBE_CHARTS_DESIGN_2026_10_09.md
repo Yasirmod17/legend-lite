@@ -51,9 +51,12 @@ The largest gaps are not in the charts.
    grid; the tile clicked highlights its mark rather than filtering itself. Within one source first; then across
    sources through declared links -- a column of one source named as a column of another, suggested by name and type,
    confirmed by the user (§5.4's links; a tile not linked says so).
-3. **A KPI tile.** One number, large, in the grid's format; beside it its change against the period before or a
-   target (a percentage, coloured by direction), and an optional small trend line. A tile kind of its own over a
-   grid's query (the page document's views: `kind: 'kpi'`).
+3. **A KPI tile.** One number, large, in the grid's format; under it how it stands against a target (a percentage,
+   good or bad by which way is good), and an optional small trend line; its change against the period before is batch
+   4's (it needs the period before computed). As built, a chart kind (`mark: 'kpi'`), not a tile kind of its own: it
+   is a view of its grid's query as every chart is, so it has a chart's every way -- placed beside its grid, on any
+   sheet, stacked, following the grid's measure or frozen, saved, and Python's `grid.chart('kpi', ...)` -- with none
+   of it written twice; its options carry the target and which way is good.
 
 ### Batch 2: the charts made dashboard-grade
 

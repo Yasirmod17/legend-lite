@@ -16,9 +16,10 @@
 // and ONE value axis (never two).
 
 import type { EChartsOption } from 'echarts';
-import { measureName, type ChartSpec } from './chart-spec.ts';
+import { KPI_TREND_LIMIT, measureName, type ChartSpec } from './chart-spec.ts';
 import type { ResultTable, Scalar } from '../../engine-client/src/result.ts';
 import { numberOf } from '../../engine-client/src/values.ts';
+import { UI_LOCALE } from '../../engine-client/src/locale.ts';
 import { isNumeric } from '../../engine-client/src/types.ts';
 import { TREE_COLUMN } from './treeview.ts';
 
@@ -243,6 +244,8 @@ export function chartOption(
   if (spec.mark === 'treemap') {
     throw new Error('a treemap draws the grid\'s rows as shown: treemapOfGrid, not chartOption');
   }
+  // a KPI is a number, said as the grid writes it, and its trend (`kpiDrawing`)
+  if (spec.mark === 'kpi') throw new Error('a KPI is drawn by kpiDrawing, not chartOption');
 
   // -- heatmap: x across, split down, the first measure as colour ---------
   if (spec.mark === 'heatmap' && spec.split !== undefined) {
@@ -409,8 +412,96 @@ export function chartOption(
 
 const MARK_WORDS: Record<ChartSpec['mark'], string> = {
   bar: 'Bar chart', line: 'Line chart', area: 'Area chart', scatter: 'Scatter plot',
-  pie: 'Pie chart', heatmap: 'Heatmap', treemap: 'Treemap',
+  pie: 'Pie chart', heatmap: 'Heatmap', treemap: 'Treemap', kpi: 'KPI',
 };
+
+/** A KPI as drawn: its number as the grid writes it, how it stands against its target, and its trend's line. */
+export interface KpiDrawing {
+  /** The measure over every row, as the grid writes it; "—" when there is none (no rows). */
+  readonly value: string;
+  /** Against its target: "12% above target (13.5M)", good or not; absent with no target. */
+  readonly target?: { readonly text: string; readonly good: boolean };
+  /** Its trend, a line with no axes, when it has a column across. */
+  readonly trend?: ChartDrawing;
+  /** The KPI in words, for a screen reader. */
+  readonly description: string;
+  readonly notes: readonly string[];
+}
+
+/**
+ * A KPI (chart-spec.ts `kpiQueries`): `total`'s one row, its measure written as the grid writes the measure's column;
+ * against `options.target`, the difference as a share of the target -- good when it is on the side `options.better`
+ * says (above, unless it says below) -- and, given `trend`'s rows, the measure along the column across, a line with
+ * nothing but the line (a hover says each point).
+ */
+export function kpiDrawing(
+  spec: ChartSpec,
+  total: ResultTable,
+  trend: ResultTable | null,
+  theme: ChartTheme = LIGHT_THEME,
+  label: LabelOf = defaultLabel,
+): KpiDrawing {
+  const first = spec.y[0];
+  const notes: string[] = [];
+  if (!first) return { value: '\u2014', description: 'A KPI with nothing to measure.', notes: ['Pick something to measure.'] };
+  const name = measureName(first);
+  const col = column(total, name);
+  const raw = col?.values[0] ?? null;
+  const v = numberOf(raw, col?.type);
+  const value = raw === null ? '\u2014' : label(raw, first.column, col?.type);
+  const what = `${first.fn} of ${first.column}`;
+  let target: KpiDrawing['target'];
+  const t = spec.options.target;
+  if (t !== undefined && v !== null) {
+    const higher = spec.options.better !== 'lower';
+    const goal = label(t, first.column, col?.type);
+    if (v === t) {
+      target = { text: `On target (${goal})`, good: true };
+    } else {
+      const share = t === 0 ? null : Math.abs((v - t) / t) * 100;
+      const above = v > t;
+      const mark = above ? '\u25B2' : '\u25BC';
+      // past ten times the target, said as how many times it (a percentage of thousands reads as nothing)
+      const text = share !== null && share >= 1000 && v / t > 0
+        ? `${mark} ${Math.round(v / t).toLocaleString(UI_LOCALE)}\u00D7 the target (${goal})`
+        : `${mark} ${share === null ? '' : `${share < 10 ? share.toFixed(1) : Math.round(share)}% `}${above ? 'above' : 'below'} target (${goal})`;
+      target = { text, good: above === higher };
+    }
+  }
+  let line: ChartDrawing | undefined;
+  if (trend && spec.x !== undefined) {
+    const xs = column(trend, spec.x);
+    const ys = column(trend, name);
+    if (xs && ys) {
+      const points = xs.values.map((x, i) => [label(x, spec.x!, xs.type), numberOf(ys.values[i] ?? null, ys.type)] as const);
+      line = {
+        option: asOption({
+          backgroundColor: 'transparent',
+          animation: false,
+          aria: { enabled: true, label: { enabled: false } },
+          grid: { left: 0, right: 0, top: 4, bottom: 4 },
+          tooltip: {
+            trigger: 'axis', confine: true, backgroundColor: theme.surface, borderColor: theme.axis,
+            textStyle: { color: theme.ink },
+          },
+          xAxis: { type: 'category', show: false, boundaryGap: false, data: points.map((p) => p[0]) },
+          yAxis: { type: 'value', show: false, scale: true },
+          series: [{
+            type: 'line', name: what, data: points.map((p) => p[1]), showSymbol: false,
+            lineStyle: { width: 2, color: theme.series[0] }, itemStyle: { color: theme.series[0] },
+            areaStyle: { opacity: 0.12, color: theme.series[0] },
+          }],
+        }),
+        keyAt: () => null,
+        notes: [],
+        description: `${what} by ${spec.x}: ${points.length} points.`,
+      };
+      if (xs.values.length >= KPI_TREND_LIMIT) notes.push(`The trend shows the first ${KPI_TREND_LIMIT} values of ${spec.x}.`);
+    }
+  }
+  const description = `KPI: ${what} is ${value}${target ? `; ${target.text}` : ''}.`;
+  return { value, ...(target ? { target } : {}), ...(line ? { trend: line } : {}), description, notes };
+}
 
 /** The chart in one sentence: what is plotted against what, and how much of it. */
 export function describe(spec: ChartSpec, rows: ResultTable): string {
