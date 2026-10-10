@@ -43,6 +43,12 @@ words to DataCube's.
 
 The largest gaps are not in the charts.
 
+**Landing (2026-10-10):** the KPI lands first. Page filters and cross-filtering were built on the batch's branch, matching
+columns by name; the user then ruled that what a filter reaches comes from the Pure model, not a name (DataCube's own
+links, below, included), and that nothing reaches across tiles without one: docs/DATACUBE_MODEL_DESIGN_2026_10_10.md
+(revision 3: prep makes classes, dashboards are built on them). They land rebuilt on it, on dashboards over classes,
+with its step D1 (its §13).
+
 1. **Page filters.** A filter for the whole page -- a date range, a pick-list of values, a number range -- shown in the
    page's bar, reaching every tile whose source has the column (the dashboards design §5.4: "all tiles except
    excluded"; each tile says what filters it). Saved in the page document (its version 4: `filters`), never in a
@@ -145,7 +151,7 @@ bubbles placed by latitude and longitude. Both offline: everything a map draws s
 
 - **The spec stays ours, plain JSON** (the dashboards design §6). A new kind is a new `mark`; an older DataCube
   opening a page with a kind it does not know refuses it by name (`page-document.ts`'s reader already does). New page
-  parts (filters, KPI tiles, links) move the page document's version, read back from every version before it.
+  parts (filters, links) move the page document's version, read back from every version before it.
 - **Download**: the chart chunk gets a budget of its own beside the grid's (`bundle-budget.test.ts`), raised on purpose
   with each batch, and the rarer kinds -- maps first -- go in chunks of their own, fetched with their first chart.
 - **Accessible**: each kind says what it shows in words (`describe`), and pattern fills are one option away.
