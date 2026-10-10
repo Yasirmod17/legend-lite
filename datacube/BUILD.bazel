@@ -157,7 +157,7 @@ _EXTRA_ENV = {
 }
 
 # DuckDB-WASM's users load it from node_modules by name, so they declare it (DC-N3.6)
-_DUCKDB_USERS = ["duckdb", "group-derived", "saved-queries", "sorting", "treeview", "upload"]
+_DUCKDB_USERS = ["duckdb", "group-derived", "model-join", "saved-queries", "sorting", "treeview", "upload"]
 
 # What a test reads from disk beyond src/: the guardrails scan the demo
 # entry points too (they ship), so they are declared, not assumed.
@@ -213,6 +213,8 @@ _WASM_TESTS = [
     "json-shape",
     "column-editor",
     "saved-queries",
+    # a page's model: classes over relation functions, related by a ModelJoin (docs/DATACUBE_MODEL_DESIGN_2026_10_10.md §11)
+    "model-join",
 ]
 
 # node:test files, each its own node_test (tools/js/defs.bzl: types stripped, the spec and strict reporters, a
@@ -242,6 +244,18 @@ _WASM_TESTS = [
     } if t[len("test/"):-len(".test.ts")] in _SCANNED else {}),
     wasm = t[len("test/"):-len(".test.ts")] in _WASM_TESTS,
 ) for t in _TESTS]
+
+# A MEASUREMENT, not a test (docs/DATACUBE_MODEL_DESIGN_2026_10_10.md §11): a page's model as it grows, planned by the
+# tab's own compiler, and a source read as a class against the same source read as a table. Manual, in //gates:heavy:
+# `bazel test //datacube:model_scale_measure --test_output=all` prints its numbers.
+node_test(
+    name = "model_scale_measure",
+    size = "large",
+    tags = ["manual"],
+    data = [":src"],
+    entry_point = "test/model-scale.measure.ts",
+    wasm = True,
+)
 
 test_suite(
     name = "tests",

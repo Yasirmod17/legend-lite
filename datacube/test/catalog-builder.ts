@@ -6,6 +6,6 @@ import { runfileDirUrl } from '../../tools/js/runfiles.mts';
 const MODULE_DIR = runfileDirUrl('WASM_PLANNER');
 
 /** A planner over a model, from the same module. */
-export function plannerFor(model: string, runtime: string): WasmPlanner {
-  return new WasmPlanner({ model, runtime, assetBaseUrl: MODULE_DIR, cache: false });
+export function plannerFor(model: string, runtime: string, how: { readonly mapping?: string } = {}): WasmPlanner {
+  return new WasmPlanner({ model, runtime, ...how, assetBaseUrl: MODULE_DIR, cache: false });
 }

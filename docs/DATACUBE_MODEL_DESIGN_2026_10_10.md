@@ -1,0 +1,298 @@
+# DataCube and the Pure model: shape data, make classes, relate them, build dashboards on them (2026-10-10)
+
+A design for the user's agreement. Revision 3: **two modes** (the user, 2026-10-10: "datacube should not run models/
+modelled queries it should CREATE models ... then there really is another mode of making nice dashboards FROM those
+models"). Revision 2's "every source a class" and "one way of working" are withdrawn (§12). It replaces what DataCube has
+or planned for filters across tiles: page filters and a chart's clicks reaching grids by **column name** (batch 1 of
+docs/DATACUBE_CHARTS_DESIGN_2026_10_09.md: built on its branch, not landed), and the dashboards design's **links**
+(docs/DATACUBE_DASHBOARDS_DESIGN_2026_09_28.md §5.3, a format of DataCube's own).
+
+## 0. In one paragraph
+
+Three layers, each with its own join. **Prep** is data engineering, Alteryx- or Power Query-style: grids over raw
+sources -- files, tables, frames -- read as relations, as DataCube reads them today, shaped with relation operations
+(filter, calculated columns, join, union, group and aggregate, choose and rename columns, remove duplicates); its joins
+are **relation joins, to make one class** (a Trade spread over three tables joined into one shape). When a shape is
+what a person wants -- "that is my Trade" -- **Make a class** turns it into the model: the pipeline as a relation
+function, a class whose properties are its columns, and a mapping of the class to the function (upstream's own
+`promoteRelationToModel`: `~func`). **The model** is the classes made -- several of them -- and the relationships between
+them: **ModelJoins, between classes** (a trade's `customer`, a customer's `trades`), as Associations. Tables one to one
+with what they mean need no relation join at all: a class of each, related in the model. **Dashboards** are made from
+the model -- or a project's: pages of grids, charts and KPIs, and the filters that reach across tiles -- page filters, a
+chart's clicks -- by a class's property, through the relationships. **Nothing reaches across tiles without a model**,
+and nothing is published without a released one (§7, proposed).
+
+## 1. What binds this design (the user's words, 2026-10-10)
+
+- "For 'linked' we should use Pure semantic models I think not make up our own for datacube".
+- "associations must be uniquely named always like property names": a route between classes is stated by name.
+- "Definitely modelJoins as default 100%"; a Database Join only as a fallback.
+- "everything you do in relation space - join filter aggregate etc then you say oh that's exactly how I want my trade
+  class to look like please make a trade class out of all these operations I just did that like data engineering /
+  altryx mode - then there really is another mode of making nice dashboards FROM those models - it really IS two
+  different modes".
+- "the rule is no cross linking no whole page filter etc without model and MAYBE no sharing or no 'publishing' to prod
+  without models".
+- "those are RELATION joins to create a single class not between semantic entities - then you build a model and then
+  between models do model joins ... two different layers of things if your tables are just one to one then no relation
+  joins at all but if you need to join 3 tables to create the Trades class that's relational".
+- "we can write class/mapping (or mapping function)/store out as real pure at the end so people can really do their
+  visual modeling/ETL in Datacube and get the classes + the MAPPINGS as real artifacts".
+- docs/MODEL_HOME_2026_09_28.md: sources point to models, never copy them; a saved cube pins its model version, with an
+  easy upgrade; upstream's APIs and shapes exactly.
+
+## 2. What exists (read 2026-10-10)
+
+- **The same split, elsewhere**: Power BI's Power Query (merge, filter, group, add columns; each query's output a table
+  of the model) beside its model and reports; Tableau Prep's flows beside Tableau Desktop; dbt's models beside a
+  semantic layer (Looker's views and explores).
+- **Upstream's promotion** (legend-engine's REPL, `PromoteRelationToModel` and `RelationClassMappingGenerator`): the last
+  relation expression run becomes a function (`<pkg>::function::<Name>Fn`, its return the relation's own type), a
+  class (`<pkg>::domain::<Name>Class`, each column a property: `[ /@~<>.]` made `_`, quotes dropped, `makeCamelCase`;
+  its type and multiplicity the column's) and a mapping (`<pkg>::mapping::<Name>Mapping`, a Relation class mapping of
+  the class to the function, each property its column). Studio's "generate models from a database"
+  (`POST /api/pure/v1/relational/generateModelsFromDatabaseSpecification`, core_relational's
+  autogeneration/relationalToPure.pure) writes the older form: tables mapped directly, Joins as Associations.
+- **Upstream's newest mapping forms** (its relation emit test models, e.g. `relation-modelJoin/mapping/
+  modelJoinMapping.pure`): a class mapped to a relation function (`Relation { ~func f():Relation<Any>[1] id: ID, ... }`,
+  local properties `+firmId: Integer[1]: FIRM_ID`); an association mapped by a ModelJoin, one typed condition whose two
+  parameters are its ends (`{employer: Firm[1], employees: Employee[1] | $employer.id == $employees.firmId}`).
+- **The compiler** (ours): Associations compiled as properties of both classes; a class query walking one becomes SQL
+  (a to-one end a LEFT JOIN, a to-many end in a filter a semi-join); `~func` mappings and ModelJoins parsed, a ModelJoin
+  turned into navigation when its Association exists (normalizer/AssociationSynthesis.java, MappingNormalizer.java
+  `synthesizeModelJoinMapping`); a query on one connection (CrossStoreGuard.java). A ModelJoin naming an Association that
+  does not exist is refused as "kind ModelJoin not supported" (integration/LegendLiteGapTest.java): wording to correct.
+- **Proven for this design's model** (datacube/test/model-join.test.ts, `//datacube:model_join_test`): two classes over
+  relation functions, a ModelJoin in a page mapping including both, one connection bound to both stores; a to-one end as
+  a column and in a filter, a to-many end in a filter (each once), as a column (a row per trade) and as an aggregate --
+  planned by the tab's own compiler, run on DuckDB, rows checked.
+- **Legend Query** (ours, query/) walks the class graph: its explorer (query/src/model/graph.ts), its filter along
+  association paths, an `exists` at a to-many step (query/src/builder/build.ts).
+- **Studio** (studio/README.md) keeps a project as one `.pure` file per element, with workspaces, reviews and released
+  versions, its SDLC and Depot in the page or on a server; a review's commit merges its workspace and closes it.
+- **DataCube today** is prep's grid already, but for joins and unions: a grid over one source, read as a relation,
+  filtered, with calculated columns, grouped, aggregated, pivoted. Each grid has its own model and planner
+  (datacube/demo/boot.ts, "a page's grids share no model").
+
+## 3. Prep: shape data, make classes
+
+### 3.1 Sources stay relations
+
+A file, a remote file, a warehouse table, a Python frame, a snapped table: read as today, `#>{<pkg>::DB.<table>}#`,
+one model each (the table model the compiler writes: wasm Boundary `tableModel`). No class is made for a source.
+
+### 3.2 What a prep grid does
+
+- Today's: filter, calculated columns, group and aggregate, pivot, sort.
+- New: **join** another source or another grid's result (relation `join`, with its kind and condition; the compiler
+  lowers it), **union**, **choose and rename columns** (`select`, `rename`), **remove duplicates** (`distinct`).
+- **A relation join makes one class's rows**, from the tables that hold them (a trade's header, economics and status
+  joined into one Trade). It never relates two things a person means apart: a customer's region joined onto each trade
+  would be a copy of it inside Trade, not a relationship -- that is the model's (§4).
+- Each grid is a pipeline: its source and its steps, in order, its query the relation they make.
+- **Charts and KPIs are previews** of a grid: drawn from it, never reaching another tile. No page filters, no
+  cross-filtering: in prep a filter is a step of a pipeline.
+
+### 3.3 Make a class
+
+- **From a grid**: its pipeline as a relation function, a class of its columns, a mapping of the class to the function
+  -- upstream's promotion (§2), with its rules for names (`makeCamelCase`, made total: a character a name cannot hold
+  made `_`, a leading digit led by `_`, a property two columns would share numbered), each property typed by the
+  compiler's own reading of the pipeline (a precise type as its declared parent).
+- **Its names**: the class named by the person ("Trade", in a package they choose or the page's); the function and the
+  mapping named after it. Each property's name and documentation editable before and after.
+- **Read live, or materialized**: live by default -- the class's mapping runs the pipeline where its sources are.
+  Materialized on request -- the rows computed into a table (Snap's work), and the class mapped to that table: for a
+  dashboard that must be fast, or a source the published place cannot reach (§7).
+- **Where it goes**: the page's model (§6). A class made so is a dashboard's source at once (§5).
+- **Again**: a grid over a class's rows can be shaped further and made into another class, so classes build on
+  classes (`Trade` from `RawTrade`).
+
+## 4. The model: classes, and the relationships between them
+
+### 4.1 Classes
+
+The classes made in prep (§3.3) -- as many as a person makes -- and a project's own. The model view shows them as boxes
+with their properties; a box's rows a click away; a name renamed with a click.
+
+### 4.2 Relationships: ModelJoins, between classes
+
+Drawn between two classes in the model view: the property on each side (`Trade.customerId` to `Customer.id`), both ends
+named (they default to the other class's name), how many on each side (from the keys when there are keys, asked when
+not). Written as an Association and a ModelJoin:
+
+```pure
+Association page::TradeCustomer
+{
+  customer: page::Customer[0..1];
+  trades: page::Trade[*];
+}
+
+page::TradeCustomer: ModelJoin
+{
+  {customer: page::Customer[1], trades: page::Trade[1] | $customer.id == $trades.customerId}
+}
+```
+
+A project's own Associations are drawn and walked the same way. Suggestions -- a warehouse's foreign keys, a key column
+of one class whose name and type match another's -- are offered to confirm, never applied silently.
+
+### 4.3 One connection
+
+Related classes are read in one place: the tab's DuckDB, Python's DuckDB, or one warehouse. A relationship that would
+need two is refused in words, with what would make it work ("Orders is read live from the warehouse and Customers is a
+file in this tab: materialize Customers into the warehouse, or snap Orders"). docs/XSTORE_LEG.md is the path to more.
+
+## 5. Dashboards: pages on the model
+
+### 5.1 Tiles over classes
+
+A dashboard grid reads a class -- one made in prep, or a project's, or a saved query's -- as its properties projected:
+`Trade.all()->project(~[...])`, then everything DataCube does over columns, as now. Its column chooser shows the class
+as a tree, as Legend Query's explorer does: its properties, and through each Association end the related class's
+(`customer` > `region`). A to-many end is offered marked as a column (a row per trade: the column and the status bar
+say a customer's values repeat, and totals count them again) and as an aggregate (count, sum of trades' notional).
+
+### 5.2 Filters across tiles: by a class's property
+
+The same rule for a page filter, a chart's click, and a grid's own filter editor:
+
+- **What a filter names**: a class, a property, what it lets through -- and, made on a related column, the end it came
+  through.
+- **Which tiles it reaches**: a tile over the same class directly; a tile over a related class through the named end
+  that leads there (one: taken; several, a trade's `buyer` and `seller`: chosen once by name, shown in its words,
+  "Page: buyer's region: EMEA"); a tile over an unrelated class not at all, its box saying so ("not on Orders: not
+  related to Customer") with a way to relate them.
+- **Which way**: the easy default from the one side to the many (a customer filter narrows trades); both ways
+  (customers with any trade in EMEA) a power user's choice, per page and per filter -- the page's, never the model's.
+- **Where it goes**: into the tile's class query, before its columns are taken (`Trade.all()->filter(t |
+  $t.customer.region == 'EMEA')`), never into the tile's own saved filter.
+- **A calculated column** reaches its own tile only.
+
+## 6. Where the model lives (decided)
+
+- **Edited, in the page**: from the first class made, the page keeps its model in its own document, as Pure text, one
+  entry per element, as a Studio project keeps its files -- the model's one home, not a copy. It saves, reopens and
+  travels with the page, in the browser and in Python alike.
+- **"Create a project for this"**: the elements move into a Studio project (the page's own SDLC, or a server's), each its
+  `.pure` file; the page then points to the project, **pinned to the exact saved revision**, offers a newer revision,
+  and a released version replaces the pin. Studio opens the same project.
+- **Real artifacts**: "Export as Pure" writes every element the page's model holds -- stores, relation functions,
+  classes, mappings, associations and ModelJoins -- files Studio opens and the engine runs.
+
+## 7. Sharing and publishing (proposed, for the user)
+
+- **A draft is shared freely**: a prep page or a dashboard sent to a colleague (a link, a file), marked a draft, with its
+  page-held model and its sources. Collaboration on data work, as a workbook is sent.
+- **Publishing requires a model, released**: a dashboard put where others rely on it -- a shared folder, embedded,
+  scheduled -- has every tile over classes of a **released** model version (pinned), reviewed through Studio (review,
+  commit, release); its data where the published place can read it (no file held only in a tab: materialize it into
+  the warehouse); prep pages are not published, the classes they made are.
+
+## 8. Python
+
+- Prep on frames: `ll.Page`'s grids are relational already (filter, calculate, group); joins and unions as they come to
+  the grid; `grid.make_class('Trade')` writes the same function, class and mapping into the page's model.
+- Dashboards over classes: `page.grid(page.cls('Trade'))`; `page.relate(...)` writes an Association and its ModelJoin;
+  `page.filter('Customer.region', [...])` names a class's property.
+- The model rides in the page's document, as in the browser (§6); `page.pure()` gives its elements' text.
+
+## 9. Compile once, plan many (agreed with the Plan Gen / Exec Split line)
+
+Every plan the tab makes compiled the whole model again (wasm/src/main/java/planner/Boundary.java: `plan`, `planJson`,
+`planSql` each call `Compiler.compileModel(model)`), and so does every `pure/v1` request with the model as text. A
+dashboard's model grows with its classes; measured (§11), each class added 15-19 ms to every plan.
+
+### 9.1 The shape
+
+- **One table of compiled models, keyed by the model's text** (its content: the same text the same entry, an edited
+  model a new one -- the rule the plan runner's sessions follow). `hold(model) -> handle`, compiled the first time its
+  text is held; `release(handle)`; entries counted by holders, so the table is bounded by the planners alive.
+- **Lite's own entries take a handle**: plan, plan of a protocol tree, result type; and room for an execution plan's
+  entry, which takes the plan and its values and answers the statement and the values to bind (the hole and type rules
+  stay `exec.PlanRunner`'s, never written again in TypeScript).
+- **`pure/v1` unchanged**: the model as text in the body; when that text is a held entry's, the request uses it.
+- **A handle no longer held** is refused by name; the tab's planner holds again when its module or worker is new.
+
+### 9.2 Reviewed (2026-10-10)
+
+- **A `PureModelContext` is safe to hold and plan many queries against** (the Compiler Rewrite line): the model
+  immutable, typing caches filled on first use, derived facts for the graph's lifetime, nothing written per query; a
+  plan's runtime and connection through `ctx.withExecutionOverlay(runtime, connection)`, a view sharing every cache.
+  Conditions: **one thread at a time per context** (its caches are plain maps: each entry its own lock), and **a context
+  belongs to its model text**.
+- **The text as the key** (the Plan Gen / Exec Split line): the strongest content key, nothing trusted to a digest; two
+  passes over the text, well under a millisecond.
+- Approved in shape by the Plan Gen / Exec Split line.
+
+## 10. Where the code lives: none of it in the browser module
+
+The tab's module and Python's native library are adapters: each export a one-line call into the compiler
+(docs/PROTOCOL_PROGRAM_2026_10_05.md invariant 5: what a server answers, the tab asks through `pure/v1`). So:
+
+- **The held models' table** lives in core's planning side, beside `Compiler.compileModel`: the tab, Python and the
+  server share one. Whether the server holds models, and for how long, is Studio's leg 8 (the server's execute compiled
+  once and handed on): a server request has no holder, so it would need a size limit.
+- **Make a class** is a route of legend-lite's server, in core, named after upstream's REPL command
+  (`/api/lite/v1/.../promoteRelationToModel`): a relation expression, a class name and a package in; the function, the
+  class and the mapping out (by §3.3's rules). The tab and Python ask it through `pure/v1`'s routing, as they ask every
+  compiler question. Upstream's `generateModelsFromDatabaseSpecification`, exactly, is a later item, for Studio.
+- Built in core -- announced in docs/IN_FLIGHT.md, after the Compiler Rewrite line's L7, its shape sent to both lines
+  first; the module's and Python's exports one-line calls into it.
+
+## 11. Measured, and proven
+
+- **The model proven** (§2): `//datacube:model_join_test`.
+- **A dashboard's model as it grows** (datacube/test/model-scale.measure.ts, `bazel test //datacube:model_scale_measure
+  --test_output=all`, manual, in //gates:heavy), before compile-once, each plan compiling the whole model, ms:
+
+  | classes | model text | table read | class read | class, one end walked |
+  |---|---|---|---|---|
+  | 1 | 1 KB | 43 | 54 | -- |
+  | 10 | 7 KB | 44 | 163 | 163 |
+  | 50 | 36 KB | 54 | 721 | 727 |
+  | 200 | 146 KB | 78 | 3,812 | 3,925 |
+
+  To be measured again once compile-once is built (step P1): the first compile apart, each plan over the model held.
+  Where a class's 15-19 ms of compile goes (parse, resolve, normalize, element compile) the Compiler Rewrite line
+  measures after its L7.
+
+## 12. Withdrawn from revision 2
+
+- **Every source a class, made silently** (revision 2's §3.1, step M1): sources stay relations (§3.1); a class is made on
+  purpose (§3.3). Revision 2's writer (a table's class beside its Database) becomes Make a class's writer in core
+  (§10), its rules kept: upstream's names made total, each property typed by the compiler's reading of the relation.
+- **One way of working** (revision 2's §3.8 and decision 8): two modes, for two jobs -- shaping data, and analysing it
+  on a model (with the model, between them, a layer of its own: §4). What revision 2 warned of (every filter with two
+  meanings) does not arise: filters across tiles exist in one mode only.
+- **Columns of a source read back under the source's names**: there is no class of a source to read back; a class made
+  from a grid has its own properties, named and editable.
+
+## 13. Steps
+
+- **P1. Make a class.** The writer as a core route (§10), the dialog, the page's model (§6), compile-once (§9); a
+  dashboard grid over a class made. *Done when* a grid shaped from a file is made a class, and a dashboard grid reads it.
+- **D1. Dashboards on classes.** Tiles over classes (§5.1); page filters and clicks by class property, one class
+  (§5.2) -- batch 1's page filters and cross-filtering, rebuilt; prep pages with neither. Batch 1 lands here.
+- **P2. Prep's new operations.** Relation joins (one class's rows from several tables), union, choose and rename,
+  remove duplicates (§3.2).
+- **D2. The model's relationships.** The model view (§4.1), ModelJoins drawn and suggested (§4.2), walked in the
+  column chooser (§5.1), filters through named ends and both ways (§5.2), the one-connection refusal (§4.3).
+- **D3. Projects and publishing.** Create a project, pinned to its revision; export as Pure; the publishing rules (§7);
+  Studio opening the model.
+- **D4. Measures in the model** (docs/BI_AND_ETL_PLAN_2026_09_29.md B4).
+
+Python follows each step (§8). The KPI tile, a chart kind, lands before all of these (the batch's own split).
+
+## 14. Decisions
+
+Decided (2026-10-10): ModelJoin as the default, a Database Join a fallback; upstream's `~func` and ModelJoin as the forms
+DataCube writes, legend-lite's normalizer turning them into its one internal function form (the clean-sheet surface stays
+for models written by hand); the model kept in the page until a project is asked for; a page pinned to the exact saved
+revision; filters one side to the many by default, both ways a page's choice, never the model's; a to-many end as a
+marked column and as an aggregate; Python's model riding in its page; batch 1 split; two modes, nothing across tiles
+without a model; relation joins make one class's rows, ModelJoins relate classes.
+
+For the user: the publishing rules (§7); whether a dashboard may be made over a raw source without Make a class
+(recommended: no -- Make a class takes one click, with names from the source); live by default, materialized on request
+(recommended); the order of the steps (§13, recommended as written).
