@@ -216,21 +216,34 @@ The same rule for a page filter, a chart's click, and a grid's own filter editor
   $t.customer.region == 'EMEA')`), never into the tile's own saved filter.
 - **A calculated column** reaches its own tile only.
 
-## 6. Where the model lives (decided)
+## 6. Where the model lives (decided): the model home DataCube already connects to
 
-- **Edited, in the page**: from the first class made, the page keeps its model in its own document, as Pure text, one
-  entry per element, as a Studio project keeps its files -- the model's one home, not a copy. It saves, reopens and
-  travels with the page, in the browser and in Python alike.
-- **"Create a project for this"**: the elements move into a Studio project (the page's own SDLC, or a server's), each its
-  `.pure` file; the page then points to the project, **pinned to the exact saved revision**, offers a newer revision,
-  and a released version replaces the pin. Studio opens the same project.
-- **Real artifacts**: "Export as Pure" writes every element the page's model holds -- stores, relation functions,
-  classes, mappings, associations and ModelJoins -- files Studio opens and the engine runs.
+The user, 2026-10-10: "didn't we build this indexDb model store ... it's sdlc 'protocol' but managed locally then
+promoting to real sdlc is same?" -- yes: the model lives where Studio keeps every project.
+
+- **Untouched sources: nothing kept** (§3.1).
+- **From the first class made: a project in the model home** -- the one DataCube already connects to
+  (depot-client/src/model-home.ts `connectModelHome`): the page's own SDLC and Depot (level 0, the SDLC's rules compiled
+  to WebAssembly, the records in this origin's IndexedDB, so every app the origin serves sees the same projects), or a
+  server's. Made quietly, named after the page; the page's edits in a workspace of it, each element its `.pure` file, as
+  Studio keeps them. **The page points to it** -- the project, and the exact saved revision it is pinned to (revisions
+  are kept, merged or not) -- and holds no copy: the model-home ruling ("sources point to models, never copy them")
+  kept everywhere. Several pages point to one project: a prep page and the dashboards built on its classes.
+- **Promote** ("Create a project for this", as revision 3 said it): the same project on a server's SDLC -- the same
+  protocol, another address (`connectModelHome`'s configuration), its revisions going with it; a released version then
+  replaces the pin. Studio opens the project in either place: in the page's own model home, the origin's IndexedDB is
+  Studio's too.
+- **A page that travels** -- a draft shared, a page file, a notebook -- carries a **bundle**: the page document and its
+  project's files at the pinned revision. Opened, the bundle's project is imported into the receiver's model home, and
+  the page points to it there. The bundle is the transport, never a second home.
+- **Real artifacts**: "Export as Pure" writes the project's files -- stores, relation functions, classes, mappings,
+  associations and ModelJoins -- the files Studio opens and the engine runs.
 
 ## 7. Sharing and publishing (decided)
 
-- **A draft is shared freely**: a prep page or a dashboard sent to a colleague (a link, a file), marked a draft, with its
-  page-held model and its sources. Collaboration on data work, as a workbook is sent.
+- **A draft is shared freely**: a prep page or a dashboard sent to a colleague, marked a draft, as a bundle (§6): the
+  page and its project at its pinned revision, imported into the colleague's model home when opened. Collaboration on
+  data work, as a workbook is sent.
 - **Publishing requires a model, released**: a dashboard put where others rely on it -- a shared folder, embedded,
   scheduled -- has every tile over classes of a **released** model version (pinned), reviewed through Studio (review,
   commit, release); its data where the published place can read it (no file held only in a tab: materialize it into
@@ -242,7 +255,10 @@ The same rule for a page filter, a chart's click, and a grid's own filter editor
   the grid; `grid.make_class('Trade')` writes the same function, class and mapping into the page's model.
 - Dashboards over classes: `page.grid(page.cls('Trade'))`; `page.relate(...)` writes an Association and its ModelJoin;
   `page.filter('Customer.region', [...])` names a class's property.
-- The model rides in the page's document, as in the browser (§6); `page.pure()` gives its elements' text.
+- Python has no IndexedDB: its page's model travels as the page does, **a bundle by default** (§6) -- the notebook's
+  page saved as one file, page and project; `page.pure()` gives the project's elements' text. **A project folder** beside
+  the notebook, in Studio's layout (`project.json` and one `.pure` file per element), when asked for: kept in git with
+  the notebook, served as a project by Studio's server (`sdlc-server --repo`).
 
 ## 9. Compile once, plan many (agreed with the Plan Gen / Exec Split line)
 
@@ -278,11 +294,21 @@ dashboard's model grows with its classes; measured (§11), each class added 15-1
 The tab's module and Python's native library are adapters: each export a one-line call into the compiler
 (docs/PROTOCOL_PROGRAM_2026_10_05.md invariant 5: what a server answers, the tab asks through `pure/v1`). So:
 
+- **Where a model is kept compiled is the process that plans it, never its home**: a compiled model is a live object of
+  one compiler build, not something the SDLC or Depot stores (upstream keeps them apart too).
 - **The held models' table** lives in core's planning side, beside `Compiler.compileModel`: the hosts that hold a model
   while a planner over it lives -- the tab and Python -- share one. **The server does not** (the Studio line, 2026-10-10):
   a request has no holder, so a table there would be a cache across requests that nothing has measured a need for; its
   leg 8 compiles once per request instead and hands the compiled model down (`Runner.run(ModelContext, ...)`,
   `Execution.executeWire(ModelContext, ...)`, agreed with the Plan Gen / Exec Split line).
+- **A released version, kept compiled on a server** -- for dashboards published on a server (§7) -- keyed by the
+  version (project and version, immutable), as upstream's engine keeps a compiled model per release pointer and as
+  docs/MODEL_HOME_2026_09_28.md D-F says: with step 6, and only on a measurement.
+- **Compile less, before compiling less often**: a tile over one class need not compile two hundred. The tenet
+  (docs/TENETS.md: total knowledge, demand-driven work) asks for what a query reaches to be typed and resolved, not
+  every class's mapping. Where a class's 15-19 ms goes is the Compiler Rewrite line's to measure (§11); if it is eager
+  work a query never reaches, making it demand-driven shortens every compile -- the first open in the tab, a server's
+  request, Python's -- and may leave the server nothing to keep.
 - **`pure/v1` reusing a held model** is its own change, after leg 8, and only on a measurement (the tab's
   `lambdaRelationType` per call, its model held against compiled): if it is needed, one lookup in the one dispatcher
   (`PureV1Api.route`), before it compiles, keyed by the model's text -- the tab and Python gaining, the server, holding
@@ -329,6 +355,8 @@ The tab's module and Python's native library are adapters: each export a one-lin
 - **One way of working** (revision 2's §3.8 and decision 8): two modes, for two jobs -- shaping data, and analysing it
   on a model (with the model, between them, a layer of its own: §4). What revision 2 warned of (every filter with two
   meanings) does not arise: filters across tiles exist in one mode only.
+- **The model kept in the page's document** (revision 3's §6): the model home instead (§6); a page carries its model
+  only as a bundle, when it travels.
 - **Columns of a source read back under the source's names**: there is no class of a source to read back; a class made
   from a grid has its own properties, named and editable.
 
@@ -340,11 +368,11 @@ Each step lands on its own -- an audit, the local gate, CI, the user's OK -- wit
 |---|---|---|
 | 0 | **The KPI**, landing first | The KPI tile; this design on main |
 | 1 | **Compile once, everywhere it holds** (§9, §10) | The held models' table in core's planning side; the browser module's and Python's native library's exports one-line calls into it; Python holding each frame's model and each page's. The server compiles once per request (the Studio line's leg 8), sharing no table; `pure/v1` reusing a held model later, on a measurement |
-| 2 | **Make a class** (§3.3, layer 1 to 2) | A route of legend-lite's server, in core, named after upstream's `promoteRelationToModel`; the dialog (the class's name, its properties' names and documentation); the page's model (§6); a dashboard grid reading a class made; `grid.make_class('Trade')` |
+| 2 | **Make a class** (§3.3, layer 1 to 2) | A route of legend-lite's server, in core, named after upstream's `promoteRelationToModel`; the dialog (the class's name, its properties' names and documentation); the page's project in the model home, made quietly, the page pinned to its revision (§6); a bundle for a page that travels; a dashboard grid reading a class made; `grid.make_class('Trade')` |
 | 3 | **Dashboards on classes** (§5, one class) | Dashboard pages over classes; page filters and a chart's clicks by a class's property -- batch 1's page filters and cross-filtering, rebuilt, landing here; prep pages with previews only |
 | 4 | **Combining in prep** (§3.2, §3.4, layer 1) | The join dialog in every form (any condition, as-of, lateral and Expand, with or without a match, append), its match summary; choose and rename, remove duplicates |
 | 5 | **The model view** (§4, layer 2) | Classes as boxes; relationships drawn as ModelJoins, suggested; related properties walked in the column chooser (§5.1); filters through named ends, both ways a page's choice (§5.2); the one-connection refusal (§4.3) |
-| 6 | **Projects and publishing** (§6, §7, layer 3 for users) | A Studio project made, the page pinned to its revision; export as Pure; publishing on a released model, its data where the published place can read it (materialize when needed); Studio opening the model |
+| 6 | **Promote and publish** (§6, §7, layer 3 for users) | The page's project promoted to a server's SDLC (its revisions with it); export as Pure; publishing on a released model, its data where the published place can read it (materialize when needed); a released version kept compiled on the server if measured to need it (§10); Studio opening the model |
 | 7 | **Measures in the model** (docs/BI_AND_ETL_PLAN_2026_09_29.md B4) | A measure and a dimension declared on a class, offered by name |
 
 Why this order: steps 2 and 3 give the whole loop -- shape, make a class, build a dashboard on it -- early, with one
@@ -360,9 +388,10 @@ classes, §11) the Compiler Rewrite line measures; whether a large model needs m
 
 Decided (2026-10-10): ModelJoin as the default, a Database Join a fallback; upstream's `~func` and ModelJoin as the forms
 DataCube writes, legend-lite's normalizer turning them into its one internal function form (the clean-sheet surface stays
-for models written by hand); the model kept in the page until a project is asked for; a page pinned to the exact saved
-revision; filters one side to the many by default, both ways a page's choice, never the model's; a to-many end as a
-marked column and as an aggregate; Python's model riding in its page; batch 1 split; two modes, nothing across tiles
+for models written by hand); the model in a project of the model home DataCube connects to -- the page's own (IndexedDB)
+until promoted to a server's -- the page pointing to it, pinned to the exact saved revision, a bundle when it travels,
+Python's a bundle by default and a project folder on request; filters one side to the many by default, both ways a page's choice, never the model's; a to-many end as a
+marked column and as an aggregate; batch 1 split; two modes, nothing across tiles
 without a model; relation joins make one class's rows, ModelJoins relate classes.
 
 Decided too ("Yes yes yes yes to all!"): the publishing rules (§7) -- drafts shared freely, publishing on a released
