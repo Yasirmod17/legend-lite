@@ -3,8 +3,8 @@
 // table read as a relation, as DataCube reads one today. Manual, in //gates:heavy: `bazel test //datacube:model_scale_measure
 // --test_output=all`; its numbers print, and are written to the test's undeclared outputs as model-scale.json.
 //
-// Every plan compiles the whole model again (wasm/src/main/java/planner/Boundary.java `plan`: Compiler.compileModel on
-// each call), so a plan's time is the model's compile plus the query's. Each class is the design's §3.3 shape -- its
+// A planner holds its model (compiled once, the design's §9): its first compile is timed alone (`warmUp`, which holds
+// it), and each plan after it is the query's alone, over the model held. Each class is the design's §3.3 shape -- its
 // own store, relation function, class and mapping -- and each class is related to the next by an Association mapped by a
 // ModelJoin (`next`, to-one; `prev`, to-many), all in one page mapping, as §4.2 writes them.
 
@@ -85,7 +85,7 @@ async function timed(planner: WasmPlanner, query: (k: number) => string): Promis
   return median(times);
 }
 
-it('a page\'s model as it grows: the median plan, in milliseconds', async () => {
+it('a page\'s model as it grows: its first compile, and the median plan after it, in milliseconds', async () => {
   const assets = runfileDirUrl('WASM_PLANNER');
   const rows: Record<string, number | string>[] = [];
   for (const n of SIZES) {
@@ -93,14 +93,21 @@ it('a page\'s model as it grows: the median plan, in milliseconds', async () => 
     const classes = new WasmPlanner({
       model: classModel(n), runtime: 'page::Runtime', mapping: 'page::Mapping', assetBaseUrl: assets, cache: false,
     });
+    await tables.warmUp();
+    const start = performance.now();
+    await classes.warmUp();
+    const compile = performance.now() - start;
     const table = await timed(tables, (k) => `#>{files::t0::Store.t0}#->filter(x|$x.id > ${k})->select(~[id, v])`);
     const asClass = await timed(classes, (k) => `files::t0::T0.all()->filter(x|$x.id > ${k})->project(~[id: x|$x.id, v: x|$x.v])`);
     const walking = n < 2 ? '' : await timed(classes, (k) =>
       `files::t0::T0.all()->filter(x|$x.id > ${k})->project(~[id: x|$x.id, next: x|$x.next.v])`);
     rows.push({ sources: n, 'model text (KB)': Math.round(classModel(n).length / 1024),
-      'table read': Math.round(table), 'class read': Math.round(asClass), 'class, one end walked': walking === '' ? '' : Math.round(walking) });
+      'first compile': Math.round(compile), 'table read': Math.round(table), 'class read': Math.round(asClass),
+      'class, one end walked': walking === '' ? '' : Math.round(walking) });
+    tables.dispose();
+    classes.dispose();
   }
-  console.log('\n' + ['sources', 'model text (KB)', 'table read', 'class read', 'class, one end walked'].join('\t'));
+  console.log('\n' + ['sources', 'model text (KB)', 'first compile', 'table read', 'class read', 'class, one end walked'].join('\t'));
   for (const r of rows) console.log(Object.values(r).join('\t'));
   const out = process.env['TEST_UNDECLARED_OUTPUTS_DIR'];
   if (out) writeFileSync(path.join(out, 'model-scale.json'), JSON.stringify({ runs: RUNS, rows }, null, 2));
