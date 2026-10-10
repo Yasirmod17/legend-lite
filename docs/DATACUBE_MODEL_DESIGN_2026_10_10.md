@@ -300,9 +300,19 @@ The tab's module and Python's native library are adapters: each export a one-lin
   | 50 | 36 KB | 54 | 721 | 727 |
   | 200 | 146 KB | 78 | 3,812 | 3,925 |
 
-  To be measured again once compile-once is built (the plan's step 1, §13): the first compile apart, each plan over the
-  model held. Where a class's 15-19 ms of compile goes (parse, resolve, normalize, element compile) the Compiler Rewrite
-  line measures after its L7.
+  **After compile-once** (2026-10-10, the tab's module under node; each compile on a module already warm, the median of
+  three model texts a line apart; each plan the median of seven over the model held), ms:
+
+  | classes | compile, once | table read | class read | class, one end walked |
+  |---|---|---|---|---|
+  | 1 | 9 | 5 | 7 | -- |
+  | 10 | 125 | 5 | 6 | 7 |
+  | 50 | 664 | 5 | 6 | 7 |
+  | 200 | 3,937 | 9 | 12 | 14 |
+
+  A plan no longer grows with the model: it is the query's alone. The compile is paid once per model text -- when the
+  page opens and when its model is edited -- and grows with the classes, 4 s at 200; where its time goes (parse, resolve,
+  normalize, element compile) the Compiler Rewrite line measures after its L7.
 
 ## 12. Withdrawn from revision 2
 
