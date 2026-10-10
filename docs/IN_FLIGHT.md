@@ -124,12 +124,26 @@ with the compiler's plan/execution split**, in this order:
    `ParkedWorkLedgerTest.java`. DataCube's engine client (`parseExact`, `timestampFromText`) only if the new text needs
    it, asked of the DataCube line first.
 4. **DataCube + Python** (resumed 2026-10-07 by the user; the sixth line below): worktree `legend-lite-dcsnap`, branch
-   `datacube-pages`. `native/`, `python/` and, since 2026-10-09, all of `datacube/`. Landed: the compiler as a native
+   `datacube-m1`. `native/`, `python/` and, since 2026-10-09, all of `datacube/`. Landed: the compiler as a native
    library (`bc8107c4e`), `ll.show(df)` and the notebook cube on every platform, a real JupyterLab test and marimo
    (`169e0f062`), DataCube pages phase 1, the layout (`e397f107a`), and phase 2, a page of its own saved with every
-   source (`eb2e38fa8`), phase 3, sheets and stacked tiles (`93e506e9b`), and Python pages, `ll.Page`: everything a
-   page does, built from Python (`94ee44b08`; `docs/DATACUBE_PYTHON_PAGES_DESIGN_2026_10_09.md`). Now: every ECharts
-   chart that fits a grid (a design note first, for the user's agreement).
+   source (`eb2e38fa8`), phase 3, sheets and stacked tiles (`93e506e9b`), Python pages, `ll.Page` (`94ee44b08`), and
+   **the KPI tile with the DataCube model design** (`f68b19aad`; GATES "DataCube: the KPI tile"). **Now: the model plan**
+   (`docs/DATACUBE_MODEL_DESIGN_2026_10_10.md` §13, agreed with the user: prep makes classes, ModelJoins relate them,
+   dashboards are built on them), its steps in order: 1 compile once everywhere; 2 Make a class; 3 dashboards on
+   classes (the charts' batch 1 page filters land here); 4 combining in prep (every join form); 5 the model view; 6
+   projects and publishing; 7 measures in the model.
+   **Step 1 announced 2026-10-10 (rule 5): a cross-area edit in `core/`** -- compile once, plan many (the design's §9,
+   reviewed by the Compiler Rewrite and Plan Gen / Exec Split lines: a held `PureModelContext` is safe, one thread at a
+   time; the model's text the key). Files: `core/src/main/java/com/legend/HeldModels.java` (new: the held models'
+   table, an entry per model text, its holders counted, its own lock) and `core/BUILD.bazel` (`_PLANNER_SRCS` gains it);
+   `wasm/src/main/java/planner/Boundary.java` and `TabExports.java` (the module's held entries, one-line calls into it);
+   `native/src/main/java/com/legend/nativelib/Compiler.java` (Python's held entries); `python/legend_lite/`
+   (`_library.py`, `compiler.py`, `frames.py`: a frame's model held); `datacube/src/wasm-planner.ts` and
+   `planner-worker.ts` (built on the branch, measured: a plan over a held model 6 to 14 ms at 1 to 200 classes, where
+   every plan compiled the whole model). Not touched: `Compiler.java`, L7 step 3's files. Proposed, not built here: the
+   server holding models (the Studio line's leg 8) and `pure/v1` requests reusing a held model (`PureV1Api`, the
+   protocol program's).
 
 **Parked:** the compiler rebuild (`docs/EXECUTION_PLAN_2026_09_26.md`; paused, coming back later — its open items C4,
 B2/B3 and the W6.2 runner wait for it); the server

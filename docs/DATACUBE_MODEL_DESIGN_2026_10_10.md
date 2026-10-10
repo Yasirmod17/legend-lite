@@ -20,7 +20,7 @@ them: **ModelJoins, between classes** (a trade's `customer`, a customer's `trade
 with what they mean need no relation join at all: a class of each, related in the model. **Dashboards** are made from
 the model -- or a project's: pages of grids, charts and KPIs, and the filters that reach across tiles -- page filters, a
 chart's clicks -- by a class's property, through the relationships. **Nothing reaches across tiles without a model**,
-and nothing is published without a released one (§7, proposed).
+and nothing is published without a released one (§7).
 
 ## 1. What binds this design (the user's words, 2026-10-10)
 
@@ -84,8 +84,8 @@ one model each (the table model the compiler writes: wasm Boundary `tableModel`)
 ### 3.2 What a prep grid does
 
 - Today's: filter, calculated columns, group and aggregate, pivot, sort.
-- New: **join** another source or another grid's result (relation `join`, with its kind and condition; the compiler
-  lowers it), **union**, **choose and rename columns** (`select`, `rename`), **remove duplicates** (`distinct`).
+- New: **combining** with another source or another grid's result -- every join legend-lite's relation API has (§3.4)
+  -- **choose and rename columns** (`select`, `rename`), **remove duplicates** (`distinct`).
 - **A relation join makes one class's rows**, from the tables that hold them (a trade's header, economics and status
   joined into one Trade). It never relates two things a person means apart: a customer's region joined onto each trade
   would be a copy of it inside Trade, not a relationship -- that is the model's (§4).
@@ -107,6 +107,53 @@ one model each (the table model the compiler writes: wasm Boundary `tableModel`)
 - **Where it goes**: the page's model (§6). A class made so is a dashboard's source at once (§5).
 - **Again**: a grid over a class's rows can be shaped further and made into another class, so classes build on
   classes (`Trade` from `RawTrade`).
+
+### 3.4 Combining in prep: every join legend-lite's relation API has
+
+The user, 2026-10-10: "need to allow more than just equi-join! We should support all the join operators that lite
+supports including things like as of join too / lateral / flatten". Each is the compiler's own function, written by the
+dialog and lowered by it (builtin/Pure.java's signatures, lowering/Lowerer.java):
+
+- **Join** -- `join(rel1, rel2, JoinKind, {a, b | condition})`, and its prefix form for names both sides have: matching
+  rows only (INNER), all of mine (LEFT), all of theirs (RIGHT), everything (FULL), drawn as four small diagrams. Its
+  **condition is any condition over both rows**: equal keys the common case (rows of "my column = their column", "+" for
+  a key of several), and every other comparison -- `<`, `<=`, `>`, `>=`, `!=`, a range (`$t.date >= $p.start &&
+  $t.date < $p.end`), text (`contains`, `startsWith`) -- built as the filter editor builds a condition, its columns from
+  both sides; or, for anything the builder does not say, the condition written in Pure, typed by the compiler.
+- **Every pair** (a cross join) -- a join whose condition is `true`, its row count said before it runs.
+- **As-of join** -- `asOfJoin(rel1, rel2, match)` and `asOfJoin(rel1, rel2, match, join)` (with
+  `meta::legend::lite::asOfJoinWithPrefix` for shared names): each of my rows with the nearest row of theirs by the
+  match -- the last price at or before my trade's time (`$t.time >= $p.time`) -- among those the join condition keeps
+  (the same symbol). The dialog asks the two time columns, which way is near (at or before, at or after), and the keys.
+- **For each row, rows from it** -- `lateral(rel, {row | relation})`: a relation made from each row joined back to it.
+  Its common case has its own action, **Expand**: a column holding a list or a JSON array made rows, one per element
+  (`variant::flatten`, `lateral(x | $x.items->flatten(~item))`), offered from that column's menu, the element's fields
+  then taken as calculated columns; any other per-row relation written in Pure.
+- **Keep rows that have a match, or that have none** (semi- and anti-joins) -- a filter by `exists` over the other side
+  (`relation::exists`, `isEmpty`): my columns only, each row once.
+- **Append rows** (union) -- `concatenate`: columns matched by name and type, a column one side lacks left empty, said in
+  the dialog.
+
+**The dialog** -- "Join…" from a prep grid's menu, or one grid's tile dropped on another (the dialog filled in): the other
+side (another source on the page, another grid's result, a source opened from the dialog -- joining a grid's result is
+how a join comes after an aggregate), the form above and its condition, the columns brought over (a checklist; a name
+both sides have given a prefix, editable), and **what it will do, before it is applied**: how many of my rows find a
+match and how many do not (and which), and whether rows multiply -- a key repeated on their side ("3 customer ids appear
+twice: those trades would repeat, and totals count them twice"), shown with a way to see them, then to go ahead or to
+aggregate that side first. Each figure is a query the compiler plans: matched, unmatched, the most matches of one row
+(for a range or an as-of join, on a sample, and said so).
+
+**What it becomes** -- the grid's source: `trades->join(customers, JoinKind.LEFT, {t, c | $t.customer_id == $c.id})`,
+everything DataCube already does over it, as now; order made by joining other grids' results, not by a list of steps.
+The grid's saved source records the join -- its two sides (a source, or another grid on the page by its id), its form,
+its condition (as the builder's rows when it can be read back as them, else as its Pure), its kind and prefix. Make a
+class from a joined grid writes one relation function holding the join. Both sides are read in one place (§4.3's rule:
+the tab's DuckDB, Python's, or one warehouse), else refused in words, with what would make it work.
+
+**Python** -- `grid.join(other, on=[('customer_id', 'id')], how='left', keep=['name', 'region'])`,
+`grid.join(other, condition='{t, p | $t.date >= $p.start && $t.date < $p.end}')`,
+`grid.as_of_join(prices, match=('time', '>=', 'time'), on=[('symbol', 'symbol')])`, `grid.expand('items')`,
+`grid.append(other)`.
 
 ## 4. The model: classes, and the relationships between them
 
@@ -180,7 +227,7 @@ The same rule for a page filter, a chart's click, and a grid's own filter editor
 - **Real artifacts**: "Export as Pure" writes every element the page's model holds -- stores, relation functions,
   classes, mappings, associations and ModelJoins -- files Studio opens and the engine runs.
 
-## 7. Sharing and publishing (proposed, for the user)
+## 7. Sharing and publishing (decided)
 
 - **A draft is shared freely**: a prep page or a dashboard sent to a colleague (a link, a file), marked a draft, with its
   page-held model and its sources. Collaboration on data work, as a workbook is sent.
@@ -253,9 +300,9 @@ The tab's module and Python's native library are adapters: each export a one-lin
   | 50 | 36 KB | 54 | 721 | 727 |
   | 200 | 146 KB | 78 | 3,812 | 3,925 |
 
-  To be measured again once compile-once is built (step P1): the first compile apart, each plan over the model held.
-  Where a class's 15-19 ms of compile goes (parse, resolve, normalize, element compile) the Compiler Rewrite line
-  measures after its L7.
+  To be measured again once compile-once is built (the plan's step 1, §13): the first compile apart, each plan over the
+  model held. Where a class's 15-19 ms of compile goes (parse, resolve, normalize, element compile) the Compiler Rewrite
+  line measures after its L7.
 
 ## 12. Withdrawn from revision 2
 
@@ -268,21 +315,29 @@ The tab's module and Python's native library are adapters: each export a one-lin
 - **Columns of a source read back under the source's names**: there is no class of a source to read back; a class made
   from a grid has its own properties, named and editable.
 
-## 13. Steps
+## 13. The plan (agreed 2026-10-10: "let's do it")
 
-- **P1. Make a class.** The writer as a core route (§10), the dialog, the page's model (§6), compile-once (§9); a
-  dashboard grid over a class made. *Done when* a grid shaped from a file is made a class, and a dashboard grid reads it.
-- **D1. Dashboards on classes.** Tiles over classes (§5.1); page filters and clicks by class property, one class
-  (§5.2) -- batch 1's page filters and cross-filtering, rebuilt; prep pages with neither. Batch 1 lands here.
-- **P2. Prep's new operations.** Relation joins (one class's rows from several tables), union, choose and rename,
-  remove duplicates (§3.2).
-- **D2. The model's relationships.** The model view (§4.1), ModelJoins drawn and suggested (§4.2), walked in the
-  column chooser (§5.1), filters through named ends and both ways (§5.2), the one-connection refusal (§4.3).
-- **D3. Projects and publishing.** Create a project, pinned to its revision; export as Pure; the publishing rules (§7);
-  Studio opening the model.
-- **D4. Measures in the model** (docs/BI_AND_ETL_PLAN_2026_09_29.md B4).
+Each step lands on its own -- an audit, the local gate, CI, the user's OK -- with Python beside it (§8).
 
-Python follows each step (§8). The KPI tile, a chart kind, lands before all of these (the batch's own split).
+| # | Step | What a person gets |
+|---|---|---|
+| 0 | **The KPI**, landing first | The KPI tile; this design on main |
+| 1 | **Compile once, everywhere** (§9, §10) | The held models' table in core's planning side; the browser module's and Python's native library's exports one-line calls into it; Python holding each frame's model and each page's; the server's share proposed to the Studio line's leg 8 and the Plan Gen / Exec Split line (a size limit, a request having no holder) |
+| 2 | **Make a class** (§3.3, layer 1 to 2) | A route of legend-lite's server, in core, named after upstream's `promoteRelationToModel`; the dialog (the class's name, its properties' names and documentation); the page's model (§6); a dashboard grid reading a class made; `grid.make_class('Trade')` |
+| 3 | **Dashboards on classes** (§5, one class) | Dashboard pages over classes; page filters and a chart's clicks by a class's property -- batch 1's page filters and cross-filtering, rebuilt, landing here; prep pages with previews only |
+| 4 | **Combining in prep** (§3.2, §3.4, layer 1) | The join dialog in every form (any condition, as-of, lateral and Expand, with or without a match, append), its match summary; choose and rename, remove duplicates |
+| 5 | **The model view** (§4, layer 2) | Classes as boxes; relationships drawn as ModelJoins, suggested; related properties walked in the column chooser (§5.1); filters through named ends, both ways a page's choice (§5.2); the one-connection refusal (§4.3) |
+| 6 | **Projects and publishing** (§6, §7, layer 3 for users) | A Studio project made, the page pinned to its revision; export as Pure; publishing on a released model, its data where the published place can read it (materialize when needed); Studio opening the model |
+| 7 | **Measures in the model** (docs/BI_AND_ETL_PLAN_2026_09_29.md B4) | A measure and a dimension declared on a class, offered by name |
+
+Why this order: steps 2 and 3 give the whole loop -- shape, make a class, build a dashboard on it -- early, with one
+class; prep's largest gap, combining, next; then relationships, which make dashboards of several classes; publishing
+last, on all of it.
+
+Coordination: steps 1 and 2 put code in core -- their files announced in docs/IN_FLIGHT.md first, checked against the
+Compiler Rewrite line's L7 step 3; step 1's server share is the Studio and Plan Gen / Exec Split lines' to decide;
+step 6 is built on Studio's SDLC and Depot, reviewed by its line. Where a large model's compile goes (4 s at 200
+classes, §11) the Compiler Rewrite line measures; whether a large model needs more than compile-once follows from it.
 
 ## 14. Decisions
 
@@ -293,6 +348,7 @@ revision; filters one side to the many by default, both ways a page's choice, ne
 marked column and as an aggregate; Python's model riding in its page; batch 1 split; two modes, nothing across tiles
 without a model; relation joins make one class's rows, ModelJoins relate classes.
 
-For the user: the publishing rules (§7); whether a dashboard may be made over a raw source without Make a class
-(recommended: no -- Make a class takes one click, with names from the source); live by default, materialized on request
-(recommended); the order of the steps (§13, recommended as written).
+Decided too ("Yes yes yes yes to all!"): the publishing rules (§7) -- drafts shared freely, publishing on a released
+model with data the published place can read; no dashboard over a raw source without Make a class (one click, names
+from the source); a class read live by default, materialized on request; the steps in §13's order; every join form
+legend-lite has in prep (§3.4).

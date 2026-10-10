@@ -47,7 +47,7 @@ The largest gaps are not in the charts.
 columns by name; the user then ruled that what a filter reaches comes from the Pure model, not a name (DataCube's own
 links, below, included), and that nothing reaches across tiles without one: docs/DATACUBE_MODEL_DESIGN_2026_10_10.md
 (revision 3: prep makes classes, dashboards are built on them). They land rebuilt on it, on dashboards over classes,
-with its step D1 (its §13).
+with its step 3 (its §13: dashboards on classes).
 
 1. **Page filters.** A filter for the whole page -- a date range, a pick-list of values, a number range -- shown in the
    page's bar, reaching every tile whose source has the column (the dashboards design §5.4: "all tiles except
