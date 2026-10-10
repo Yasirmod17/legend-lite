@@ -378,6 +378,84 @@ describe('WasmPlanner', () => {
   });
 });
 
+describe('WasmPlanner off the main thread: the models its worker holds', () => {
+  /**
+   * A stand-in Worker answering as planner-worker.ts does, over a fake module of its own: each worker its own table of
+   * models held, as a real worker's module is. Node has no Worker; the planner uses one when `Worker` exists.
+   */
+  class FakeWorker {
+    static made: FakeWorker[] = [];
+    readonly exports = fakeExports((_m) => ok('SELECT 1'), undefined, { holds: [], releases: [] });
+    readonly holds: string[] = [];
+    readonly releases: number[] = [];
+    terminated = false;
+    onmessage: ((e: { data: unknown }) => void) | null = null;
+    onerror: ((e: { message: string }) => void) | null = null;
+    constructor() {
+      FakeWorker.made.push(this);
+    }
+    postMessage(msg: Record<string, unknown>): void {
+      const x = this.exports;
+      const answer = msg['kind'] === 'hold' ? (this.holds.push(msg['model'] as string), x.holdModelOrError(msg['model'] as string))
+        : msg['kind'] === 'release' ? (this.releases.push(msg['handle'] as number), x.releaseModel(msg['handle'] as number), 'OK\n')
+        : msg['kind'] === 'plan' ? x.planHeldOrError(msg['handle'] as number, msg['query'] as string, msg['runtime'] as string)
+        : 'ERR\nfake\nnot in this fake';
+      queueMicrotask(() => this.onmessage?.({ data: { id: msg['id'], ok: true, answer } }));
+    }
+    terminate(): void {
+      this.terminated = true;
+    }
+    die(): void {
+      this.onerror?.({ message: 'gone' });
+    }
+  }
+  const g = globalThis as unknown as { Worker?: unknown };
+  const workerPlanner = (): WasmPlanner => new WasmPlanner({ model: 'm', runtime: 'r', workerUrl: 'worker.js', cache: false });
+
+  it('dispose lets its model go to the worker running, and starts none to do it', async () => {
+    FakeWorker.made = [];
+    g.Worker = FakeWorker;
+    try {
+      const p = workerPlanner();
+      await p.planText('a');
+      p.dispose();
+      await new Promise((done) => setTimeout(done, 0));
+      assert.equal(FakeWorker.made.length, 1, 'no worker started to let a model go');
+      assert.equal(FakeWorker.made[0]!.terminated, true);
+    } finally {
+      delete g.Worker;
+    }
+  });
+
+  it('a worker that dies takes its models with it: the next plan holds its model again, on the new worker', async () => {
+    FakeWorker.made = [];
+    g.Worker = FakeWorker;
+    try {
+      const p = workerPlanner();
+      await p.planText('a');
+      FakeWorker.made[0]!.die();
+      assert.equal((await p.planText('b')).sql, 'SELECT 1', 'planned, no stale handle sent');
+      assert.equal(FakeWorker.made.length, 2);
+      assert.deepEqual(FakeWorker.made[1]!.holds, ['m'], 'held again on the new worker');
+    } finally {
+      delete g.Worker;
+    }
+  });
+});
+
+describe('WasmPlanner: a plan in flight while its model changes', () => {
+  it('is planned against the model and runtime it began with, and not kept for the new model', async () => {
+    const asked: string[] = [];
+    const p = planner((m, q, r) => { asked.push(`${m}|${q}|${r}`); return ok('SELECT 1'); }, { model: 'old' });
+    const first = p.planText('a');
+    p.useModel('new', 'other::RT');
+    await first;
+    assert.deepEqual(asked, ['old|a|trades::RT'], 'the old model with its own runtime');
+    await p.planText('a');
+    assert.deepEqual(asked.at(-1), 'new|a|other::RT', 'the new model planned afresh, the old answer not kept for it');
+  });
+});
+
 describe('fileUrlToPath', () => {
   // Node's own fileURLToPath is the reference; WasmPlanner cannot import
   // it (it is bundled for the browser too). Both platform modes are

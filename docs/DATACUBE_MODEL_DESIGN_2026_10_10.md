@@ -297,7 +297,9 @@ dashboard's model grows with its classes; measured (§11), each class added 15-1
   belongs to its model text**.
 - **The text as the key** (the Plan Gen / Exec Split line): the strongest content key, nothing trusted to a digest; two
   passes over the text, well under a millisecond. Built instead as its content `Hash` -- core's rule for every
-  content-keyed store (Invariant 3, ArchitectureTest's funnel into `com.legend.cache`) -- once per hold, not per plan.
+  content-keyed store (Invariant 3, ArchitectureTest's funnel into `com.legend.cache`) -- once per hold, not per plan;
+  the Plan Gen / Exec Split line's code review agreed (2026-10-10), and asked for two changes, made: each hold its own
+  handle (a holder releasing twice takes nothing from another), and a model compiled outside the store's lock.
 - Approved in shape by the Plan Gen / Exec Split line.
 
 ## 10. Where the code lives: none of it in the browser module
@@ -308,7 +310,7 @@ The tab's module and Python's native library are adapters: each export a one-lin
 - **Where a model is kept compiled is the process that plans it, never its home**: a compiled model is a live object of
   one compiler build, not something the SDLC or Depot stores (upstream keeps them apart too).
 - **The held models' table** lives in core's planning side, beside `Compiler.compileModel`: the hosts that hold a model
-  while a planner over it lives -- the tab and Python -- share one. **The server does not** (the Studio line, 2026-10-10):
+  while a planner over it lives -- the tab and Python -- share one implementation, each owning its instance. **The server does not** (the Studio line, 2026-10-10):
   a request has no holder, so a table there would be a cache across requests that nothing has measured a need for; its
   leg 8 compiles once per request instead and hands the compiled model down (`Runner.run(ModelContext, ...)`,
   `Execution.executeWire(ModelContext, ...)`, agreed with the Plan Gen / Exec Split line).

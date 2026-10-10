@@ -185,6 +185,8 @@ export class WasmPlanner implements Planner, TableModels {
       for (const waiting of this.#t.pending.values()) waiting.reject(dead);
       this.#t.pending.clear();
       this.#t.worker = undefined;
+      // the models it held died with it: no planner's handle names anything now
+      this.#t.generation += 1;
     };
     this.#t.worker = w;
     return w;
@@ -206,8 +208,12 @@ export class WasmPlanner implements Planner, TableModels {
     this.#types.clear();
     this.#letGo();
     if (this.#borrowed) return;
-    this.#t.worker?.terminate();
-    this.#t.worker = undefined;
+    if (this.#t.worker) {
+      this.#t.worker.terminate();
+      this.#t.worker = undefined;
+      // the models it held go with it
+      this.#t.generation += 1;
+    }
     this.#t.pending.clear();
   }
 
@@ -376,9 +382,12 @@ export class WasmPlanner implements Planner, TableModels {
     this.#held = undefined;
     if (held === undefined || held.generation !== this.#t.generation) return;
     void held.handle.then((handle) => {
-      if (held.generation !== this.#t.generation) return;
-      if (this.#useWorker()) return this.#ask({ kind: 'release', handle }).then(() => undefined);
-      return this.#load().then((m) => { m.exports.releaseModel(handle); });
+      // a module or worker since replaced, or none running now, holds nothing to let go: never start one to do it
+      if (held.generation !== this.#t.generation) return undefined;
+      if (this.#useWorker()) {
+        return this.#t.worker ? this.#ask({ kind: 'release', handle }).then(() => undefined) : undefined;
+      }
+      return this.#t.module ? this.#t.module.then((m) => { m.exports.releaseModel(handle); }) : undefined;
     }).catch(() => {
       // a model never held, or a worker gone with the models it held: nothing to let go
     });
@@ -398,16 +407,19 @@ export class WasmPlanner implements Planner, TableModels {
     // so an abort cannot stop it -- but it can stop a stale answer
     // reaching the grid. Check on both sides of the call.
     if (signal?.aborted) throw signal.reason ?? new Error('aborted');
+    // the model and its runtime as they are now, together: a useModel while this waits changes neither
+    const { model, runtime } = this.#options;
     const handle = await this.#handle();
     const answer = this.#useWorker()
-      ? await this.#ask({ kind: 'plan', handle, query: pureGrammar, runtime: this.#options.runtime })
-      : (await this.#load()).exports.planHeldOrError(handle, pureGrammar, this.#options.runtime);
+      ? await this.#ask({ kind: 'plan', handle, query: pureGrammar, runtime })
+      : (await this.#load()).exports.planHeldOrError(handle, pureGrammar, runtime);
     if (signal?.aborted) throw signal.reason ?? new Error('aborted');
     // `{"sql", "type"}`: the SQL and the compiler's type of its result, in upstream's
     // RelationType shape -- the same renderer legend-lite's pure/v1 answers use.
     const body = JSON.parse(decode(answer, pureGrammar)) as { sql: string; type: unknown };
     const plan: Plan = { sql: body.sql, columns: relationColumns(body.type) };
-    if (useCache) this.#cache.set(key, plan);
+    // kept only while it is the planner's model still: an answer for a model since replaced is not this one's
+    if (useCache && this.#options.model === model) this.#cache.set(key, plan);
     return plan;
   }
 
@@ -418,13 +430,14 @@ export class WasmPlanner implements Planner, TableModels {
     const hit = useCache ? this.#types.get(key) : undefined;
     if (hit !== undefined) return hit;
     if (signal?.aborted) throw signal.reason ?? new Error('aborted');
+    const { model } = this.#options;
     const handle = await this.#handle();
     const answer = this.#useWorker()
       ? await this.#ask({ kind: 'relationType', handle, query: pureGrammar })
       : (await this.#load()).exports.relationTypeHeldOrError(handle, pureGrammar);
     if (signal?.aborted) throw signal.reason ?? new Error('aborted');
     const columns = relationColumns(JSON.parse(decode(answer, pureGrammar)));
-    if (useCache) this.#types.set(key, columns);
+    if (useCache && this.#options.model === model) this.#types.set(key, columns);
     return columns;
   }
 
@@ -437,14 +450,15 @@ export class WasmPlanner implements Planner, TableModels {
     const hit = useCache ? this.#cache.get(json) : undefined;
     if (hit !== undefined) return hit;
     if (signal?.aborted) throw signal.reason ?? new Error('aborted');
+    const { model, runtime } = this.#options;
     const handle = await this.#handle();
     const answer = this.#useWorker()
-      ? await this.#ask({ kind: 'planJson', handle, lambda: json, runtime: this.#options.runtime })
-      : (await this.#load()).exports.planJsonHeldOrError(handle, json, this.#options.runtime);
+      ? await this.#ask({ kind: 'planJson', handle, lambda: json, runtime })
+      : (await this.#load()).exports.planJsonHeldOrError(handle, json, runtime);
     if (signal?.aborted) throw signal.reason ?? new Error('aborted');
     const body = JSON.parse(decode(answer, query)) as { sql: string; type: unknown };
     const plan: Plan = { sql: body.sql, columns: relationColumns(body.type) };
-    if (useCache) this.#cache.set(json, plan);
+    if (useCache && this.#options.model === model) this.#cache.set(json, plan);
     return plan;
   }
 

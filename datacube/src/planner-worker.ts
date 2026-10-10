@@ -67,7 +67,7 @@ async function load(base: string): Promise<TeavmModule> {
     stackDeobfuscator: { enabled: false },
     installImports(imports: Record<string, unknown>) {
       // Diagnostics arrive one character at a time; the messages that
-      // matter come back through planOrError's return value.
+      // matter come back through each export's return value.
       imports.teavmConsole = { putcharStdout() {}, putcharStderr() {} };
     },
   });
