@@ -133,17 +133,19 @@ with the compiler's plan/execution split**, in this order:
    dashboards are built on them), its steps in order: 1 compile once everywhere; 2 Make a class; 3 dashboards on
    classes (the charts' batch 1 page filters land here); 4 combining in prep (every join form); 5 the model view; 6
    projects and publishing; 7 measures in the model.
-   **Step 1 announced 2026-10-10 (rule 5): a cross-area edit in `core/`** -- compile once, plan many (the design's §9,
-   reviewed by the Compiler Rewrite and Plan Gen / Exec Split lines: a held `PureModelContext` is safe, one thread at a
-   time; the model's text the key). Files: `core/src/main/java/com/legend/HeldModels.java` (new: the held models'
-   table, an entry per model text, its holders counted, its own lock) and `core/BUILD.bazel` (`_PLANNER_SRCS` gains it);
-   `wasm/src/main/java/planner/Boundary.java` and `TabExports.java` (the module's held entries, one-line calls into it);
-   `native/src/main/java/com/legend/nativelib/Compiler.java` (Python's held entries); `python/legend_lite/`
-   (`_library.py`, `compiler.py`, `frames.py`: a frame's model held); `datacube/src/wasm-planner.ts` and
-   `planner-worker.ts` (built on the branch, measured: a plan over a held model 6 to 14 ms at 1 to 200 classes, where
-   every plan compiled the whole model). Not touched: `Compiler.java`, L7 step 3's files. Proposed, not built here: the
-   server holding models (the Studio line's leg 8) and `pure/v1` requests reusing a held model (`PureV1Api`, the
-   protocol program's).
+   **Step 1 announced 2026-10-10 (rule 5): a cross-area edit in `core/`; amended before landing** -- compile once, plan
+   many (the design's §9, reviewed by the Compiler Rewrite and Plan Gen / Exec Split lines: a held `PureModelContext` is
+   safe, one thread at a time). Core files: `core/src/main/java/com/legend/cache/HeldStore.java` (new: a generic store of
+   values held by their users, keyed by a content `Hash` -- Invariant 3 -- each hold its own handle, a value built
+   outside the store's lock; no BUILD line: `//core:cache` globs its package), `core/src/main/java/com/legend/HeldModels.java`
+   (new: a host's held models over it, an instance, no static state in core) and `core/BUILD.bazel` (`_PLANNER_SRCS`
+   gains it); tests `core/src/test/java/com/legend/cache/HeldStoreTest.java` and `core/src/test/java/com/legend/HeldModelsTest.java`.
+   Beside core: `wasm/src/main/java/planner/Boundary.java` (owns the module's instance) and `TabExports.java`;
+   `native/src/main/java/com/legend/nativelib/Compiler.java` (Python's held entries); `python/legend_lite/` (`HeldModel`,
+   frames holding their model); `datacube/src/wasm-planner.ts`, `planner-worker.ts`, `cube.ts` (a planner's `dispose`)
+   and `datacube/demo/boot.ts` (a grid's planners let go with its last grid). Not touched: `Compiler.java`, L7 step 3's
+   files. **The server holds no models** (the Studio line: its leg 8 compiles once per request); `pure/v1` reusing a held
+   model is a later change, on a measurement.
 
 **Parked:** the compiler rebuild (`docs/EXECUTION_PLAN_2026_09_26.md`; paused, coming back later — its open items C4,
 B2/B3 and the W6.2 runner wait for it); the server
