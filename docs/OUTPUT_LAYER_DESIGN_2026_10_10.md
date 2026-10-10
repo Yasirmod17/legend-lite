@@ -68,12 +68,20 @@ Postgres's float8 text has no `.0` (`3`), which it does not add.
 ## 4. The design
 
 **One text owner per kind, per API.** Each kind's text is decided once per API, by one function per dialect, and every
-output of that API uses it; the duplicates in §2 are deleted.
+output of that API uses it; the duplicates in §2 are deleted. The owner exists: `lowering/LiteralSpelling.java` is
+already "the one owner of Pure's value-spelling grammar in SQL", with print forms for each kind (`floatPrint`,
+`decimalPrintD`, `datePrint`, `dateTimePrint`) that `toString` inside a query uses. The work makes every output use
+those, and makes them right on every database: `floatPrint` today is DuckDB's (it looks for a lowercase `e`, which H2
+does not write, and adds no `.0` to Postgres's `3`).
 
 - **Lite's own outputs** (CSV, the JSON wire, a stream of JSON rows, value lanes): Pure's own text, interpreted. A Float
   as Pure prints it: plain digits, always a fraction (`3.0`, `1500000000000000.0`, `0.00000025`). A Decimal with its own
-  scale (`5.00`). A DateTime as Pure prints it: `T`, the value's own fraction digits, `+0000`. A StrictDate
-  `2024-01-02`. In JSON a number is a number token of exactly that text, a date a string of it.
+  scale (`5.00`). A DateTime as Pure prints one read from the database: `T`, `+0000`, and the fraction digits Pure
+  gives such a value — a database's timestamp carries no precision of its own (`10:30:00` and `10:30:00.000` are one
+  value there), so the digits are a rule, not the value's: today's TDS cells, which PCT judges, write three
+  (`dateTimeText`); legend-engine's execute writes nine. Step 1 measures which interpreted Pure gives (PCT's relational
+  expectations, `PureEval.java` over a relational read), and the rule follows it. A StrictDate `2024-01-02`. In JSON a
+  number is a number token of exactly that text, a date a string of it.
 - **`pure/v1` execute** (legend-engine's API): legend-engine's text for the same values — a Float as Java prints a double
   (`3.0`, `1.5E15`, `2.5E-7`), a Decimal with its scale (`5.00`), a DateTime with nine fraction digits and `+0000`. The
   VALUE is still interpreted Pure's: lite's `3 * 1.1` answers `3.3` there, where legend-engine answers
@@ -87,8 +95,11 @@ output of that API uses it; the duplicates in §2 are deleted.
   `to_char`/numeric text; each measured, step 1).
 - **Arrow is values, not text:** its kinds (float64, decimal128 with the value's scale, timestamp to the value's
   precision) are checked, not formatted.
-- **Display is the UI's:** DataCube's `Intl` formatting is a display choice and stays; its engine client's parse
-  (`parseExact`, `timestampFromText`) is adjusted only where it would misread the new text (`+0000`, a scale kept).
+- **Display is the UI's:** DataCube's `Intl` formatting is a display choice and stays. Its engine client reads the new
+  text as it reads today's (the DataCube line, 2026-10-10, from `engine-client/src/values.ts`: `timestampFromText`
+  accepts `+0000`; `parseExact` reads `3.0` and `5.00` as the numbers 3 and 5). Keeping a decimal's scale through
+  DataCube is that line's change, not this one's. The check: `//datacube:tests`, `//datacube:browser`,
+  `//datacube:python_engine_test`.
 
 ## 5. The work, in order
 
