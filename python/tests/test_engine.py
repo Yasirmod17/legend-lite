@@ -136,7 +136,11 @@ class Calls(Served):
         answers = [None] * 12
 
         def ask(i):
-            answers[i] = self.arrow(GROUP)[1].to_pylist()
+            # a request that fails says how in its place, rather than leaving it None
+            try:
+                answers[i] = self.arrow(GROUP)[1].to_pylist()
+            except Exception as failure:
+                answers[i] = repr(failure)
 
         threads = [threading.Thread(target=ask, args=(i,)) for i in range(len(answers))]
         for t in threads:
@@ -145,6 +149,13 @@ class Calls(Served):
             t.join()
         self.assertEqual(answers, [[{'desk': 'EQ', 'q': 27.5}, {'desk': 'FX', 'q': 40.75}]] * len(answers))
         self.assertEqual(ll.compiler.library().unfreed(), 0)
+
+
+    def test_a_burst_of_connections_waits_its_turn(self):
+        # the listening queue holds a burst, never socketserver's five: macOS resets a connection the queue has no room
+        # for (the engine's comment says when it was seen); the burst itself depends on the machine's load, so the
+        # queue's length is what is held here
+        self.assertGreaterEqual(self.server._server.request_queue_size, 128)
 
 
 class Refusals(Served):

@@ -58,7 +58,7 @@ The largest gaps are not in the charts.
 ### Batch 2: the charts made dashboard-grade
 
 1. **Bar and line together**, one series a bar and another a line, on one axis when they share a unit and on two when
-   they do not -- each axis then labelled in its series' colour (§6, open decision 1).
+   they do not -- each axis then labelled in its series' colour (§6, decided).
 2. **Reference lines and colour by value**: a target, an average or a constant as a line; a shaded period or band;
    the highest and lowest pinned; a series coloured by thresholds (red below target).
 3. **The grid's own number formats** on every axis, label and tooltip (currency, percent, thousands and millions),
@@ -120,7 +120,7 @@ bubbles placed by latitude and longitude. Both offline: everything a map draws s
 
 2. **Prepared at build time**: simplified to a tile's size and split by country, keeping the borders neighbouring
    regions share identical (simplified one by one, neighbours part and leave slivers between them). The tool is open
-   (§6, decision 3); not Node.
+   (§6, open 2); not Node.
 3. **Matching the data to the shapes**: a column of ISO codes ("USA", "GBR") matches exactly; names ("United States",
    "US") through Natural Earth's own name fields. Rows that match no region are said ("3 regions not found: ..."), as
    the treemap says what it leaves out.
@@ -149,12 +149,16 @@ bubbles placed by latitude and longitude. Both offline: everything a map draws s
 - **Tests**: each kind's option tested in node, drawn as SVG (`chart-option` tests); each batch's interactions in
   Chromium (`verify_*`); Python's words read against DataCube's (`python-vocabulary.test.ts`).
 
-## 6. Open (for the user)
+## 6. Decided, and open
 
-1. **A second value axis.** `chart-option.ts`'s rule is one value axis, never two. Recommended: allow a second only for
-   a bar-and-line chart whose two measures differ in unit, each axis labelled in its series' colour; one axis
-   otherwise.
-2. **Regions beyond countries and their provinces** (UK regions, EU regions): not planned; Natural Earth's provinces
+**Decided (the user, 2026-10-09):** the work happens on this branch, `datacube-charts`, batch by batch, this note
+landing with the first ("we should do everything on branch here -- definitely start"); and a second value axis, as
+recommended ("yes on 2 axis"): only for a bar-and-line chart whose two measures differ in unit, each axis labelled in
+its series' colour, one axis otherwise -- `chart-option.ts`'s rule changes to say so.
+
+**Open:**
+
+1. **Regions beyond countries and their provinces** (UK regions, EU regions): not planned; Natural Earth's provinces
    cover most countries, and a user's own shapes cover the rest.
-3. **The map-preparation tool**: a pinned Python tool run at build time, or files prepared once and committed with how
+2. **The map-preparation tool**: a pinned Python tool run at build time, or files prepared once and committed with how
    they were made. To be chosen when batch 5 starts, with the measured sizes.
