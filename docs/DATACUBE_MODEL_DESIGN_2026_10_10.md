@@ -458,19 +458,28 @@ With a class, everything it needs to run, in upstream's promotion's layout (lege
 - **The class** `<pkg>::domain::Trade`; **its relation function** `<pkg>::function::TradeFn` (the grid's query, its
   return the relation's own type); **its mapping** `<pkg>::mapping::TradeMapping` (`Relation { ~func ... }`, each
   property its column, each key only its local property).
-- **The source's store**, `<pkg>::store::Trades`, written with the first class over it, named after its source; its
-  table name the source's own, kept: the tab's table takes that name when the page opens (a fresh name per open,
+- **One store for the place the rows are**, `<pkg>::store::Browser` (the user, 2026-10-10: "one store for whole
+  tab"): ONE Database for the tab's DuckDB, a table per source, each table added with the first class over its source
+  (the store's file changes then). Not one per source: lite plans a query over two stores only when one connection
+  serves both, and a connection names its store, so a store per source would refuse every query across an
+  association; one Database per database is also what the rows are (Studio's "generate from database" writes one).
+  A table's name the source's own, kept: the tab's table takes that name when the page opens (a fresh name per open,
   `trades_2`, as today, would break the mapping on reopen); a second source of the same name gets its `_2` once, when
-  its store is first written.
-- **Its connection and runtime**, for where its rows are now: `<pkg>::runtime::Browser` and its connection for the tab's
-  DuckDB (a warehouse table's, the warehouse's). DataCube plans with the project's own runtime, so what DataCube runs is
-  what Studio runs; a published version adds the runtime of where it is published (step 6), beside it.
-- **Sample rows**, `<pkg>::data::TradesSample`: a `Data` element holding the source's first 100 rows (relational CSV
-  data) -- the project runs and its tests pass where the file is not.
-- **A mapping test**: the class's query over the sample rows, its expected rows the grid's -- green in Studio's test
-  runner, and in DataCube's checks.
-- With an association, the Association and its ModelJoin, and the page's mapping including the classes' mappings;
-  with a data space, the data space.
+  its table is first written.
+- **Its connection and runtime**, for where its rows are now: `<pkg>::connection::Browser` (the tab's DuckDB, in
+  memory: `path: ':memory:'`) and `<pkg>::runtime::Browser`, binding the store to it (a warehouse table's, the
+  warehouse's). DataCube plans with the project's own runtime, so what DataCube runs is what Studio runs; a published
+  version adds the runtime of where it is published (step 6), beside it.
+- **The model's mapping**, `<pkg>::mapping::Model`: it includes each class's mapping and holds the associations; the
+  runtime names it alone (lite's planner refuses a runtime naming a mapping and one that includes it), and so does a
+  data space.
+- **Sample rows**, `<pkg>::data::<Table>Sample`: a `Data` element holding the source's first 100 rows (relational CSV
+  data) -- the project runs where the file is not (DataCube's and Query's tab fill a project's tables from its Data
+  elements when it is opened by name, and Studio's `TabTables` does: plan A2).
+- **A mapping test: later** (the user, 2026-10-10: "do the data even if mapping test not there yet"): the class's
+  query over the sample rows, its expected rows the class's over them -- written when lite has a mapping-test runner,
+  which it has not (`docs/DEFERRED_TEST_EXECUTION.md` is its charter; Studio's tests, A4, are parked).
+- With an association, the Association and its ModelJoin, in the model's mapping; with a data space, the data space.
 
 ### 15.3 Where it goes: the page's model home
 
