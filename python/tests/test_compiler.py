@@ -132,7 +132,8 @@ class Compiling(unittest.TestCase):
             tree = ll.parse("|#>{trades::DB.TRADES}#->select(~[desk])")
             self.assertEqual(held.relation_type(tree), ll.relation_type(MODEL, tree))
             with ll.HeldModel(MODEL) as again:
-                self.assertEqual(again._handle, held._handle, 'the same text: the one model')
+                self.assertNotEqual(again._handle, held._handle, 'each hold its own handle')
+                self.assertEqual(again.plan(ll.parse(GROUP), 'trades::RT'), held.plan(ll.parse(GROUP), 'trades::RT'))
             # the other holder let go: this one still holds it
             self.assertEqual(held.plan(ll.parse(GROUP), 'trades::RT').sql, ll.plan(MODEL, ll.parse(GROUP), 'trades::RT').sql)
         with self.assertRaisesRegex(ValueError, 'was let go'):

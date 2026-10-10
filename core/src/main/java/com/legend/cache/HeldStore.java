@@ -16,13 +16,17 @@ import java.util.function.Supplier;
  * edited definition is another entry and never a stale one), with what holding needs and they must not grow:
  *
  * <ul>
- *   <li><b>Counted holders</b>: {@link #hold} builds a key's value the first time and counts each holder after;
- *       {@link #release} lets one go, and the entry goes with its last -- nothing is kept that no one holds, so the
- *       store is bounded by its holders, not by a size or an age.</li>
- *   <li><b>A handle</b> names a held entry to {@link #with} without the key: a holder keeps a small number, not the
- *       content it hashed.</li>
+ *   <li><b>Counted holders, each its own handle</b>: {@link #hold} builds a key's value the first time and answers each
+ *       holder a handle of its own; {@link #release} lets that one handle go (a second release of it does nothing,
+ *       whoever else holds the value), and the entry goes with its last handle -- nothing is kept that no one holds, so
+ *       the store is bounded by its holders, not by a size or an age.</li>
+ *   <li><b>A build outside the lock</b>: a value that takes seconds to build (a model's compile) holds up no one --
+ *       neither another key's hold nor a use of a value held already. Two holders racing on one new key may both build;
+ *       the first to finish is kept and the other's value dropped (HandleStore.getOrOpenSlowly's rule, with no futures,
+ *       so it stays TeaVM's).</li>
  *   <li><b>One user at a time per entry</b>: {@link #with} runs under the entry's own lock, for values not safe to use
- *       from two threads at once (a compiled model's typing caches are plain maps).</li>
+ *       from two threads at once (a compiled model's typing caches are plain maps). A use begun before its handle is
+ *       released finishes on the value it began with.</li>
  * </ul>
  *
  * <p>GENERIC on purpose, as {@link HandleStore} is: the value's type stays with its owner, never in this package. An
@@ -31,47 +35,62 @@ import java.util.function.Supplier;
 public final class HeldStore<T> {
 
     private final Map<String, Entry<T>> byKey = new HashMap<>();
+    /** Each hold's own handle, to the entry it holds. */
     private final Map<Integer, Entry<T>> byHandle = new HashMap<>();
     private final AtomicInteger next = new AtomicInteger(1);
 
-    /** A held value: its key, the value, its handle, and how many hold it. */
+    /** A held value: its key, the value, and how many handles hold it. */
     private static final class Entry<T> {
         private final String key;
         private final T value;
-        private final int handle;
         private final AtomicInteger holders = new AtomicInteger();
 
-        Entry(String key, T value, int handle) {
+        Entry(String key, T value) {
             this.key = key;
             this.value = value;
-            this.handle = handle;
         }
     }
 
     /**
-     * Hold the value for {@code key}: built by {@code build} the first time the key is held (a build that throws holds
-     * nothing), and held once more each time after. The answer names it to {@link #with} until it is released as many
-     * times as it was held.
+     * Hold the value for {@code key}: built by {@code build} the first time the key is held -- outside the store's lock;
+     * a build that throws holds nothing -- and the same value held each time after. The answer is this hold's own
+     * handle, naming the value to {@link #with} until it is released.
      */
-    public synchronized int hold(Hash key, Supplier<T> build) {
-        Entry<T> entry = byKey.get(key.hex());
-        if (entry == null) {
-            entry = new Entry<>(key.hex(), build.get(), next.getAndIncrement());
-            byKey.put(entry.key, entry);
-            byHandle.put(entry.handle, entry);
+    public int hold(Hash key, Supplier<T> build) {
+        String k = key.hex();
+        synchronized (this) {
+            Entry<T> held = byKey.get(k);
+            if (held != null) {
+                return handleFor(held);
+            }
         }
-        entry.holders.incrementAndGet();
-        return entry.handle;
+        T value = build.get();
+        synchronized (this) {
+            Entry<T> held = byKey.get(k);
+            if (held == null) {
+                held = new Entry<>(k, value);
+                byKey.put(k, held);
+            }
+            // a build that raced another for the same new key and finished second: its value is dropped
+            return handleFor(held);
+        }
     }
 
-    /** Let go of {@code handle} once; its value goes with its last holder. A handle not held is let go of already. */
+    /** A new handle for {@code entry}, counted among its holders. Under the store's lock. */
+    private int handleFor(Entry<T> entry) {
+        int handle = next.getAndIncrement();
+        byHandle.put(handle, entry);
+        entry.holders.incrementAndGet();
+        return handle;
+    }
+
+    /**
+     * Let {@code handle} go: the value goes with its last handle. A handle not held -- released already, or never held --
+     * is let go of already: nothing else changes.
+     */
     public synchronized void release(int handle) {
-        Entry<T> entry = byHandle.get(handle);
-        if (entry == null) {
-            return;
-        }
-        if (entry.holders.decrementAndGet() == 0) {
-            byHandle.remove(handle);
+        Entry<T> entry = byHandle.remove(handle);
+        if (entry != null && entry.holders.decrementAndGet() == 0) {
             byKey.remove(entry.key);
         }
     }
@@ -93,8 +112,8 @@ public final class HeldStore<T> {
         }
     }
 
-    /** How many values are held now. */
+    /** How many values are held now (each once, however many handles hold it). */
     public synchronized int size() {
-        return byHandle.size();
+        return byKey.size();
     }
 }

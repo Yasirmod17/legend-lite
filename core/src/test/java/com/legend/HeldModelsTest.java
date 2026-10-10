@@ -5,6 +5,7 @@ package com.legend;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -38,10 +39,11 @@ class HeldModelsTest {
         int b = held.hold(MODEL);
         int c = held.hold(MODEL + "\n// edited\n");
         try {
-            assertEquals(a, b, "the same text: one entry");
-            assertNotEquals(a, c, "an edited model: another");
+            assertNotEquals(a, b, "each hold its own handle");
             ModelContext first = held.with(a, ctx -> ctx);
-            assertSame(first, held.with(b, ctx -> ctx), "compiled once: the one context");
+            assertSame(first, held.with(b, ctx -> ctx), "the same text: compiled once, the one context");
+            assertNotSame(first, held.with(c, ctx -> ctx), "an edited model: another");
+            assertEquals(2, held.size());
         } finally {
             held.release(a);
             held.release(b);
@@ -57,6 +59,8 @@ class HeldModelsTest {
         int b = held.hold(MODEL);
         held.release(a);
         assertEquals(before + 1, held.size(), "one holder left");
+        held.release(a);
+        assertEquals(before + 1, held.size(), "a's second release takes nothing from b");
         held.release(b);
         assertEquals(before, held.size(), "gone with the last");
         IllegalArgumentException gone = assertThrows(IllegalArgumentException.class,
