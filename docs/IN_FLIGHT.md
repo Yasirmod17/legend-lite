@@ -114,9 +114,15 @@ with the compiler's plan/execution split**, in this order:
    run 38070603189): `exec.PlanRunner` runs a lite plan with no model, its values typed and checked in its own words,
    each placeholder bound as the plan says (type holes where the type is the value's: H2's, and a date-time's on every
    database; PARK-19 fixed), sessions shared by the target's content; measured against legend-engine 4.145.0 and Pure
-   itself (`probes/engine-reference/`). **Next: PARK-24, the output layer** (the user's ruling 2026-10-10: an answer is
-   Pure's value — Float arithmetic, a whole Float's `.0`, a Decimal literal's scale, a DateTime's text — its text the
-   served API's), files announced here before the first edit; then step 4 (the callers switch, the old paths deleted).
+   itself (`probes/engine-reference/`). **Now: PARK-24, the output layer** (`docs/OUTPUT_LAYER_DESIGN_2026_10_10.md`; the user's ruling 2026-10-10: an answer
+   is interpreted Pure's value, its text the served API's — a whole Float's `.0`, an extreme Float's plain digits, a
+   decimal result's scale, a DateTime's text), then step 4 (the callers switch, the old paths deleted), both on branch
+   `dbowner/output-layer`, landed together. Files: in `core/src/main/java/com/legend/` `lowering/` `Render.java`,
+   `WireRender.java`, `LiteralSpelling.java`, `Fold.java`, `Scalars.java`, `MixedEncoding.java`; `sql/DateFmt.java`;
+   `sql/dialect/` `AnsiSqlRenderer.java`, `DuckDb.java`, `H2.java`, `Postgres.java`; `exec/CanonicalForm.java`,
+   `exec/PlanRunner.java`; `server/PureV1Api.java`; `Execution.java`; a new output-matrix test in `core/src/test/`, and
+   `ParkedWorkLedgerTest.java`. DataCube's engine client (`parseExact`, `timestampFromText`) only if the new text needs
+   it, asked of the DataCube line first.
 4. **DataCube + Python** (resumed 2026-10-07 by the user; the sixth line below): worktree `legend-lite-dcsnap`, branch
    `datacube-pages`. `native/`, `python/` and, since 2026-10-09, all of `datacube/`. Landed: the compiler as a native
    library (`bc8107c4e`), `ll.show(df)` and the notebook cube on every platform, a real JupyterLab test and marimo
