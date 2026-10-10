@@ -473,7 +473,10 @@ export function kpiDrawing(
     const xs = column(trend, spec.x);
     const ys = column(trend, name);
     if (xs && ys) {
-      const points = xs.values.map((x, i) => [label(x, spec.x!, xs.type), numberOf(ys.values[i] ?? null, ys.type)] as const);
+      // asked latest first, one past the most it shows (kpiQueries): drawn oldest first, the latest KPI_TREND_LIMIT
+      const latest = xs.values.map((x, i) => [label(x, spec.x!, xs.type), numberOf(ys.values[i] ?? null, ys.type)] as const)
+        .slice(0, KPI_TREND_LIMIT);
+      const points = [...latest].reverse();
       line = {
         option: asOption({
           backgroundColor: 'transparent',
@@ -496,7 +499,7 @@ export function kpiDrawing(
         notes: [],
         description: `${what} by ${spec.x}: ${points.length} points.`,
       };
-      if (xs.values.length >= KPI_TREND_LIMIT) notes.push(`The trend shows the first ${KPI_TREND_LIMIT} values of ${spec.x}.`);
+      if (xs.values.length > KPI_TREND_LIMIT) notes.push(`The trend shows the latest ${KPI_TREND_LIMIT} values of ${spec.x}.`);
     }
   }
   const description = `KPI: ${what} is ${value}${target ? `; ${target.text}` : ''}.`;

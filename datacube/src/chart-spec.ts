@@ -255,8 +255,9 @@ function filterColumns(node: FilterNode | undefined): string[] {
 export const KPI_TREND_LIMIT = 500;
 
 /**
- * A KPI's queries: its value -- the measure over every row of the cube's query, its filters and the page's, no grouping:
- * one row -- and, given a column across, its trend: the measure by that column, in that column's order.
+ * A KPI's queries: its value -- the measure over every row of the cube's query, its filter applied, no grouping:
+ * one row -- and, given a column across, its trend: the measure by that column, its LATEST values first (a long series
+ * shows where it is now), one past the most it draws, so a trend cut short is known to be.
  */
 export function kpiQueries(s: CubeSnapshot, spec: ChartSpec): {
   readonly total: ReturnType<typeof chartQuery>;
@@ -266,7 +267,7 @@ export function kpiQueries(s: CubeSnapshot, spec: ChartSpec): {
   const total = chartQuery(s, value);
   if (x === undefined) return { total };
   const trend = chartQuery(s, {
-    ...value, x, mark: 'line', options: { ...spec.options, sort: { by: 'x', direction: 'asc' }, limit: KPI_TREND_LIMIT },
+    ...value, x, mark: 'line', options: { ...spec.options, sort: { by: 'x', direction: 'desc' }, limit: KPI_TREND_LIMIT + 1 },
   });
   return { total, trend };
 }
