@@ -13,7 +13,7 @@ Three layers, each with its own join. **Prep** is data engineering, Alteryx- or 
 sources -- files, tables, frames -- read as relations, as DataCube reads them today, shaped with relation operations
 (filter, calculated columns, join, union, group and aggregate, choose and rename columns, remove duplicates); its joins
 are **relation joins, to make one class** (a Trade spread over three tables joined into one shape). When a shape is
-what a person wants -- "that is my Trade" -- **Make a class** turns it into the model: the pipeline as a relation
+what a person wants -- "that is my Trade" -- **Create a Class…** turns it into the model: the pipeline as a relation
 function, a class whose properties are its columns, and a mapping of the class to the function (upstream's own
 `promoteRelationToModel`: `~func`). **The model** is the classes made -- several of them -- and the relationships between
 them: **ModelJoins, between classes** (a trade's `customer`, a customer's `trades`), as Associations. Tables one to one
@@ -93,7 +93,7 @@ one model each (the table model the compiler writes: wasm Boundary `tableModel`)
 - **Charts and KPIs are previews** of a grid: drawn from it, never reaching another tile. No page filters, no
   cross-filtering: in prep a filter is a step of a pipeline.
 
-### 3.3 Make a class
+### 3.3 Create a Class
 
 - **From a grid**: its pipeline as a relation function, a class of its columns, a mapping of the class to the function
   -- upstream's promotion (§2), with its rules for names (`makeCamelCase`, made total: a character a name cannot hold
@@ -331,7 +331,7 @@ The tab's module and Python's native library are adapters: each export a one-lin
   `lambdaRelationType` per call, its model held against compiled): if it is needed, one lookup in the one dispatcher
   (`PureV1Api.route`), before it compiles, keyed by the model's text -- the tab and Python gaining, the server, holding
   nothing, unchanged; written up with the Studio line, the Plan Gen / Exec Split line seeing it (its step 4 works there).
-- **Make a class** is a route of legend-lite's server, in core, named after upstream's REPL command
+- **Create a Class…'s writer** is a route of legend-lite's server, in core, named after upstream's REPL command
   (`/api/lite/v1/.../promoteRelationToModel`): a relation expression, a class name and a package in; the function, the
   class and the mapping out (by §3.3's rules). The tab and Python ask it through `pure/v1`'s routing, as they ask every
   compiler question. Upstream's `generateModelsFromDatabaseSpecification`, exactly, is a later item, for Studio.
@@ -368,7 +368,7 @@ The tab's module and Python's native library are adapters: each export a one-lin
 ## 12. Withdrawn from revision 2
 
 - **Every source a class, made silently** (revision 2's §3.1, step M1): sources stay relations (§3.1); a class is made on
-  purpose (§3.3). Revision 2's writer (a table's class beside its Database) becomes Make a class's writer in core
+  purpose (§3.3). Revision 2's writer (a table's class beside its Database) becomes Create a Class…'s writer in core
   (§10), its rules kept: upstream's names made total, each property typed by the compiler's reading of the relation.
 - **One way of working** (revision 2's §3.8 and decision 8): two modes, for two jobs -- shaping data, and analysing it
   on a model (with the model, between them, a layer of its own: §4). What revision 2 warned of (every filter with two
@@ -386,10 +386,10 @@ Each step lands on its own -- an audit, the local gate, CI, the user's OK -- wit
 |---|---|---|
 | 0 | **The KPI**, landing first | The KPI tile; this design on main |
 | 1 | **Compile once, everywhere it holds** (§9, §10) | The held models' table in core's planning side; the browser module's and Python's native library's exports one-line calls into it; Python holding each frame's model and each page's. The server compiles once per request (the Studio line's leg 8), sharing no table; `pure/v1` reusing a held model later, on a measurement |
-| 2 | **Make a class** (§3.3, layer 1 to 2) | A route of legend-lite's server, in core, named after upstream's `promoteRelationToModel`; the dialog (the class's name, its properties' names and documentation); the page's project in the model home, made quietly, the page pinned to its revision (§6); a bundle for a page that travels; a dashboard grid reading a class made; `grid.make_class('Trade')` |
+| 2 | **Create a Class, an Association, a Data Space** (§15, layers 1 to 2) | A route of legend-lite's server, in core, named after upstream's `promoteRelationToModel`; the dialog (the class's name, its properties' names and documentation); the page's project in the model home, made quietly, the page pinned to its revision (§6); a bundle for a page that travels; a dashboard grid reading a class made; `grid.make_class('Trade')` |
 | 3 | **Dashboards on classes** (§5, one class) | Dashboard pages over classes; page filters and a chart's clicks by a class's property -- batch 1's page filters and cross-filtering, rebuilt, landing here; prep pages with previews only |
 | 4 | **Combining in prep** (§3.2, §3.4, layer 1) | The join dialog in every form (any condition, as-of, lateral and Expand, with or without a match, append), its match summary; choose and rename, remove duplicates |
-| 5 | **The model view** (§4, layer 2) | Classes as boxes; relationships drawn as ModelJoins, suggested; related properties walked in the column chooser (§5.1); filters through named ends, both ways a page's choice (§5.2); the one-connection refusal (§4.3) |
+| 5 | **The model view** (§4, layer 2) | Classes as boxes, associations as their lines (made by step 2's Create an Association…); related properties walked in the column chooser (§5.1); filters through named ends, both ways a page's choice (§5.2); the one-connection refusal (§4.3) |
 | 6 | **Promote and publish** (§6, §7, layer 3 for users) | The page's project promoted to a server's SDLC (its revisions with it); export as Pure; publishing on a released model, its data where the published place can read it (materialize when needed); a released version kept compiled on the server if measured to need it (§10); Studio opening the model |
 | 7 | **Measures in the model** (docs/BI_AND_ETL_PLAN_2026_09_29.md B4) | A measure and a dimension declared on a class, offered by name |
 
@@ -413,37 +413,64 @@ marked column and as an aggregate; batch 1 split; two modes, nothing across tile
 without a model; relation joins make one class's rows, ModelJoins relate classes.
 
 Decided too ("Yes yes yes yes to all!"): the publishing rules (§7) -- drafts shared freely, publishing on a released
-model with data the published place can read; no dashboard over a raw source without Make a class (one click, names
+model with data the published place can read; no dashboard over a raw source without Create a Class… (one click, names
 from the source); a class read live by default, materialized on request; the steps in §13's order; every join form
 legend-lite has in prep (§3.4).
 
-## 15. Step 2, Make a class, as it will be built (for the user's agreement)
+## 15. Step 2, Create a Class, an Association, a Data Space, as it will be built
+
+The user, 2026-10-10: name the actions after Legend's own elements -- **Create a Class…**, **Create an Association…**,
+**Create a Data Space…** (as Studio's New menu names them) -- and **create everything** a class needs to run, its
+connection and runtime among them; several classes from several grids, related simply: property equality, or a key the
+class does not show (a foreign key).
 
 ### 15.1 What a person does
 
-- On a prep grid, **Make a class…** (its menu): the class's name (from the source's name by default, `trades.csv` a
-  `Trade`), its package (the page's by default), and each property -- its column, its name (upstream's rules, §3.3,
-  editable), its type and multiplicity (the compiler's), its documentation (optional); the Pure it will write, shown;
-  **Make**.
+- **Create a Class…** (a prep grid's menu): the class's name (from the source's name by default, `trades.csv` a
+  `Trade`) and package (the page's by default); each column **a property** (shown on the class: its name by
+  upstream's rules, §3.3, editable; its type and multiplicity the compiler's; its documentation), **a key only** (kept in
+  the mapping as a local property, `+customerId: Integer[0..1]: customer_id`, for associations, not shown on the class --
+  a foreign key), or **left out**; its primary key suggested (a column found unique and never empty); an enumeration
+  suggested for a text column of few values (EMEA, AMER, APAC), never made unasked; the Pure it will write, shown;
+  **Create**.
 - **What a grid makes**: its rows as it shows them at its finest level -- a flat grid's rows (its filter, its calculated
   columns, the columns it shows), or a grouped grid's groups (one row per group, its measures among the properties). A
   pivot is refused in words ("a class has fixed properties: take the pivot off first").
-- **Then**: the class is in the page's model at once; "Add a data source" offers the page's classes; a grid over it
-  reads the rows the prep grid showed.
+- **Create an Association…** (between two classes on the page): the property or key on each side, equal
+  (`$customer.id == $trades.customerId`); both ends named (by default the other class's name: `customer`, `trades`); how
+  many on each side worked out from the data -- each trade has at most one customer when `Customer.id` is unique, and
+  `[0..1]` when `customer_id` can be empty -- shown to confirm or change. Written as an Association mapped by a
+  ModelJoin (§4.2). **Suggested** associations -- a key column whose name and type match another class's primary key,
+  `customer_id` and `Customer.id` -- are offered here, never made unasked.
+- **Create a Data Space…**: the page's model as one front door, as Legend Query lists models -- its classes (chosen),
+  their associations (reviewed), a description; the mapping that includes the classes' mappings and the associations',
+  the runtime, the data space's default execution context. Its dialog is also the one-go path: grids not yet classes made
+  classes in it, suggested associations offered with them.
+- **Then**: the classes are in the page's model at once; "Add a data source" offers the page's classes and its data
+  spaces; a grid over a class reads the rows its prep grid showed.
+- **Later, with publishing** (step 6): **Create a Service…**, a class's query as a service with its test.
 
 ### 15.2 What it writes
 
-- **Upstream's promotion's layout** (legend-engine's REPL `PromoteRelationToModel`), the person's name kept as given:
-  the class `<pkg>::domain::Trade`, its relation function `<pkg>::function::TradeFn` (the grid's query, its return the
-  relation's own type), its mapping `<pkg>::mapping::TradeMapping` (`Relation { ~func ... }`, each property its
-  column).
-- **The source's store**: the Database the function reads, written into the project with the first class over it,
-  named after its source (`<pkg>::store::Trades`). Its table name is the source's own, and stays: the tab's table takes
-  that name when the page opens (a fresh name per open, `trades_2`, as today, would break the mapping on reopen); a
-  second source of the same name gets its `_2` once, when its store is first written, and keeps it.
-- **No runtime or connection in the project**: where the rows are -- the tab, a warehouse -- is the page's, given when
-  it plans (the model text the planner holds is the project's elements and the page's runtime). A project opened in
-  Studio gets its runtime when promoted or published (step 6), or by hand.
+With a class, everything it needs to run, in upstream's promotion's layout (legend-engine's REPL
+`PromoteRelationToModel`), the person's name kept as given:
+
+- **The class** `<pkg>::domain::Trade`; **its relation function** `<pkg>::function::TradeFn` (the grid's query, its
+  return the relation's own type); **its mapping** `<pkg>::mapping::TradeMapping` (`Relation { ~func ... }`, each
+  property its column, each key only its local property).
+- **The source's store**, `<pkg>::store::Trades`, written with the first class over it, named after its source; its
+  table name the source's own, kept: the tab's table takes that name when the page opens (a fresh name per open,
+  `trades_2`, as today, would break the mapping on reopen); a second source of the same name gets its `_2` once, when
+  its store is first written.
+- **Its connection and runtime**, for where its rows are now: `<pkg>::runtime::Browser` and its connection for the tab's
+  DuckDB (a warehouse table's, the warehouse's). DataCube plans with the project's own runtime, so what DataCube runs is
+  what Studio runs; a published version adds the runtime of where it is published (step 6), beside it.
+- **Sample rows**, `<pkg>::data::TradesSample`: a `Data` element holding the source's first 100 rows (relational CSV
+  data) -- the project runs and its tests pass where the file is not.
+- **A mapping test**: the class's query over the sample rows, its expected rows the grid's -- green in Studio's test
+  runner, and in DataCube's checks.
+- With an association, the Association and its ModelJoin, and the page's mapping including the classes' mappings;
+  with a data space, the data space.
 
 ### 15.3 Where it goes: the page's model home
 
@@ -469,7 +496,9 @@ anew.
 
 ### 15.5 Python
 
-- `grid.make_class('Trade', package=...)`: the same route, through the native library.
+- `grid.create_class('Trade', package=..., keys=['customer_id'])`, `page.create_association(trade, 'customerId',
+  customer, 'id', ends=('customer', 'trades'))`, `page.create_data_space(...)`: the same routes, through the native
+  library.
 - **Python's page is its model's home** -- a notebook has no IndexedDB and needs no SDLC: the page document carries
   the model's files (`model.files`, Studio's directory form: `<pkg>/domain/Trade.pure`, ...); Python's engine serves them
   as model text, which the widget's DataCube plans with. A class made in the widget's DataCube is written into Python's
@@ -495,13 +524,18 @@ anew.
 
 ### 15.7 What judges it
 
-- The route (core): names, types, multiplicities, the layout, the store written once, the refusals.
-- The browser (Chromium): a prep grid made a class; a grid over the class reads the same rows; the page reopened reads
+- The routes (core): names, types, multiplicities, the layout, the store written once, key-only columns as local
+  properties, the runtime and connection, the sample rows and the mapping test (passing), an association's ends and
+  multiplicities from the data, a data space; the refusals.
+- The browser (Chromium): two prep grids made classes and associated; a data space over them; a grid over a class
+  reads the same rows as its prep grid; the page reopened reads
   them again; Studio, served on the same origin, opens the project and finds the class; a stale save made again; a page
   file export refused while its model is only here.
-- Python: `make_class`, the page document carrying the model's files, the widget reading the class.
+- Python: `create_class`, `create_association`, `create_data_space`, the page document carrying the model's files, the
+  widget reading a class.
 
 ### 15.8 Not in step 2
 
-Dashboard pages and filters across tiles (step 3); relation joins in prep (step 4); relationships and the model view
-(step 5); promote, bundles, publishing (step 6, and the Studio line's S23).
+Dashboard pages and filters across tiles (step 3); relation joins in prep (step 4); the model view, walking related
+properties in the column chooser, filters through an association's ends (step 5); Create a Service…, promote, bundles,
+publishing (step 6, and the Studio line's S23).
