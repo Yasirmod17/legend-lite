@@ -8359,3 +8359,39 @@ through one builder, then the read-time rule deleted).
    other row identical, name and ids. The census identical (27 load walls, 16,133 bodies typed, 1,120 failing). The eager corpus compile's typing, six
    pairs alternated outside Bazel's cache, below main's in every pair (run 1 of `evidence/l7/eager_timings_step2.tsv`, a quiet machine, before the audit's fixes; `evidence/l7/eager_ab.sh`): `typeAll` main 2,431 to 2,927 ms, median 2,701; the change 1,913 to 2,392 ms, median 2,188 (459 to 675 ms less in each pair); the `build` phase (parse and resolve, where the bare-name rule now runs once per bare call) median 2,017 → 2,088 ms; the whole compile's medians 4,718 → 4,275 ms; the profile (`evidence/l7/jfr_step2.txt`, one run each side, 1 ms samples, the whole probe): `ResolvedNames.referents` 698 of 2,378 samples on main (29%) → 359 of 2,249 on the change (16%), all of it now the no-record path (`BareNames.catalog` 351 samples: the 1,076 built calls and the 95 probes, read by the rule at every read; step 3's); `Typer.applyFunction` 1,334 → 1,089; the resolver's `resolveVs` 369 → 434 (the rule once per bare call the program does not declare). Repeated on the final tree under load (run 2 of `eager_timings_step2.tsv`): `typeAll` medians main 3,794 → change 2,855 ms, below main's in every pair.
 3. **Judges:** the render census (`docs/execution-plan-boundary-2026-10-05/render-census/run.sh`, main's tree against the change, every lane with the probe): 52,530 (lane, dialect, kind, text) entries, 0 differ (`evidence/l7/render_census_compare.txt`); the six corpus passes against the baseline built from main before the change: 22 result files identical (`evidence/l7/corpus_passes_compare.txt`); the reference lane green (`//spec:reference_lane`, `//spec:update_reference_lane_test`: no class moved, AGREE 76,884); PCT DuckDB, H2, Postgres and channel B green (17 targets); core's compiler, root and guardrail suites green on the fixed tree; the lane-membership query empty. Local gate: 323 targets green on the final tree (`bazel test --lockfile_mode=error //gates:local`, 2026-10-10 15:53).
+
+## 2026-10-10 — DataCube: the KPI tile, and the design that puts DataCube on the Pure model (the DataCube + Python line)
+
+The first landing of the charts' batch 1 (`docs/DATACUBE_CHARTS_DESIGN_2026_10_09.md`), split out on purpose: the KPI
+lands; the batch's page filters and cross-filtering, built on the batch's branch matching columns by name, wait to land
+rebuilt on the Pure model (`docs/DATACUBE_MODEL_DESIGN_2026_10_10.md`, the user's "use Pure semantic models ... not make
+up our own"; its plan's step 3). Landed as one fast-forward, `b1a9529f0..f68b19aad` (eight commits):
+
+1. **The charts design** (the ECharts gallery, 377 examples read whole, in five batches).
+2. **Python's engine**: a listening queue of 128, not socketserver's 5 (a burst of connections on macOS lost one).
+3. **verify_layout**: a drag fails on a task over 100 ms, or two over 50; one blip a little over 50 ms (54 ms on a Linux
+   runner, gate run 38022354707) is reported, not failed.
+4. **The KPI** (`mark: 'kpi'`, a chart kind, with no change to what a page saves): its number as the grid writes the
+   measure, against a target, good or bad by which way is good, its trend's line -- the latest 500 values, asked latest
+   first, drawn oldest first; its colours as tokens, light and dark; Python's `grid.chart('kpi', ...)`. The grid-only
+   page's budget 381,000 -> 383,000 (measured 381,890).
+5. **The model design** (revision 3, the user's decisions in it): prep shapes data and makes classes (upstream's
+   `promoteRelationToModel`: a relation function, a class, a `~func` mapping); the model relates classes by
+   Associations mapped by ModelJoins; dashboards are built on the model, nothing reaching across tiles without one.
+   With its proof, `//datacube:model_join_test` (two classes over relation functions, a ModelJoin between them, one
+   connection, class queries walking both ends, planned by the tab's compiler and run on DuckDB), and its measurement,
+   **`//datacube:model_scale_measure`: a MEASUREMENT in `//gates:heavy`, manual -- its numbers are figures, not a pass
+   or a fail** (`bazel test //datacube:model_scale_measure --test_output=all` prints them): a model of 1 to 200 classes,
+   each plan then compiling the whole model (54 to 3,812 ms a plan), the reason the plan's step 1 is compile once,
+   plan many.
+
+What judges it: `//datacube:tests` (the KPI's queries, drawing and tile in `chart-echarts.test.ts` and
+`chart-tiles.test.ts`; the model's proof), `//datacube:verify_charts_test` (Chromium: a chart made a KPI, saved as
+such), `//python:all` (`test_page.py`'s KPI), `//datacube:python_engine_test`. Audited twice (the batch's own audit
+and re-audit, its S6 the KPI's latest 500; this landing's: 0 blockers, 4 should-fix, 4 nits -- comments, docs and commit
+messages, each fixed, the history rebuilt so every commit passes). BUILD edits reviewed by the Bazel program's reviewer
+(the Compiler Rewrite session): OK. Local gate: 330 of 333 (`//query:build_test` and `//studio:demo_test` timed out at
+60 s under the gate's load and pass alone in 9 s and 13 s; `//datacube:wasm_flag_test`'s catch fixed in the landing).
+CI run 38084878587 on `ci/datacube-kpi-land`, green on the lanes with a path to the change (product, checks, warehouse,
+datacube, ui) on every platform (21 jobs); pushed to main as f68b19aad, the tested commit, with the user's "push if
+green and up to date on main".
