@@ -479,14 +479,19 @@ anew.
 ### 15.6 The route
 
 - **`POST /api/lite/v1/relational/promoteRelationToModel`** on legend-lite's server, in core, named after upstream's
-  REPL command: in, the model the relation reads (the source stores, as text), the relation (protocol JSON), the class's
-  name, its package, and each property's name and documentation when the person changed them; out, the elements to
-  write -- `{path, text}` each: the function, the class, the mapping, and the source's store when it is not in the model
-  yet. Names by §3.3's rules, types by the compiler's reading of the relation; refused by name what cannot be a class
-  (a pivot's dynamic columns, a column of no type a property can hold).
+  REPL command, in `PureV1Api.route` beside `/api/lite/v1/compilation/compile` (agreed with the Studio line,
+  2026-10-10). In: **the model as a model context** (`{"_type":"text", ...}` -- read as the compile route reads it, so
+  when its leg 8 makes every route take `{"_type":"data", ...}` too, this one does), the relation (protocol JSON), the
+  class's name, its package, and each property's name and documentation when the person changed them. Out: the elements
+  to write in **the SDLC's own `PureFile` shape, `{path, pureCode}`**, `path` the element's path (`pkg::domain::Trade`;
+  the SDLC maps it to its file, `Sdlc.filePathOf`, so the engine's route knows nothing of the SDLC's layout -- the Studio
+  design's S1) -- the function, the class, the mapping, and the source's store when it is not in the model yet --
+  which DataCube hands to `performPureChanges` as `{type: CREATE, path, pureCode}` unchanged. Names by §3.3's rules,
+  types by the compiler's reading of the relation; refused by name, in the server's own kinds, what cannot be a class (a
+  pivot's dynamic columns, a column of no type a property can hold).
 - **Asked through `pure/v1`'s routing**, as the tab and Python ask every compiler question
-  (PROTOCOL_PROGRAM invariant 5). The dispatcher is the Studio line's protocol code: the route's shape agreed with it
-  before it is built.
+  (PROTOCOL_PROGRAM invariant 5): `pureV1OrError` in the tab, `lite_pure_v1` in Python; no export of its own. Built on
+  this line's branch; the Studio line edits `PureV1Api` in its leg 8 step 3 too, and whichever lands second rebases.
 
 ### 15.7 What judges it
 
