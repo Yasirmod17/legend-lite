@@ -258,7 +258,8 @@ dashboard's model grows with its classes; measured (§11), each class added 15-1
 - **Lite's own entries take a handle**: plan, plan of a protocol tree, result type; and room for an execution plan's
   entry, which takes the plan and its values and answers the statement and the values to bind (the hole and type rules
   stay `exec.PlanRunner`'s, never written again in TypeScript).
-- **`pure/v1` unchanged**: the model as text in the body; when that text is a held entry's, the request uses it.
+- **`pure/v1` unchanged**: the model as text in the body; whether a request whose text is a held entry's uses it is a
+  later change, on a measurement (§10).
 - **A handle no longer held** is refused by name; the tab's planner holds again when its module or worker is new.
 
 ### 9.2 Reviewed (2026-10-10)
@@ -277,9 +278,15 @@ dashboard's model grows with its classes; measured (§11), each class added 15-1
 The tab's module and Python's native library are adapters: each export a one-line call into the compiler
 (docs/PROTOCOL_PROGRAM_2026_10_05.md invariant 5: what a server answers, the tab asks through `pure/v1`). So:
 
-- **The held models' table** lives in core's planning side, beside `Compiler.compileModel`: the tab, Python and the
-  server share one. Whether the server holds models, and for how long, is Studio's leg 8 (the server's execute compiled
-  once and handed on): a server request has no holder, so it would need a size limit.
+- **The held models' table** lives in core's planning side, beside `Compiler.compileModel`: the hosts that hold a model
+  while a planner over it lives -- the tab and Python -- share one. **The server does not** (the Studio line, 2026-10-10):
+  a request has no holder, so a table there would be a cache across requests that nothing has measured a need for; its
+  leg 8 compiles once per request instead and hands the compiled model down (`Runner.run(ModelContext, ...)`,
+  `Execution.executeWire(ModelContext, ...)`, agreed with the Plan Gen / Exec Split line).
+- **`pure/v1` reusing a held model** is its own change, after leg 8, and only on a measurement (the tab's
+  `lambdaRelationType` per call, its model held against compiled): if it is needed, one lookup in the one dispatcher
+  (`PureV1Api.route`), before it compiles, keyed by the model's text -- the tab and Python gaining, the server, holding
+  nothing, unchanged; written up with the Studio line, the Plan Gen / Exec Split line seeing it (its step 4 works there).
 - **Make a class** is a route of legend-lite's server, in core, named after upstream's REPL command
   (`/api/lite/v1/.../promoteRelationToModel`): a relation expression, a class name and a package in; the function, the
   class and the mapping out (by §3.3's rules). The tab and Python ask it through `pure/v1`'s routing, as they ask every
@@ -332,7 +339,7 @@ Each step lands on its own -- an audit, the local gate, CI, the user's OK -- wit
 | # | Step | What a person gets |
 |---|---|---|
 | 0 | **The KPI**, landing first | The KPI tile; this design on main |
-| 1 | **Compile once, everywhere** (§9, §10) | The held models' table in core's planning side; the browser module's and Python's native library's exports one-line calls into it; Python holding each frame's model and each page's; the server's share proposed to the Studio line's leg 8 and the Plan Gen / Exec Split line (a size limit, a request having no holder) |
+| 1 | **Compile once, everywhere it holds** (§9, §10) | The held models' table in core's planning side; the browser module's and Python's native library's exports one-line calls into it; Python holding each frame's model and each page's. The server compiles once per request (the Studio line's leg 8), sharing no table; `pure/v1` reusing a held model later, on a measurement |
 | 2 | **Make a class** (§3.3, layer 1 to 2) | A route of legend-lite's server, in core, named after upstream's `promoteRelationToModel`; the dialog (the class's name, its properties' names and documentation); the page's model (§6); a dashboard grid reading a class made; `grid.make_class('Trade')` |
 | 3 | **Dashboards on classes** (§5, one class) | Dashboard pages over classes; page filters and a chart's clicks by a class's property -- batch 1's page filters and cross-filtering, rebuilt, landing here; prep pages with previews only |
 | 4 | **Combining in prep** (§3.2, §3.4, layer 1) | The join dialog in every form (any condition, as-of, lateral and Expand, with or without a match, append), its match summary; choose and rename, remove duplicates |
@@ -345,8 +352,8 @@ class; prep's largest gap, combining, next; then relationships, which make dashb
 last, on all of it.
 
 Coordination: steps 1 and 2 put code in core -- their files announced in docs/IN_FLIGHT.md first, checked against the
-Compiler Rewrite line's L7 step 3; step 1's server share is the Studio and Plan Gen / Exec Split lines' to decide;
-step 6 is built on Studio's SDLC and Depot, reviewed by its line. Where a large model's compile goes (4 s at 200
+Compiler Rewrite line's L7 step 3; the server's compile is the Studio line's leg 8 (answered: no shared table); step 6
+is built on Studio's SDLC and Depot, its shape brought to that line before it is built. Where a large model's compile goes (4 s at 200
 classes, §11) the Compiler Rewrite line measures; whether a large model needs more than compile-once follows from it.
 
 ## 14. Decisions
