@@ -416,3 +416,87 @@ Decided too ("Yes yes yes yes to all!"): the publishing rules (§7) -- drafts sh
 model with data the published place can read; no dashboard over a raw source without Make a class (one click, names
 from the source); a class read live by default, materialized on request; the steps in §13's order; every join form
 legend-lite has in prep (§3.4).
+
+## 15. Step 2, Make a class, as it will be built (for the user's agreement)
+
+### 15.1 What a person does
+
+- On a prep grid, **Make a class…** (its menu): the class's name (from the source's name by default, `trades.csv` a
+  `Trade`), its package (the page's by default), and each property -- its column, its name (upstream's rules, §3.3,
+  editable), its type and multiplicity (the compiler's), its documentation (optional); the Pure it will write, shown;
+  **Make**.
+- **What a grid makes**: its rows as it shows them at its finest level -- a flat grid's rows (its filter, its calculated
+  columns, the columns it shows), or a grouped grid's groups (one row per group, its measures among the properties). A
+  pivot is refused in words ("a class has fixed properties: take the pivot off first").
+- **Then**: the class is in the page's model at once; "Add a data source" offers the page's classes; a grid over it
+  reads the rows the prep grid showed.
+
+### 15.2 What it writes
+
+- **Upstream's promotion's layout** (legend-engine's REPL `PromoteRelationToModel`), the person's name kept as given:
+  the class `<pkg>::domain::Trade`, its relation function `<pkg>::function::TradeFn` (the grid's query, its return the
+  relation's own type), its mapping `<pkg>::mapping::TradeMapping` (`Relation { ~func ... }`, each property its
+  column).
+- **The source's store**: the Database the function reads, written into the project with the first class over it,
+  named after its source (`<pkg>::store::Trades`). Its table name is the source's own, and stays: the tab's table takes
+  that name when the page opens (a fresh name per open, `trades_2`, as today, would break the mapping on reopen); a
+  second source of the same name gets its `_2` once, when its store is first written, and keeps it.
+- **No runtime or connection in the project**: where the rows are -- the tab, a warehouse -- is the page's, given when
+  it plans (the model text the planner holds is the project's elements and the page's runtime). A project opened in
+  Studio gets its runtime when promoted or published (step 6), or by hand.
+
+### 15.3 Where it goes: the page's model home
+
+- **The model home DataCube connects to** (§6): the in-page SDLC by default. A project made quietly at the first class,
+  named after the page, with a workspace of DataCube's; each class made is one save (one revision); the page document
+  gains `model` -- the project, the workspace, the revision it is pinned to (the page document's next version).
+- **One origin**: the model home is per origin and per browser profile; DataCube and Studio see each other's projects
+  when served together (the site), not from two origins (the separate demos on their own ports).
+- **Storage that lasts**: at the first class made, DataCube asks the browser for persistent storage
+  (`navigator.storage.persist()`); refused, the page says so -- its model lives in this browser's storage, which the
+  browser or a person may clear.
+- **A save refused as stale** (the SDLC's revision lock: Studio saved the project since): DataCube reads the project
+  again and makes its change again when it still applies (a new class's files), else says what changed.
+- **A page exported as a file, its model held only here**: refused, in words, until the Studio line's export (S23) lets
+  the file carry its model; a page whose model is on a server's SDLC exports as it does today, pointing to it.
+
+### 15.4 Reading a class
+
+A grid over a class plans `<pkg>::domain::Trade.all()->project(~[...])`, its columns the properties, against the
+project's elements and the page's runtime, through the mapping -- a planner holding that model (step 1). A class made
+again (renamed, a property added) is a new revision; the page re-pins to it, and its grids plan against the model held
+anew.
+
+### 15.5 Python
+
+- `grid.make_class('Trade', package=...)`: the same route, through the native library.
+- **Python's page is its model's home** -- a notebook has no IndexedDB and needs no SDLC: the page document carries
+  the model's files (`model.files`, Studio's directory form: `<pkg>/domain/Trade.pure`, ...); Python's engine serves them
+  as model text, which the widget's DataCube plans with. A class made in the widget's DataCube is written into Python's
+  page through the page channel, not into the notebook's browser storage.
+- `page.grid(page.cls('Trade'))` reads a class; "create a project" (into an SDLC) is later, with promote (step 6).
+
+### 15.6 The route
+
+- **`POST /api/lite/v1/relational/promoteRelationToModel`** on legend-lite's server, in core, named after upstream's
+  REPL command: in, the model the relation reads (the source stores, as text), the relation (protocol JSON), the class's
+  name, its package, and each property's name and documentation when the person changed them; out, the elements to
+  write -- `{path, text}` each: the function, the class, the mapping, and the source's store when it is not in the model
+  yet. Names by §3.3's rules, types by the compiler's reading of the relation; refused by name what cannot be a class
+  (a pivot's dynamic columns, a column of no type a property can hold).
+- **Asked through `pure/v1`'s routing**, as the tab and Python ask every compiler question
+  (PROTOCOL_PROGRAM invariant 5). The dispatcher is the Studio line's protocol code: the route's shape agreed with it
+  before it is built.
+
+### 15.7 What judges it
+
+- The route (core): names, types, multiplicities, the layout, the store written once, the refusals.
+- The browser (Chromium): a prep grid made a class; a grid over the class reads the same rows; the page reopened reads
+  them again; Studio, served on the same origin, opens the project and finds the class; a stale save made again; a page
+  file export refused while its model is only here.
+- Python: `make_class`, the page document carrying the model's files, the widget reading the class.
+
+### 15.8 Not in step 2
+
+Dashboard pages and filters across tiles (step 3); relation joins in prep (step 4); relationships and the model view
+(step 5); promote, bundles, publishing (step 6, and the Studio line's S23).
