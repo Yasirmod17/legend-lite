@@ -205,8 +205,8 @@
   text-overflow: ellipsis;
 }
 .dc-kpi-target { font-size: var(--dc-text-sm-size); }
-.dc-kpi-good { color: var(--dc-kpi-good, #0b7a3e); }
-.dc-kpi-bad { color: var(--dc-kpi-bad, #b42318); }
+.dc-kpi-good { color: var(--dc-kpi-good); }
+.dc-kpi-bad { color: var(--dc-kpi-bad); }
 .dc-kpi-trend { flex: 1 1 40px; min-height: 40px; max-height: 120px; }
 
 /* -- the title bar ------------------------------------------------- */
@@ -2584,6 +2584,9 @@
   --dc-chart-axis: #c3c2b7;
   --dc-chart-series: #2a78d6, #eb6834, #1baf7a, #eda100, #e87ba4, #008300, #4a3aa7, #e34948;
   --dc-chart-sequential: #cde2fb, #86b6ef, #3987e5, #256abf, #184f95, #0d366b;
+  /* a KPI against its target: good and bad */
+  --dc-kpi-good: #0b7a3e;
+  --dc-kpi-bad: #b42318;
   display: flex;
   height: 100%;
   min-height: 0;
