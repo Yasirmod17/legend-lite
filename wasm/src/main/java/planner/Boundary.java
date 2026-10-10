@@ -127,105 +127,43 @@ public final class Boundary {
         return com.legend.json.Json.toCompact(out);
     }
 
-    // ---- models held: compiled once, planned against many times (docs/DATACUBE_MODEL_DESIGN_2026_10_10.md §8)
+    // ---- models held: compiled once, planned against many times (docs/DATACUBE_MODEL_DESIGN_2026_10_10.md §9)
 
-    /**
-     * Hold {@code model}: compiled the first time its text is held, and held once more each time after -- the same text
-     * the same compiled model, an edited one another (its content is the key, never an object). The answer is the
-     * handle that names it to {@link #planHeld}, {@link #planJsonHeld} and {@link #relationTypeHeld}, until
-     * {@link #releaseModel} lets it go as many times as it was held. A host holds a model while a planner over it
-     * lives, so the models held are the planners alive.
-     */
+    /** This host's held models: the module's (one per module instance, a worker's own) or Python's library's. */
+    private static final com.legend.HeldModels MODELS = new com.legend.HeldModels();
+
+    /** {@link com.legend.HeldModels#hold}: the handle that names {@code model}, compiled the first time it is held. */
     public static int holdModel(String model) {
-        return Held.hold(model);
+        return MODELS.hold(model);
     }
 
-    /** Let go of {@code handle} once; its compiled model goes with its last holder. */
+    /** {@link com.legend.HeldModels#release}. */
     public static void releaseModel(int handle) {
-        Held.release(handle);
+        MODELS.release(handle);
     }
 
     /** {@link #plan} over a model held: the query planned, the model compiled no more. */
     public static String planHeld(int handle, String query, String runtime) {
-        Held held = Held.of(handle);
-        synchronized (held) {
-            return planned(com.legend.Compiler.query(held.context, query).plan(runtime));
-        }
+        return MODELS.with(handle, ctx -> planned(com.legend.Compiler.query(ctx, query).plan(runtime)));
     }
 
     /** {@link #planJson} over a model held. */
     public static String planJsonHeld(int handle, String lambdaJson, String runtime) {
-        Held held = Held.of(handle);
-        synchronized (held) {
-            return planned(com.legend.Compiler.query(held.context,
-                    com.legend.protocol.ProtocolReader.lambda(lambdaJson)).plan(runtime));
-        }
+        return MODELS.with(handle, ctx -> planned(com.legend.Compiler.query(ctx,
+                com.legend.protocol.ProtocolReader.lambda(lambdaJson)).plan(runtime)));
+    }
+
+    /** A lambda's protocol JSON typed, compile-only, over a model held: upstream's {@code lambdaRelationType} answer. */
+    public static String relationTypeJsonHeld(int handle, String lambdaJson) {
+        return MODELS.with(handle, ctx -> com.legend.json.Json.toCompact(
+                com.legend.plan.UpstreamRelationType.of(com.legend.Compiler.query(ctx,
+                        com.legend.protocol.ProtocolReader.lambda(lambdaJson)).resultType())));
     }
 
     /** {@link #relationType} over a model held. */
     public static String relationTypeHeld(int handle, String query) {
-        Held held = Held.of(handle);
-        synchronized (held) {
-            return com.legend.json.Json.toCompact(com.legend.plan.UpstreamRelationType.of(
-                    com.legend.Compiler.query(held.context, query).resultType()));
-        }
-    }
-
-    /**
-     * A MODEL HELD: its text, the context the compiler built from it, and how many hold it. The context is a function
-     * of the model alone -- what planning types on demand is kept in it, and no query writes into it (the Compiler
-     * Rewrite line, 2026-10-10) -- but its caches are plain maps: one thread plans against it at a time, so each plan
-     * holds the entry's own lock (the tab's module plans one query at a time; Python's library may be called from
-     * several threads).
-     */
-    private static final class Held {
-        private static final java.util.Map<String, Held> BY_TEXT = new java.util.HashMap<>();
-        private static final java.util.Map<Integer, Held> BY_HANDLE = new java.util.HashMap<>();
-        private static int next = 1;
-
-        final String text;
-        final com.legend.compiler.element.ModelContext context;
-        final int handle;
-        int holders;
-
-        private Held(String text, com.legend.compiler.element.ModelContext context, int handle) {
-            this.text = text;
-            this.context = context;
-            this.handle = handle;
-        }
-
-        static synchronized int hold(String model) {
-            Held held = BY_TEXT.get(model);
-            if (held == null) {
-                // a model that does not compile is refused here, and nothing is held
-                held = new Held(model, com.legend.Compiler.compileModel(model), next++);
-                BY_TEXT.put(model, held);
-                BY_HANDLE.put(held.handle, held);
-            }
-            held.holders += 1;
-            return held.handle;
-        }
-
-        static synchronized void release(int handle) {
-            Held held = BY_HANDLE.get(handle);
-            if (held == null) {
-                return;
-            }
-            held.holders -= 1;
-            if (held.holders == 0) {
-                BY_HANDLE.remove(handle);
-                BY_TEXT.remove(held.text);
-            }
-        }
-
-        static synchronized Held of(int handle) {
-            Held held = BY_HANDLE.get(handle);
-            if (held == null) {
-                throw new IllegalArgumentException("no model is held under handle " + handle
-                        + ": it was let go, or never held");
-            }
-            return held;
-        }
+        return MODELS.with(handle, ctx -> com.legend.json.Json.toCompact(
+                com.legend.plan.UpstreamRelationType.of(com.legend.Compiler.query(ctx, query).resultType())));
     }
 
     // ---- a model's data and its tables
