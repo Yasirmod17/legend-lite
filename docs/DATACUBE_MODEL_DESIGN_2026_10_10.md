@@ -274,9 +274,13 @@ dashboard's model grows with its classes; measured (§11), each class added 15-1
 
 ### 9.1 The shape
 
-- **One table of compiled models, keyed by the model's text** (its content: the same text the same entry, an edited
-  model a new one -- the rule the plan runner's sessions follow). `hold(model) -> handle`, compiled the first time its
-  text is held; `release(handle)`; entries counted by holders, so the table is bounded by the planners alive.
+- **One table of compiled models, keyed by the model's content** (the same text the same entry, an edited model a new
+  one -- the rule the plan runner's sessions follow). As built: `com.legend.cache.HeldStore<T>` -- in the cache package,
+  keyed by a content `Hash` of the text, as core's Invariant 3 asks of every content-keyed store, the text hashed once
+  when held, never per plan -- and `com.legend.HeldModels` over it; `hold(model) -> handle`, compiled the first time its
+  text is held; `release(handle)`; entries counted by holders, so the table is bounded by the planners alive. No static
+  state in core: each host that holds models owns its instance (the wasm Boundary, for the module and Python's
+  library).
 - **Lite's own entries take a handle**: plan, plan of a protocol tree, result type; and room for an execution plan's
   entry, which takes the plan and its values and answers the statement and the values to bind (the hole and type rules
   stay `exec.PlanRunner`'s, never written again in TypeScript).
@@ -292,7 +296,8 @@ dashboard's model grows with its classes; measured (§11), each class added 15-1
   Conditions: **one thread at a time per context** (its caches are plain maps: each entry its own lock), and **a context
   belongs to its model text**.
 - **The text as the key** (the Plan Gen / Exec Split line): the strongest content key, nothing trusted to a digest; two
-  passes over the text, well under a millisecond.
+  passes over the text, well under a millisecond. Built instead as its content `Hash` -- core's rule for every
+  content-keyed store (Invariant 3, ArchitectureTest's funnel into `com.legend.cache`) -- once per hold, not per plan.
 - Approved in shape by the Plan Gen / Exec Split line.
 
 ## 10. Where the code lives: none of it in the browser module
@@ -314,7 +319,12 @@ The tab's module and Python's native library are adapters: each export a one-lin
   (docs/TENETS.md: total knowledge, demand-driven work) asks for what a query reaches to be typed and resolved, not
   every class's mapping. Where a class's 15-19 ms goes is the Compiler Rewrite line's to measure (§11); if it is eager
   work a query never reaches, making it demand-driven shortens every compile -- the first open in the tab, a server's
-  request, Python's -- and may leave the server nothing to keep.
+  request, Python's -- and may leave the server nothing to keep. **It is** (the Compiler Rewrite line, 2026-10-10):
+  typing and element compiling are on demand already; parse, name resolution and above all normalization are not -- the
+  MappingNormalizer walks every mapping, synthesizing each class mapping's lifted function and every ModelJoin and
+  resolving them again as text -- so a tile over one class pays normalization for all of them. Normalizing a class
+  mapping on first use is a design change in the normalizer's index, not a cache; after L7, the user's to schedule, its
+  input the phase split of `//core:compile_latency` over this design's model.
 - **`pure/v1` reusing a held model** is its own change, after leg 8, and only on a measurement (the tab's
   `lambdaRelationType` per call, its model held against compiled): if it is needed, one lookup in the one dispatcher
   (`PureV1Api.route`), before it compiles, keyed by the model's text -- the tab and Python gaining, the server, holding
