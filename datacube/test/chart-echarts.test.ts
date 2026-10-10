@@ -12,10 +12,12 @@ import {
   chartSnapshot,
   defaultChart,
   followCube,
+  KPI_TREND_LIMIT,
+  kpiQueries,
   measureName,
   type ChartSpec,
 } from '../src/chart-spec.ts';
-import { chartOption, MAX_SERIES, treemapOfGrid, type GridShown } from '../src/chart-option.ts';
+import { chartOption, kpiDrawing, MAX_SERIES, treemapOfGrid, type GridShown } from '../src/chart-option.ts';
 import * as echarts from 'echarts/core';
 import { SVGRenderer } from 'echarts/renderers';
 import '../src/chart-render.ts';   // registers the charts and components the page uses
@@ -349,5 +351,80 @@ describe('a live chart', () => {
   it('answers the same object when nothing changed (no redraw of the form)', () => {
     const now = followCube(live, CUBE);
     assert.equal(followCube(now, CUBE), now);
+  });
+});
+
+describe('a KPI (docs/DATACUBE_CHARTS_DESIGN_2026_10_09.md, batch 1)', () => {
+  const { x: _across, ...bare } = BAR;
+  const kpi: ChartSpec = { ...bare, mark: 'kpi' };
+
+  it('its value is the measure over every row of the cube\'s query, no grouping; its trend, by its column, latest first', () => {
+    const { total, trend } = kpiQueries(CUBE, kpi);
+    assert.equal(trend, undefined, 'no column across, no trend');
+    assert.deepEqual(total.snapshot.rows, []);
+    assert.deepEqual(total.snapshot.measures, [{ name: 'sum_notional', column: 'notional', fn: 'sum' }]);
+    assert.deepEqual(total.snapshot.filter, CUBE.filter, 'the cube\'s filter kept');
+    assert.ok(chain(total.query).includes('groupBy'), 'one row: the whole');
+    const withTrend = kpiQueries(CUBE, { ...kpi, x: 'trade_date' });
+    assert.deepEqual(withTrend.trend!.snapshot.rows, ['trade_date']);
+    assert.deepEqual(withTrend.trend!.snapshot.sorts, [{ column: 'trade_date', direction: 'desc' }], 'the latest first');
+    assert.equal(withTrend.trend!.scope.limit, KPI_TREND_LIMIT + 1, 'one past the most it draws: it says when there were more');
+    assert.deepEqual(withTrend.total.snapshot.rows, [], 'its value is still the whole');
+  });
+
+  it('needs no column across; follows the cube\'s measure, never its grouping', () => {
+    assert.deepEqual(chartProblems(kpi, CUBE), []);
+    const followed = followCube({ ...kpi, x: 'trade_date' }, { ...CUBE, measures: [{ name: 'q', column: 'qty', fn: 'average' }] });
+    assert.deepEqual(followed.y, [{ column: 'qty', fn: 'average' }]);
+    assert.equal(followed.x, 'trade_date', 'its trend\'s column is its own');
+  });
+
+  it('says its number as the grid writes it, against its target, good on the side it should be', () => {
+    const total = table([{ name: 'sum_notional', type: 'Float', values: [1500] }]);
+    const write = (v: unknown) => `$${String(v)}`;
+    assert.equal(kpiDrawing(kpi, total, null, undefined, write).value, '$1500');
+    assert.equal(kpiDrawing(kpi, total, null).target, undefined, 'no target, nothing against it');
+    const above = kpiDrawing({ ...kpi, options: { ...kpi.options, target: 1000 } }, total, null, undefined, write);
+    assert.deepEqual(above.target, { text: '▲ 50% above target ($1000)', good: true });
+    const lower = kpiDrawing({ ...kpi, options: { ...kpi.options, target: 1000, better: 'lower' } }, total, null);
+    assert.equal(lower.target!.good, false, 'above a target that should not be passed is bad');
+    const below = kpiDrawing({ ...kpi, options: { ...kpi.options, target: 1600 } }, total, null);
+    assert.deepEqual(below.target, { text: '▼ 6.3% below target (1600)', good: false });
+    assert.equal(kpiDrawing({ ...kpi, options: { ...kpi.options, target: 1500 } }, total, null).target!.text, 'On target (1500)');
+    assert.equal(kpiDrawing({ ...kpi, options: { ...kpi.options, target: 1 } }, total, null).target!.text, '\u25B2 1,500\u00D7 the target (1)',
+      'far above: how many times the target');
+    assert.equal(kpiDrawing(kpi, table([{ name: 'sum_notional', type: 'Float', values: [null] }]), null).value, '—');
+    assert.match(above.description, /^KPI: sum of notional is \$1500; ▲ 50% above target/);
+  });
+
+  it('draws its trend as a line and nothing else, oldest first', () => {
+    const total = table([{ name: 'sum_notional', type: 'Float', values: [6] }]);
+    // as asked: the latest first
+    const trend = table([
+      { name: 'trade_date', type: 'StrictDate', values: ['2024-01-03', '2024-01-02', '2024-01-01'] },
+      { name: 'sum_notional', type: 'Float', values: [2, 3, 1] },
+    ]);
+    const drawn = kpiDrawing({ ...kpi, x: 'trade_date' }, total, trend);
+    const option = drawn.trend!.option as { series: { type: string; data: number[] }[]; xAxis: { show: boolean; data: string[] } };
+    assert.equal(option.series[0]!.type, 'line');
+    assert.deepEqual(option.series[0]!.data, [1, 3, 2]);
+    assert.deepEqual(option.xAxis.data, ['2024-01-01', '2024-01-02', '2024-01-03']);
+    assert.equal(option.xAxis.show, false);
+    assert.deepEqual(drawn.notes, []);
+    assert.match(chartSvg(drawn.trend!, 200, 60), /<path/);
+  });
+
+  it('past the most its trend draws, the latest of them, and it says so', () => {
+    const total = table([{ name: 'sum_notional', type: 'Float', values: [6] }]);
+    const n = KPI_TREND_LIMIT + 1;
+    const trend = table([
+      { name: 'day', type: 'Integer', values: Array.from({ length: n }, (_, i) => n - i) },
+      { name: 'sum_notional', type: 'Float', values: Array.from({ length: n }, (_, i) => n - i) },
+    ]);
+    const drawn = kpiDrawing({ ...kpi, x: 'day' }, total, trend);
+    const data = (drawn.trend!.option as { series: { data: number[] }[] }).series[0]!.data;
+    assert.equal(data.length, KPI_TREND_LIMIT);
+    assert.deepEqual([data[0], data.at(-1)], [2, n], 'the oldest one left out');
+    assert.deepEqual(drawn.notes, [`The trend shows the latest ${KPI_TREND_LIMIT} values of day.`]);
   });
 });

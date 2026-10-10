@@ -50,8 +50,11 @@ function startup(bundle = join(DEMO, 'bundle.js')): string[] {
  *  on screen from the start. Measured 375,751, main before it 367,729 (+8,022).
  *  378,000 -> 381,000 (2026-10-09, DataCube pages phase 3b, stacked tiles, the design's §7.4): a stack in the layout
  *  (layout/bands.ts) and its tabs on the board (layout/band-board.ts), at startup as the board is. Measured 378,297,
- *  sheets before it 375,928 (+2,369). */
-const BUDGET = 381_000;
+ *  sheets before it 375,928 (+2,369).
+ *  381,000 -> 383,000 (2026-10-10, DataCube charts batch 1's KPI, landing before the batch's page filters: the KPI's
+ *  drawing (chart-option.ts kpiDrawing), its queries (chart-spec.ts kpiQueries) and its form in the charts' panel, at
+ *  startup as that panel is. Measured 381,890, main before it under its 381,000. */
+const BUDGET = 383_000;
 
 /** The engine page's (demo/engine.html: one cube on an engine that runs its queries, Python's) startup download,
  *  gzipped: the grid and the remote client, no DuckDB-WASM and no compiler. Set 2026-10-08 at its first measure

@@ -160,6 +160,34 @@ try {
     return `${gridId} removed: ${followingId} went with it, ${frozenId} detached`;
   });
 
+  // A KPI (docs/DATACUBE_CHARTS_DESIGN_2026_10_09.md, batch 1): a chart's kind set to KPI in its Options -- its
+  // number as the grid writes it, a target to say it against, its trend's line under it
+  await check('a chart made a KPI: its number, against a target it is above, its trend\'s line under it', async () => {
+    await addChart();
+    const id = await page.locator('[data-tile^="chart-"]').last().getAttribute('data-tile');
+    await chartMenu(id, 'Options...');
+    const form = page.locator(`[data-tile="${id}"] .dc-chartpanel-form`);
+    const fieldNamed = (label) => form.locator(`.dc-field:has(> .dc-field-label:text-is("${label}"))`);
+    await fieldNamed('Chart:').locator('select').selectOption('kpi');
+    await page.locator(`[data-tile="${id}"] .dc-kpi-value`).waitFor({ timeout: 20_000 });
+    const value = await page.locator(`[data-tile="${id}"] .dc-kpi-value`).textContent();
+    if (!value || value === '\u2014') throw new Error(`the KPI says ${value}`);
+    // a target of 1: the total is above it, which is good
+    await fieldNamed('Target:').locator('input').fill('1');
+    await fieldNamed('Target:').locator('input').dispatchEvent('change');
+    const target = page.locator(`[data-tile="${id}"] .dc-kpi-target`);
+    await target.waitFor({ timeout: 20_000 });
+    if (!(await target.getAttribute('class')).includes('dc-kpi-good')) throw new Error(`the target says ${await target.textContent()}, not good`);
+    // its trend by the grid's first row group: a line drawn under the number
+    const across = await fieldNamed('Trend by:').locator('option').nth(1).getAttribute('value');
+    await fieldNamed('Trend by:').locator('select').selectOption(across);
+    await page.locator(`[data-tile="${id}"] .dc-kpi-trend canvas`).waitFor({ timeout: 20_000 });
+    const saved = await page.evaluate((c) => window.__dataPage.views().views.find((v) => v.id === c)?.spec, id);
+    if (saved.mark !== 'kpi' || saved.options.target !== 1 || saved.x !== across) throw new Error(`saved as ${JSON.stringify(saved)}`);
+    if (process.env.SHOTS) { await frames(page, 4); await page.screenshot({ path: outPath('kpi.png') }); }
+    return `${id}: ${value}, ${await target.textContent()}, its trend by ${across}`;
+  });
+
   await check('no page errors', async () => {
     if (pageErrors.length) throw new Error(pageErrors.slice(0, 2).join(' | '));
   });

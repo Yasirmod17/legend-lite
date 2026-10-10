@@ -54,7 +54,7 @@ AGGREGATES = frozenset({
     'sum', 'count', 'average', 'min', 'max', 'median', 'stdDevSample', 'stdDevPopulation', 'varianceSample',
     'variancePopulation', 'joinStrings', 'wavg', 'unique',
 })
-MARKS = frozenset({'bar', 'line', 'area', 'scatter', 'pie', 'heatmap', 'treemap'})
+MARKS = frozenset({'bar', 'line', 'area', 'scatter', 'pie', 'heatmap', 'treemap', 'kpi'})
 DIRECTIONS = frozenset({'asc', 'desc'})
 # a band added at the bottom of a sheet, in screenfuls; the places a band holds side by side, at most; the bands the
 # layout picker fits to a screen, at most

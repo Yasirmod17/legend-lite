@@ -24,7 +24,7 @@ import {
 import { isFractional, isNumeric, isTemporal } from '../../engine-client/src/types.ts';
 import type { Lambda } from '../../pure-protocol/src/index.ts';
 
-export type ChartMark = 'bar' | 'line' | 'area' | 'scatter' | 'pie' | 'heatmap' | 'treemap';
+export type ChartMark = 'bar' | 'line' | 'area' | 'scatter' | 'pie' | 'heatmap' | 'treemap' | 'kpi';
 
 /** One measure the chart plots: a column and how its rows are aggregated. */
 export interface ChartMeasure {
@@ -35,7 +35,7 @@ export interface ChartMeasure {
 export interface ChartSpec {
   readonly version: 1;
   readonly mark: ChartMark;
-  /** The category (bar, line, area, pie, heatmap columns) or the x value (scatter). */
+  /** The category (bar, line, area, pie, heatmap columns), the x value (scatter), or a KPI's trend (optional). */
   readonly x?: string;
   /** What is plotted. Scatter reads the first as its y; heatmap and pie the first as the value. */
   readonly y: readonly ChartMeasure[];
@@ -58,6 +58,10 @@ export interface ChartOptions {
   readonly limit: number;
   readonly labels: boolean;
   readonly legend: 'top' | 'bottom' | 'right' | 'none';
+  /** A KPI's target: its value is said against it -- above or below, by how much. */
+  readonly target?: number;
+  /** Which way is good for a KPI against its target: above it (higher, the default) or below it. */
+  readonly better?: 'higher' | 'lower';
 }
 
 export const CHART_MARKS: readonly { value: ChartMark; label: string }[] = [
@@ -68,6 +72,7 @@ export const CHART_MARKS: readonly { value: ChartMark; label: string }[] = [
   { value: 'pie', label: 'Pie' },
   { value: 'heatmap', label: 'Heatmap' },
   { value: 'treemap', label: 'Treemap' },
+  { value: 'kpi', label: 'KPI' },
 ];
 
 export const DEFAULT_CHART_LIMIT = 50;
@@ -145,6 +150,13 @@ export function defaultChart(s: CubeSnapshot): ChartSpec | null {
  */
 export function followCube(spec: ChartSpec, s: CubeSnapshot): ChartSpec {
   if (spec.frozen || spec.mark === 'scatter') return spec;
+  // a KPI follows the cube's measure; its trend's column is its own
+  if (spec.mark === 'kpi') {
+    const measure = s.measures.find((m) => m.fn !== 'wavg');
+    if (!measure) return spec;
+    const y = [{ column: measure.column, fn: measure.fn }];
+    return JSON.stringify(y) === JSON.stringify(spec.y) ? spec : { ...spec, y };
+  }
   const x = s.rows[0] ?? s.pivotOn[0];
   if (x === undefined) return spec;
   const split = s.rows[0] !== undefined ? (s.rows[1] ?? s.pivotOn[0]) : s.pivotOn[1];
@@ -169,8 +181,9 @@ export function followCube(spec: ChartSpec, s: CubeSnapshot): ChartSpec {
 export function chartProblems(spec: ChartSpec, s: CubeSnapshot): string[] {
   const known = new Set(rowColumns(s).map((c) => c.name));
   const out: string[] = [];
-  if (spec.x === undefined) out.push('Pick a column across.');
-  else if (!known.has(spec.x)) out.push(`The cube has no column '${spec.x}'.`);
+  // a KPI's column across is its trend, and it may have none
+  if (spec.x === undefined && spec.mark !== 'kpi') out.push('Pick a column across.');
+  else if (spec.x !== undefined && !known.has(spec.x)) out.push(`The cube has no column '${spec.x}'.`);
   if (spec.y.length === 0) out.push('Pick something to plot.');
   for (const m of spec.y) {
     if (m.fn !== 'count' && !known.has(m.column)) out.push(`The cube has no column '${m.column}'.`);
@@ -236,6 +249,27 @@ function filterColumns(node: FilterNode | undefined): string[] {
     default:
       return node.children.flatMap(filterColumns);
   }
+}
+
+/** The most points a KPI's trend asks for: more than a year of days. */
+export const KPI_TREND_LIMIT = 500;
+
+/**
+ * A KPI's queries: its value -- the measure over every row of the cube's query, its filter applied, no grouping:
+ * one row -- and, given a column across, its trend: the measure by that column, its LATEST values first (a long series
+ * shows where it is now), one past the most it draws, so a trend cut short is known to be.
+ */
+export function kpiQueries(s: CubeSnapshot, spec: ChartSpec): {
+  readonly total: ReturnType<typeof chartQuery>;
+  readonly trend?: ReturnType<typeof chartQuery>;
+} {
+  const { x, split: _split, ...value } = spec;
+  const total = chartQuery(s, value);
+  if (x === undefined) return { total };
+  const trend = chartQuery(s, {
+    ...value, x, mark: 'line', options: { ...spec.options, sort: { by: 'x', direction: 'desc' }, limit: KPI_TREND_LIMIT + 1 },
+  });
+  return { total, trend };
 }
 
 /** The chart's query and the scope it runs at. */

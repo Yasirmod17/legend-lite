@@ -471,3 +471,49 @@ describe('New > Source: a grid over another source, with its own planner and eng
     assert.equal(entry('Data Source\u2026', 'New'), undefined);
   });
 });
+
+describe('a KPI tile (docs/DATACUBE_CHARTS_DESIGN_2026_10_09.md, batch 1)', () => {
+  it('says its number, against its target, with its trend\'s line under it; a chart again, the number gives way', async () => {
+    const { ChartPanel } = await import('../src/ui/chart-panel.ts');
+    const host = dom.window.document.createElement('div');
+    root.append(host);
+    const asked: string[][] = [];
+    const panel = new ChartPanel(host, {
+      snapshot: () => SNAPSHOT,
+      // its value from one query (no grouping), its trend from another (by the column across)
+      run: async (_query, s) => {
+        asked.push([...s.rows]);
+        return s.rows.length === 0
+          ? { columns: [{ name: 'sum_notional', type: 'Float', values: [1500] }], rowCount: 1, epoch: 1, elapsedMs: 0 }
+          : { columns: [{ name: 'region', type: 'String', values: ['AMER', 'EMEA'] }, { name: 'sum_notional', type: 'Float', values: [600, 900] }],
+            rowCount: 2, epoch: 1, elapsedMs: 0 };
+      },
+      label: (v) => `$${String(v)}`,
+      onPick: () => {},
+      initial: {
+        version: 1, mark: 'kpi', x: 'region', y: [{ column: 'notional', fn: 'sum' }],
+        options: { orientation: 'vertical', stack: 'none', sort: { by: 'y', direction: 'desc' }, limit: 50, labels: false,
+          legend: 'top', target: 1000 },
+      },
+      debounceMs: 0,
+      formOpen: true,
+    });
+    await settle();
+    assert.equal(host.querySelector('.dc-kpi-value')?.textContent, '$1500');
+    const against = host.querySelector('.dc-kpi-target')!;
+    assert.equal(against.textContent, '▲ 50% above target ($1000)');
+    assert.ok(against.classList.contains('dc-kpi-good'));
+    assert.ok(host.querySelector('.dc-kpi-trend canvas, .dc-kpi-trend div'), 'its trend drawn under it');
+    assert.deepEqual(asked, [[], ['region']]);
+    assert.match(host.querySelector('.dc-chartpanel-chart')!.getAttribute('aria-label') ?? '', /^KPI: sum of notional is \$1500/);
+    // its form: what it measures, its trend, its target, which way is good -- and no order, no legend
+    const fields = [...host.querySelectorAll('.dc-chartpanel-form label, .dc-chartpanel-form .dc-field-label')].map((l) => l.textContent);
+    assert.ok(fields.some((f) => f?.startsWith('Target')), `its form: ${fields.join(', ')}`);
+    assert.ok(!fields.some((f) => f?.startsWith('Legend')));
+    // another kind again: the number gives way to the chart
+    panel.setSpec({ ...panel.spec!, mark: 'bar' });
+    await settle();
+    assert.equal(host.querySelector('.dc-kpi'), null);
+    panel.dispose();
+  });
+});

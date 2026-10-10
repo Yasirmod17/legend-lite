@@ -74,6 +74,8 @@ def python_documents(frame: pa.Table, written: dict, desks: dict) -> list[str]:
                               ('region', 'notEqual', 'APAC'), ('qtr', 'isNotEmpty')])
     grid.calculate('scaled', '$x.notional->toOne() * 1.50D')
     charts = [grid.chart(mark, x='region') for mark in ('bar', 'line', 'area', 'pie', 'scatter')]
+    # a KPI: its number against a target, its trend by year
+    grid.chart('kpi', x='year', options={'target': 500, 'better': 'higher'}, title='Notional')
     built.remove(charts[1])
     other = built.grid(lambda: desks['now'], name='doc_desks')
     built.stack(other, charts[4])

@@ -268,6 +268,8 @@ test_suite(
         "//spec:manifest_world_census",
         # Phase 3b's homework probes (2026-10-09): manual, over the census's inputs; in no per-push lane
         "//spec:phase3b_probes",
+        # the DataCube model design's measurement (docs/DATACUBE_MODEL_DESIGN_2026_10_10.md §11, 2026-10-10): manual
+        "//datacube:model_scale_measure",
         "//parser-equivalence:diagnostics",
         "//pct:update_ratchets_test",
         "//tools/python:requirements.test",

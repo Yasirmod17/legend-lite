@@ -415,6 +415,10 @@ class _Server(socketserver.ThreadingMixIn, socketserver.TCPServer):
 
     allow_reuse_address = False
     daemon_threads = True
+    # the connections waiting to be accepted, at most (listen's backlog): socketserver's default is 5, and macOS resets a
+    # connection the queue has no room for -- a burst (a page's tabs and widgets opening together, a browser opening six
+    # to an origin each) on a busy machine lost one (CI run 38018795800, macOS). The systems' usual ceiling instead
+    request_queue_size = 128
 
     def __init__(self, web: WebServer) -> None:
         self.web = web

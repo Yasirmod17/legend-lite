@@ -238,4 +238,7 @@
   --dc-chart-axis: #4a4f57;
   --dc-chart-series: #5b9cf0, #f08a5d, #3cc792, #f2b632, #ee93b9, #4cbf4c, #8f80e8, #f07070;
   --dc-chart-sequential: #173a63, #1f5a9b, #3987e5, #6aa8f0, #a3c9f5, #d6e7fb;
+  /* a KPI against its target: good and bad, light enough to read on the dark surface */
+  --dc-kpi-good: #4cc38a;
+  --dc-kpi-bad: #f28b82;
 }
