@@ -234,8 +234,14 @@ promoting to real sdlc is same?" -- yes: the model lives where Studio keeps ever
   replaces the pin. Studio opens the project in either place: in the page's own model home, the origin's IndexedDB is
   Studio's too.
 - **A page that travels** -- a draft shared, a page file, a notebook -- carries a **bundle**: the page document and its
-  project's files at the pinned revision. Opened, the bundle's project is imported into the receiver's model home, and
-  the page points to it there. The bundle is the transport, never a second home.
+  project's files at the pinned revision, in the directory form Studio's store already writes (`project.json` and
+  `<pkg>/<Name>.pure`, the Studio design's S5). Opened, the bundle's project is imported into the receiver's model home
+  and the page re-pinned to the imported revision -- a new commit with the same tree, checked: **a pin must survive as
+  the same content**, its revision id kept where the backend can keep it. The bundle is the transport, never a second
+  home. Export and import of a project as that directory, and promoting a page's project to a server's SDLC (its history
+  as the same git objects where the backend takes history, else its head as one new commit and the page re-pinned), are
+  the Studio line's, built in the SDLC's rules (and so in Python's native library too) -- export and import with step 2,
+  promote by step 6 (the Studio line, 2026-10-10).
 - **Real artifacts**: "Export as Pure" writes the project's files -- stores, relation functions, classes, mappings,
   associations and ModelJoins -- the files Studio opens and the engine runs.
 
