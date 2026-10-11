@@ -78,6 +78,18 @@ class Host(unittest.TestCase):
             self.assertEqual(h.evaluate('planned'), {'rows': ['b', 'c'], 'refused': [True, 'ERR']},
                              "planned by the native library, run on Python's DuckDB; a refusal is an answer, not a failure")
 
+    def test_every_timeout_fires_as_a_browsers_does(self):
+        # HTML's setTimeout: no delay, 0 and a negative one are all 0 (mini-racer's own throws or never fires for them,
+        # https://github.com/bpcreech/PyMiniRacer/issues/97: the host holds each to a millisecond)
+        with Headless(PRODUCT, folder=TMP) as h:
+            fired = h.evaluate("new Promise((done) => { const got = [];"
+                               " const note = (k) => () => { got.push(k); if (got.length === 4) done(got.sort()); };"
+                               " setTimeout(note('none')); setTimeout(note('zero'), 0); setTimeout(note('negative'), -5);"
+                               " setTimeout(note('ten'), 10); })")
+            self.assertEqual(fired, ['negative', 'none', 'ten', 'zero'])
+            self.assertEqual(h.evaluate("new Promise((done) => { const t = setTimeout(() => done('fired'), 5);"
+                                        " clearTimeout(t); setTimeout(() => done('cleared'), 20); })"), 'cleared')
+
     def test_a_registered_file_stays_in_the_folder(self):
         with Headless(PRODUCT, folder=TMP / 'files') as h:
             refused = h.evaluate("legendLite.database.registerFileText('../out.csv', 'a').then(() => 'written', (e) => String(e))")
