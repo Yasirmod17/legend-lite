@@ -173,7 +173,12 @@ class ParkedWorkLedgerTest {
             // and satisfied once, so the mapping is refused as a cycle
             Map.entry("PARK-26 a mapping included under two spellings is refused as an include cycle",
                     new Anchor("if \\(fqn != null\\) \\{\\s+incs\\.add\\(fqn\\);",
-                            List.of("StoreSubstitutionRewrite.java")))));
+                            List.of("StoreSubstitutionRewrite.java"))),
+            // PARK-28 (2026-10-11, the descriptor-type refusal's audit): the descriptor's signature is cut away and
+            // the name alone resolves, where the engine resolves by the full id
+            Map.entry("PARK-28 a ~func descriptor's signature is not matched against the function's",
+                    new Anchor("sig < 0 \\? funcRef : funcRef\\.substring\\(0, sig\\)",
+                            List.of("MappingFromProtocol.java")))));
 
     private record Anchor(String pattern, List<String> files) {
     }

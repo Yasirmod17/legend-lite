@@ -723,3 +723,39 @@ between accepting and refusing; the cost while parked is one wrong refusal reaso
 
 **Anchor.** `if (fqn != null) {` followed by `incs.add(fqn);` in `StoreSubstitutionRewrite.java`: the resolved names
 counted as listed.
+
+## PARK-28 — a `~func` descriptor's signature is not matched against the function's
+
+**Recorded** 2026-10-11 by the Bazel program session, from the audit of the descriptor-type refusal (GATES "A `~func`
+descriptor spelling a type by its package path is refused"). legend-engine resolves a relation class mapping's `~func`
+descriptor by its full id (`f__Relation_1_`: the name, the parameter types, the return type and multiplicity, legend-pure's
+`functionDescriptorToId`), so `~func f():Any[*]` against `f():Relation<Any>[1]` is "Can't find the packageable element
+'f__Any_MANY_'" there (inferred from the id format and the engine fixture for a mismatched descriptor in
+`parser-equivalence/src/test/resources/engine-grammar-fixtures.jsonl`; not run).
+
+**What happens today.** `MappingFromProtocol.relationFunction` cuts the descriptor at `(` and resolves the name alone
+(`MappingNormalizer.relationFunctionPipeline`: by name, then by signature id), so a signature naming another return type
+or multiplicity, or none at all (`~func f()`, which the parser accepts), compiles against whichever overload the name
+finds. The `~src f():R[1]` form keeps the name only (`MappingProtocolParser`, the `~src` arm: `fd.nameEnd()`), so a
+signature tail there is accepted and dropped; the engine parses `~src` as an expression (a tail is likely a parse error
+there; not verified). A function activator's `function:` descriptor (`FunctionActivatorSectionGrammar`) is parsed only,
+never resolved, so a package path or a wrong signature there is never checked. The descriptor-type refusal
+(`refuseDescriptorTypes`) reads the types' spelling, not their match.
+
+**The fix.** Convert the descriptor to the engine's id (`SignatureMangle`'s format: head names, multiplicities) and
+resolve by it when a signature is written, refusing a mismatch as the engine does; the `~src` form's tail refused or
+matched the same way, after the engine's answer for it is read from its grammar; the activator's descriptor resolved
+when activators compile.
+
+**Acceptance.** `RelationFunctionDescriptorTest`: a descriptor naming another return type or multiplicity refused with
+the engine's message; `~func f()` without a signature answered as the engine answers it (read from its grammar first);
+the corpus passes identical.
+
+**Why parked.** The report was the package path's, fixed in its landing; matching the signature changes what resolves
+for every `~func` with a signature, so it takes a judged landing of its own, after the engine's answers for the
+no-signature and `~src` forms are read. The cost while parked: a descriptor whose signature does not match compiles
+here and fails in the engine, with no word.
+
+**When.** Not scheduled; a small landing of its own, the user's call.
+
+**Anchor.** `sig < 0 ? funcRef : funcRef.substring(0, sig)` in `MappingFromProtocol.java`: the signature cut away.
