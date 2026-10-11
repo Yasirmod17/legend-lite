@@ -66,15 +66,15 @@ export class UpstreamPlanner implements Planner {
     this.#client = new PureV1Client(options, (m, subject) => new PlanError(m, subject));
   }
 
-  /**
-   * A planner over ANOTHER model -- another source on the page -- on the same server, with caches
-   * of its own. Every request carries its model, so the server holds nothing for either.
-   */
   /** Where this planner's queries are planned from: its model, and the runtime they run on. */
   source(): GridSource {
     return { model: this.#options.model, runtime: this.#options.runtime };
   }
 
+  /**
+   * A planner over ANOTHER model -- another source on the page -- on the same server, with caches
+   * of its own. Every request carries its model, so the server holds nothing for either.
+   */
   withModel(model: string, runtime: string, how: ModelOptions = {}): UpstreamPlanner {
     const other = new UpstreamPlanner({ ...this.#options, model, runtime });
     other.useModel(model, runtime, how);

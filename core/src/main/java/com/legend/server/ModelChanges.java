@@ -138,10 +138,40 @@ public final class ModelChanges {
         return elements.values();
     }
 
-    /** {@code element} made, or in place of the one of its path; read back as itself first ({@link #file}). */
+    /**
+     * {@code element} made, or in place of the one of its path; read back as itself first ({@link #file}). An element
+     * of another kind at its path is not written over, and no path is both an element and a package: legend-engine
+     * refuses a project holding {@code trades::domain} beside {@code trades::domain::Trade} ("An element named 'domain'
+     * already exists in the package 'trades'").
+     */
     void put(Json.Obj element) {
         file(element);
-        elements.put(pathOf(element), element);
+        String path = pathOf(element);
+        Json.Obj was = elements.get(path);
+        if (was != null && !textOf(was, "_type").equals(textOf(element, "_type"))) {
+            throw refused("'" + path + "' is already the project's " + kind(was) + ": name it otherwise");
+        }
+        for (String other : elements.keySet()) {
+            if (other.startsWith(path + "::")) {
+                throw refused("'" + path + "' is a package of the project (" + other + "): name it otherwise");
+            }
+            if (path.startsWith(other + "::")) {
+                throw refused("'" + other + "' is the project's " + kind(elements.get(other)) + ", and so cannot be the "
+                        + "package of " + path + ": name it otherwise");
+            }
+        }
+        elements.put(path, element);
+    }
+
+    /** What kind of element {@code e} is, as a person names it. */
+    private static String kind(@com.legend.base.Nullable Json.Obj e) {
+        String type = e == null ? "" : textOf(e, "_type");
+        return switch (type) {
+            case "relational" -> "Database";
+            case "dataElement" -> "data";
+            case "dataSpace" -> "data space";
+            default -> type;
+        };
     }
 
     /** The net changes: each element the project does not hold made, each it holds otherwise changed, in order. */
@@ -457,7 +487,7 @@ public final class ModelChanges {
             again = printed(element(printed));
         } catch (LegendCompileException e) {
             throw refused("the file " + pathOf(element) + " would not read back (" + e.getMessage() + "): a name in it "
-                    + "Pure reads as a word of its own -- rename that column first");
+                    + "Pure reads as a word of its own: name it otherwise");
         }
         if (!again.equals(printed)) {
             throw new IllegalStateException("the file " + pathOf(element) + " reads back otherwise:\n" + printed

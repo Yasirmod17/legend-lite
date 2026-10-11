@@ -36,6 +36,11 @@ final class CreateDataSpace {
         if (m.get(mapping) == null) {
             throw refused("the model has no mapping yet (" + mapping + "): make its classes first");
         }
+        // one there already over another mapping -- written in Studio, say -- is not written over
+        Json.Obj existing = m.get(path);
+        if (existing != null && "dataSpace".equals(existing.getStringOr("_type", "")) && !over(existing, mapping)) {
+            throw refused("'" + path + "' is already in the project, not made here: name this data space otherwise");
+        }
         String runtime = m.runtimeNaming(mapping);
         Json.Obj rt = m.get(runtime);
         String context = rt == null ? runtime : rt.getString("name");
@@ -68,5 +73,16 @@ final class CreateDataSpace {
         text.append("  elements:\n  [\n    ").append(String.join(",\n    ", classes)).append("\n  ];\n}\n");
         m.put(element(text.toString()));
         return path;
+    }
+
+    /** Whether each execution context of the data space {@code e} is over {@code mapping}. */
+    private static boolean over(Json.Obj e, String mapping) {
+        List<Json.Node> contexts = arrOf(e, "executionContexts").items();
+        for (Json.Node n : contexts) {
+            if (!mapping.equals(ModelChanges.objOf((Json.Obj) n, "mapping").getStringOr("path", ""))) {
+                return false;
+            }
+        }
+        return !contexts.isEmpty();
     }
 }

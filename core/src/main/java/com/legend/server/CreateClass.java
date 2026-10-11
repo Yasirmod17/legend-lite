@@ -141,6 +141,15 @@ final class CreateClass {
             throw refused("'" + className + "' is already the class of " + String.join(", ", tablesRead(made.getArr("body")))
                     + ": name this class otherwise");
         }
+        // and one not made of a grid's rows -- written in Studio, say: no function reads its rows -- is not written over
+        if (made == null) {
+            for (String path : List.of(className, classMapping)) {
+                if (m.get(path) != null) {
+                    throw refused("'" + path + "' is already in the project, not made of a grid's rows: name this class "
+                            + "otherwise");
+                }
+            }
+        }
         List<AddedTable> addedTables = new ArrayList<>();
         if (!from.equals(store)) {
             storeAndConnection(m, sources, from, where.getString("runtime"), place, read, addedTables);

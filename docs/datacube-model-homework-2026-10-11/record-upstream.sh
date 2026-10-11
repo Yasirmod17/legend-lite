@@ -5,7 +5,8 @@
 #
 #   docs/datacube-model-homework-2026-10-11/record-upstream.sh [engine base URL, default http://127.0.0.1:6300]
 #
-# Needs curl and jq on PATH; nothing here runs in a build.
+# Needs curl, jq and shasum on PATH; nothing here runs in a build. The answers carry each pinned file's SHA-256, so the
+# test knows they are the answers to the files it pins.
 set -euo pipefail
 
 ENGINE="${1:-http://127.0.0.1:6300}"
@@ -40,6 +41,9 @@ while IFS= read -r query; do
     "$WORK/answer" >> "$WORK/plans.jsonl"
 done < "$DIR/queries.pure"
 
-jq -n --arg engine "$version" --slurpfile compiled "$WORK/compiled.json" --slurpfile plans "$WORK/plans.jsonl" \
-  '{engine: $engine, compile: $compiled[0], plans: $plans}' > "$DIR/engine-answers.json"
+sha() { shasum -a 256 "$1" | cut -d' ' -f1; }
+jq -n --arg engine "$version" --arg project "$(sha "$DIR/one-go.pure")" --arg queries "$(sha "$DIR/queries.pure")" \
+  --slurpfile compiled "$WORK/compiled.json" --slurpfile plans "$WORK/plans.jsonl" \
+  '{engine: $engine, pinned: {"one-go.pure": $project, "queries.pure": $queries}, compile: $compiled[0], plans: $plans}' \
+  > "$DIR/engine-answers.json"
 echo "recorded $DIR/engine-answers.json (legend-engine $version)"

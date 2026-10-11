@@ -244,6 +244,11 @@ class ModelChangesTest {
                 "trades::domain::Trade has a property 'tradeId' already");
         refused(project, TRADE_CUSTOMER.replace("trades::domain::Customer", "other::domain::Customer"),
                 "the project has no class other::domain::Customer");
+        // a class of the project, of another package: an association relates one package's classes
+        Map<String, Object> other = ModelChanges.createClass(Json.parseObject(request(project, "\"class\": " + CUSTOMER)
+                .replace("\"package\": \"trades\"", "\"package\": \"other\"")));
+        refused(project(two[0], two[1], other), TRADE_CUSTOMER.replace("trades::domain::Customer", "other::domain::Customer"),
+                "an association relates classes of one package, trades's: other::domain::Customer is not one");
         // made again: the same association, not a second one
         Map<String, Object> once = ModelChanges.createAssociation(Json.parseObject(request(project,
                 "\"association\": " + TRADE_CUSTOMER)));
@@ -253,13 +258,73 @@ class ModelChangesTest {
     }
 
     private static void refused(String project, String association, String expected) {
-        PureV1Api.Answer a = PureV1Api.route("/api/lite/v1/model/createAssociation", null,
-                request(project, "\"association\": " + association), (m, l, r, w) -> {
-                    throw new AssertionError("nothing is run here");
-                });
+        refusedBy("createAssociation", request(project, "\"association\": " + association), expected);
+    }
+
+    private static void refusedBy(String route, String body, String expected) {
+        PureV1Api.Answer a = PureV1Api.route("/api/lite/v1/model/" + route, null, body, (m, l, r, w) -> {
+            throw new AssertionError("nothing is run here");
+        });
         assertEquals(400, a.status(), a.json());
         Json.Obj error = Json.parseObject(a.json());
         assertEquals("COMPILATION", error.getString("errorType"));
         assertTrue(error.getString("message").contains(expected), error.getString("message"));
+    }
+
+    @Test
+    @DisplayName("not written over: an element of another kind, a package, or one written in Studio rather than made here")
+    void notWrittenOver() {
+        String project = twoClasses();
+        // a data space named as a package of the project (legend-engine refuses the project)
+        refusedBy("createDataSpace", request(project, "\"dataSpace\": {\"name\": \"domain\"}"),
+                "'trades::domain' is a package of the project (trades::domain::Trade): name it otherwise");
+        // an association named as a class
+        refused(project, TRADE_CUSTOMER.replace("{\"ends\"", "{\"name\": \"Trade\", \"ends\""),
+                "'trades::domain::Trade' is already the project's class: name it otherwise");
+        // a class, an association and a data space written in Studio: no grid's function, no ModelJoin, another mapping
+        String studio = """
+                ###Pure
+                Class trades::domain::Desk { name: String[1]; }
+                Association trades::domain::Customer_Trade { customer: trades::domain::Customer[0..1]; trades: trades::domain::Trade[*]; }
+                ###Mapping
+                Mapping trades::mapping::Other ( )
+                ###DataSpace
+                DataSpace trades::Trades { executionContexts: [ { name: 'Other'; mapping: trades::mapping::Other;
+                  defaultRuntime: trades::runtime::Browser; } ]; defaultExecutionContext: 'Other'; }
+                """;
+        refusedBy("createClass", request(project + studio, "\"class\": " + cls(TRADES, "trades", "Desk", "{}")),
+                "'trades::domain::Desk' is already in the project, not made of a grid's rows: name this class otherwise");
+        refused(project + studio, TRADE_CUSTOMER,
+                "'trades::domain::Customer_Trade' is already in the project, not made here: name this association otherwise");
+        refusedBy("createDataSpace", request(project + studio, "\"dataSpace\": {\"name\": \"Trades\"}"),
+                "'trades::Trades' is already in the project, not made here: name this data space otherwise");
+    }
+
+    @Test
+    @DisplayName("made again over its own files: the same is nothing, ends the other way round too; a change is only its own")
+    void madeAgain() {
+        String sampled = ",\n \"samples\": {\"trades\": {\"columns\": [\"trade_id\", \"customer_id\", \"notional\"], "
+                + "\"rows\": [[\"1\", \"10\", \"150.5\"]]}}}";
+        String trade = TRADE.substring(0, TRADE.length() - 2) + sampled + "}";
+        String request = "\"classes\": [" + trade + ", " + CUSTOMER + "], \"associations\": [" + TRADE_CUSTOMER + "], "
+                + "\"dataSpace\": {\"name\": \"Trades\", \"title\": \"Trades\"}";
+        Map<String, Object> all = ModelChanges.createDataSpace(Json.parseObject(request("", request)));
+        assertTrue(changes(all).contains("CREATE trades::data::TradesSample"), changes(all).toString());
+        String project = project(all);
+        assertEquals(List.of(), changes(ModelChanges.createDataSpace(Json.parseObject(request(project, request)))),
+                "the same again, over its own files (the data and the data space among them)");
+        String swapped = """
+                {"ends": [{"class": "trades::domain::Trade", "on": "customerId", "unique": false},
+                          {"class": "trades::domain::Customer", "on": "id", "unique": true}]}""";
+        assertEquals(List.of(), changes(ModelChanges.createAssociation(Json.parseObject(request(project,
+                "\"association\": " + swapped)))), "the same association, its ends asked the other way round");
+        // each element changed in place, cut out of the text where it was: the project after compiles, and only it moved
+        Map<String, Object> retitled = ModelChanges.createDataSpace(Json.parseObject(request(project,
+                request.replace("\"title\": \"Trades\"", "\"title\": \"The desk's trades\""))));
+        assertEquals(List.of("MODIFY trades::Trades"), changes(retitled));
+        Map<String, Object> renamed = ModelChanges.createAssociation(Json.parseObject(request(project,
+                "\"association\": " + TRADE_CUSTOMER.replace("\"unique\": true", "\"unique\": true, \"name\": \"client\""))));
+        assertEquals(List.of("MODIFY trades::mapping::Model", "MODIFY trades::domain::Customer_Trade"), changes(renamed));
+        assertEquals(List.of(), com.legend.Compiler.compileErrors(project(all, retitled, renamed)));
     }
 }

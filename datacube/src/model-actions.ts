@@ -23,15 +23,16 @@ export interface PageGrid {
   readonly label: string;
   /** Its class, when its rows were made one (the page's model keeps it). */
   readonly cls?: string;
-  /** Its rows at their finest level, the table it reads and its first rows, when it can be a class; else why not. */
+  /** Its rows at their finest level, the table it reads, its first rows and where its rows are read from, when it can be
+   *  a class; else why not. */
   readonly made: {
     readonly query: Lambda;
     readonly relation: ValueSpecification;
     readonly table: { readonly database: string; readonly schema: string; readonly table: string };
     readonly sample: Lambda;
+    readonly source: GridSource;
   } | { readonly refused: string };
   readonly planner: Planner;
-  readonly source?: GridSource;
   readonly engine: QueryEngine;
 }
 
@@ -57,18 +58,18 @@ export function pageGrids(ids: readonly string[], gridOf: (id: string) => GridOn
     const g = gridOf(id);
     if (!g) return [];
     const table = q.storeTableOf(g.snapshot.source.query);
+    const source = g.planner.source?.();
     let made: PageGrid['made'];
     try {
       if (!table) throw new Error('its source is not a table of its own');
+      if (!source) throw new Error('its planner does not say where its rows are read from');
       const query = q.classLambda(g.snapshot);
-      made = { query, relation: query.body[0]!, table, sample: q.sampleLambda(g.snapshot.source.query) };
+      made = { query, relation: query.body[0]!, table, sample: q.sampleLambda(g.snapshot.source.query), source };
     } catch (e) {
       made = { refused: e instanceof Error ? e.message : String(e) };
     }
-    const source = g.planner.source?.();
     const cls = classOf(id);
-    return [{ id, label: g.label, made, planner: g.planner, engine: g.engine,
-      ...(source ? { source } : {}), ...(cls !== undefined ? { cls } : {}) }];
+    return [{ id, label: g.label, made, planner: g.planner, engine: g.engine, ...(cls !== undefined ? { cls } : {}) }];
   });
 }
 
@@ -179,14 +180,15 @@ export async function createDataSpaceOf(o: ModelActionsOf): Promise<PageModelRef
   }
   const actions = (choice: DataSpaceChoice): ClassAction[] => choice.made.flatMap((m) => {
     const g = o.grids.find((x) => x.id === m.id);
-    if (!g || 'refused' in g.made || !g.source) return [];
+    if (!g || 'refused' in g.made) return [];
     return [{
-      query: g.made.query, source: g.source, name: m.className,
+      query: g.made.query, source: g.made.source, name: m.className,
       where: { from: g.made.table.database, as: BROWSER_PLACE, samples: { [g.made.table.table]: samples.get(g.id)! } },
     }];
   });
   let last: ModelAnswer | undefined;
   let lastChoice: DataSpaceChoice | undefined;
+  let previews = 0;
   const facts = projectPlanner(o, state.text, pkg);
   const grids: DataSpaceGrid[] = o.grids.filter((g) => g.cls !== undefined || !('refused' in g.made)).map((g) => ({
     id: g.id, label: g.label, className: suggestedClassName(g.label), ...(g.cls !== undefined ? { cls: g.cls } : {}),
@@ -211,9 +213,15 @@ export async function createDataSpaceOf(o: ModelActionsOf): Promise<PageModelRef
         return noRow(g.planner, g.engine, o.duplicate(g.made.relation, property.column));
       },
       preview: async (choice) => {
-        lastChoice = choice;
-        last = await o.writer.createDataSpace(state.text, pkg, dataSpaceOf(choice), actions(choice), choice.associations);
-        return last;
+        // the facts read the newest answer: one overtaken while it was asked is the window's to drop, and not kept here
+        const mine = ++previews;
+        const answer = await o.writer.createDataSpace(state.text, pkg, dataSpaceOf(choice), actions(choice),
+          choice.associations);
+        if (mine === previews) {
+          last = answer;
+          lastChoice = choice;
+        }
+        return answer;
       },
       create: async (choice): Promise<CreatedClass> => {
         const ref = await model.ensure(choice.projectName ?? o.pageName, pkg);

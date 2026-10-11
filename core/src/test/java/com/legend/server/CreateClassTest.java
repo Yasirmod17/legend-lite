@@ -25,7 +25,7 @@ import java.util.Map;
  * upstream's promotion lays them out; a second source joining the one store; the same class made again changing
  * nothing; and what cannot be a class, refused by name.
  */
-@DisplayName("promoteRelationToModel -- a relation made a class, with everything it needs to run")
+@DisplayName("createClass -- a relation made a class, with everything it needs to run")
 class CreateClassTest {
 
     /** A source as the tab's table model writes it: a Database, its connection, a runtime. */

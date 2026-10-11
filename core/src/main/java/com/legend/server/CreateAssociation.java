@@ -84,12 +84,29 @@ final class CreateAssociation {
         }
         String name = spec.getStringOr("name", null);
         if (name == null) {
+            // made again with its ends the other way round: the same association, its ends in its own order
+            Json.Obj other = m.get(pkg + "::domain::" + simple(m, eb.cls()) + "_" + simple(m, ea.cls()));
+            if (relates(other, eb.cls(), ea.cls())) {
+                End first = eb;
+                eb = ea;
+                ea = first;
+            }
             name = simple(m, ea.cls()) + "_" + simple(m, eb.cls());
         }
         if (!isIdentifier(name)) {
             throw refused("an association's name is a Pure name: '" + name + "'");
         }
         String path = pkg + "::domain::" + name;
+        String modelMapping = pkg + "::mapping::Model";
+        Json.Obj model = m.get(modelMapping);
+        if (model == null) {
+            throw refused("the model has no mapping yet (" + modelMapping + "): make its classes first");
+        }
+        // one there already that the model's mapping does not join -- written in Studio, say -- is not written over
+        Json.Obj existing = m.get(path);
+        if (existing != null && "association".equals(ModelChanges.textOf(existing, "_type")) && !joins(model, path)) {
+            throw refused("'" + path + "' is already in the project, not made here: name this association otherwise");
+        }
         // each end's name is a property of the OTHER class from now: one it has already is not taken again (this
         // association's own, made again, aside)
         named(m, eb.cls(), ea, path);
@@ -98,11 +115,6 @@ final class CreateAssociation {
                 + ";\n  " + eb.name() + ": " + eb.cls() + eb.multiplicity() + ";\n}\n"));
 
         // its ModelJoin, in the model's mapping: the join's lambda read by the grammar, from a mapping written for it
-        String modelMapping = pkg + "::mapping::Model";
-        Json.Obj model = m.get(modelMapping);
-        if (model == null) {
-            throw refused("the model has no mapping yet (" + modelMapping + "): make its classes first");
-        }
         Json.Obj join = (Json.Obj) element("###Mapping\nMapping " + pkg + "::mapping::Join\n(\n  " + path
                 + ": ModelJoin\n  {\n    {" + ea.name() + ": " + ea.cls() + "[1], " + eb.name() + ": " + eb.cls() + "[1]|$"
                 + ea.name() + "." + ea.on() + " == $" + eb.name() + "." + eb.on() + "}\n  }\n)\n")
@@ -110,7 +122,7 @@ final class CreateAssociation {
         List<Json.Node> joins = new ArrayList<>();
         for (Json.Node n : arrOf(model, "associationMappings").items()) {
             // made again: in place of the one it was
-            if (!path.equals(ModelChanges.objOf((Json.Obj) n, "association").getStringOr("path", ""))) {
+            if (!path.equals(joined(n))) {
                 joins.add(n);
             }
         }
@@ -188,6 +200,31 @@ final class CreateAssociation {
                 }
             }
         }
+    }
+
+    /** Whether {@code e} is an association whose ends are {@code first}, then {@code second}. */
+    private static boolean relates(@com.legend.base.Nullable Json.Obj e, String first, String second) {
+        if (e == null || !"association".equals(e.getStringOr("_type", ""))) {
+            return false;
+        }
+        List<Json.Node> props = arrOf(e, "properties").items();
+        return props.size() == 2 && first.equals(ModelChanges.typeOf((Json.Obj) props.get(0)))
+                && second.equals(ModelChanges.typeOf((Json.Obj) props.get(1)));
+    }
+
+    /** Whether the model's mapping joins the association at {@code path}. */
+    private static boolean joins(Json.Obj model, String path) {
+        for (Json.Node n : arrOf(model, "associationMappings").items()) {
+            if (path.equals(joined(n))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** The association an association mapping joins. */
+    private static String joined(Json.Node mapping) {
+        return ModelChanges.textOf(ModelChanges.objOf((Json.Obj) mapping, "association"), "path");
     }
 
     /** A class's own name, as its element names it. */

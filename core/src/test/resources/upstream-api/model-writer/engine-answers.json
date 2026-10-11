@@ -1,5 +1,9 @@
 {
   "engine": "4.145.0",
+  "pinned": {
+    "one-go.pure": "e90b784428e49fd75455f538bc8ec5e4fc0c5b3dfdbc3890c8b424cd23a4c3aa",
+    "queries.pure": "f7530cc7da8e4f78b3e5331940ab94bc3190e76a4825fdce4baddcfb5b5e97d2"
+  },
   "compile": {
     "status": 200,
     "answer": {

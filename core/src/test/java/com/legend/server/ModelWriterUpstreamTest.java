@@ -13,7 +13,10 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -99,6 +102,11 @@ class ModelWriterUpstreamTest {
 
         Json.Obj engine = Json.parseObject(resource(DIR + "engine-answers.json"));
         assertEquals("4.145.0", engine.getString("engine"));
+        // the answers are to these files: recorded with each one's digest, so a pin made again without them fails here
+        for (String pinned : List.of("one-go.pure", "queries.pure")) {
+            assertEquals(engine.getObj("pinned").getString(pinned), sha256(resource(DIR + pinned)),
+                    pinned + " is not the file the engine answered: record its answers again");
+        }
         Json.Obj compiled = engine.getObj("compile");
         assertEquals(200, compiled.getInt("status"), compiled.toString());
         Map<String, Integer> planned = new LinkedHashMap<>();
@@ -110,6 +118,14 @@ class ModelWriterUpstreamTest {
         Map<String, Integer> all200 = new LinkedHashMap<>();
         queries.forEach(q -> all200.put(q, 200));
         assertEquals(all200, planned, "the engine planned each query");
+    }
+
+    private static String sha256(String text) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(text.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private static String resource(String name) {

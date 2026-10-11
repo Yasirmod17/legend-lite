@@ -580,6 +580,12 @@ Agreed after Create a Class landed (0cee56761): **the routes are named after Leg
 - **A data space**: `{"name", "title"?, "description"?, "classes"?}` -- `<pkg>::<Name>`, its one execution context the
   place's (`Browser`: the model's mapping, the runtime that names it), its classes the ones named (all the model's
   classes when none are).
+- **Not written over** (the audit of the second landing, 2026-10-11): the writer replaces only what it made. A class
+  or class mapping with no grid's function behind it, an association the model's mapping does not join, and a data
+  space over another mapping (each written in Studio, say) are refused by name; so is an element of another kind at
+  the path, and a path that is also a package of the project (`trades::domain` beside `trades::domain::Trade`:
+  legend-engine refuses that project). The same association asked with its ends the other way round is itself made
+  again: nothing changes.
 - **Where in DataCube**: the page's menu, a Model group -- Create an Association…, Create a Data Space… (the whole
   page in one go: its grids not yet classes made classes in the same window, suggested associations as checkboxes);
   a grid's menu also offers Create an Association…, that grid's class one end.
@@ -612,7 +618,9 @@ Agreed after Create a Class landed (0cee56761): **the routes are named after Leg
   `docs/datacube-model-homework-2026-10-11/record-upstream.sh`: the project compiled, and each class's query and both
   walks planned. It caught one difference: a `~func` names its function by descriptor, and a descriptor's types take
   no package (legend-pure's `FunctionDescriptor`). The engine looks `TradeFn():meta::pure::...::Relation<...>[1]` up as
-  a plain path and finds nothing; lite's compiler took it (told to the Compiler Rewrite line). The writer now writes
+  a plain path and finds nothing; lite's compiler took it. The Compiler Rewrite line's landing right after this one makes
+  lite refuse it as the engine does (agreed 2026-10-11: it lands second, since main's writer still writes that form).
+  The writer now writes
   `TradeFn():Relation<Any>[1]`, the form of upstream's own tests and Studio's. The browser: two grids made classes,
   the association from the page's Model menu, its how-many read from the rows in the tab, the data space; and the
   whole page in one go in a fresh tab.
