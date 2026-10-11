@@ -41,8 +41,8 @@ export interface CreateClassOf {
 }
 
 /**
- * Ask for the class and write it. Resolves with the page's model as it is after (made with its first class, its
- * grid's table kept), or undefined when the window was closed without creating.
+ * Ask for the class and write it. Resolves with the page's model as it is after -- made with its first class (kept
+ * even when its first save failed), its grid's table kept -- or undefined when nothing of it changed.
  */
 export async function createClassOf(o: CreateClassOf): Promise<PageModelRef | undefined> {
   const { query, table } = o;
@@ -65,8 +65,7 @@ export async function createClassOf(o: CreateClassOf): Promise<PageModelRef | un
     columns: c.columns,
     where: { from: table.database, runtime: o.writer.runtime, as: BROWSER_PLACE, samples },
   });
-  let after: PageModelRef | undefined;
-  const created = await classDialog(document, {
+  await classDialog(document, {
     sourceName: o.source,
     className: suggestedClassName(o.source),
     package: model.ref?.package ?? suggestedPackage(o.pageName),
@@ -78,7 +77,7 @@ export async function createClassOf(o: CreateClassOf): Promise<PageModelRef | un
         (project) => o.writer.promoteRelationToModel(query, project, request({ ...c, package: ref.package })));
       // the grid's table keeps its name from now: the project's store reads it by that name
       if (o.cube !== undefined) model.keepTable(o.cube, table.table);
-      after = model.ref ?? ref;
+      const after = model.ref ?? ref;
       const kept = await o.persist();
       return {
         className: made.class,
@@ -91,5 +90,7 @@ export async function createClassOf(o: CreateClassOf): Promise<PageModelRef | un
       };
     },
   });
-  return created ? after : undefined;
+  // the page's model as it is now, when the window changed it: made (whether or not its save then went through), or a
+  // grid's table kept
+  return model.ref !== o.model ? model.ref : undefined;
 }

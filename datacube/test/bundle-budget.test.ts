@@ -54,13 +54,14 @@ function startup(bundle = join(DEMO, 'bundle.js')): string[] {
  *  381,000 -> 383,000 (2026-10-10, DataCube charts batch 1's KPI, landing before the batch's page filters: the KPI's
  *  drawing (chart-option.ts kpiDrawing), its queries (chart-spec.ts kpiQueries) and its form in the charts' panel, at
  *  startup as that panel is. Measured 381,890, main before it under its 381,000.
- *  383,000 -> 385,000 (2026-10-10, DataCube model step 2, Create a Class…, docs/DATACUBE_MODEL_DESIGN_2026_10_10.md §15):
+ *  383,000 -> 386,000 (2026-10-10, DataCube model step 2, Create a Class…, docs/DATACUBE_MODEL_DESIGN_2026_10_10.md §15):
  *  a grid's menu entry and its checks (query.ts classLambda, storeTableOf, writesClasses), the planner's route
  *  (wasm-planner.ts promoteRelationToModel), the page's model read and written with the page (page-document.ts version
- *  4) and each grid's table kept by name on reopening (demo/boot.ts), at startup; the window, the page's model and the
- *  SDLC client are fetched the first time a class is made (src/create-class.ts, its own chunk). Measured 384,750, main
- *  before it 381,890 (+2,860). */
-const BUDGET = 385_000;
+ *  4, its tables written for the grids the page holds), each grid's table kept by name on reopening and reserved while
+ *  a page opens, and the page file refused while its classes are only here (demo/boot.ts), at startup; the window, the
+ *  page's model and the SDLC client are fetched the first time a class is made (src/create-class.ts, its own chunk).
+ *  Measured 385,251 with the audit's fixes, 384,750 before them; main before it 381,890 (+3,361). */
+const BUDGET = 386_000;
 
 /** The engine page's (demo/engine.html: one cube on an engine that runs its queries, Python's) startup download,
  *  gzipped: the grid and the remote client, no DuckDB-WASM and no compiler. Set 2026-10-08 at its first measure

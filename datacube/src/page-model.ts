@@ -73,8 +73,10 @@ export class PageModel {
       groupId: PAGE_GROUP,
       artifactId,
     });
-    await this.#client.createWorkspace(project.projectId, PAGE_WORKSPACE);
+    // the page's from the moment it is made: a workspace or a save failing after leaves it the page's, never a project
+    // the next class makes again beside it (the audit's S2); its workspace is made by `state`, as after a commit
     this.#ref = { project: project.projectId, workspace: PAGE_WORKSPACE, package: pkg, tables: {} };
+    await this.#workspace(this.#ref);
     return this.#ref;
   }
 
@@ -83,12 +85,7 @@ export class PageModel {
   async state(): Promise<ProjectState> {
     const ref = this.#need();
     const where = { project: ref.project, workspace: ref.workspace };
-    try {
-      await this.#client.workspace(ref.project, ref.workspace);
-    } catch (e) {
-      if (!(e instanceof SdlcError && e.status === 404)) throw e;
-      await this.#client.createWorkspace(ref.project, ref.workspace);
-    }
+    await this.#workspace(ref);
     const revision = (await this.#client.revision(where)).id;
     const files = await this.#client.pure({ ...where, revision });
     return { text: projectText(files), revision };
@@ -105,6 +102,30 @@ export class PageModel {
       await this.#client.performPureChanges(ref.project, ref.workspace, { message, changes, revisionId: revision });
     } catch (e) {
       if (e instanceof SdlcError && e.status === 409) throw new StaleSave(e.message);
+      throw e;
+    }
+  }
+
+  /**
+   * DataCube's workspace, there: made from the project line when it is not (a commit in Studio closed it) -- another
+   * ask having made it meanwhile (409) is its being there. A project gone (another browser's page, a cleared store) is
+   * said, by name.
+   */
+  async #workspace(ref: PageModelRef): Promise<void> {
+    try {
+      await this.#client.workspace(ref.project, ref.workspace);
+      return;
+    } catch (e) {
+      if (!(e instanceof SdlcError && e.status === 404)) throw e;
+    }
+    try {
+      await this.#client.createWorkspace(ref.project, ref.workspace);
+    } catch (e) {
+      if (e instanceof SdlcError && e.status === 409) return;
+      if (e instanceof SdlcError && e.status === 404) {
+        throw new Error(`the page's project ${ref.project} is not in this browser's model home: it was made in another `
+          + 'browser, or this browser\'s storage was cleared');
+      }
       throw e;
     }
   }

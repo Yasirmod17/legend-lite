@@ -142,6 +142,31 @@ describe("the page's model, in the model home", () => {
     assert.deepEqual(model.ref?.tables, { g1: 'trades_2' });
   });
 
+  it('its project kept from the moment it is made: a workspace refused after leaves no second project (S2)', async () => {
+    const sdlc = new FakeSdlc();
+    const client = sdlc.client();
+    let refuse = true;
+    const made = { ...client, createWorkspace: async (p: string, w: string) => {
+      if (refuse) { refuse = false; throw new SdlcError('busy', 500); }
+      return client.createWorkspace(p, w);
+    } } as unknown as SdlcClient;
+    const model = new PageModel(made);
+    sdlc.workspace = false;
+    await assert.rejects(model.ensure('Trades', 'trades'), /busy/);
+    assert.equal(model.ref?.project, 'datacube:trades-2', 'the project made is the page\'s');
+    assert.equal((await model.ensure('Trades', 'trades')).project, 'datacube:trades-2', 'not made again');
+    await model.state();
+    assert.equal(sdlc.made, 1, 'its workspace made when next asked');
+  });
+
+  it('a project not in this browser\'s model home is said by name', async () => {
+    const sdlc = new FakeSdlc();
+    sdlc.workspace = false;
+    const client = { ...sdlc.client(), createWorkspace: async () => { throw new SdlcError('no project', 404); } } as unknown as SdlcClient;
+    const model = new PageModel(client, { project: 'datacube:elsewhere', workspace: 'datacube', package: 'x', tables: {} });
+    await assert.rejects(model.state(), /datacube:elsewhere is not in this browser's model home/);
+  });
+
   it('a class saved over the revision its files were read at; a stale save made again once, then said', async () => {
     const sdlc = new FakeSdlc();
     const model = new PageModel(sdlc.client(), { project: 'datacube:trades', workspace: 'datacube', package: 'trades', tables: {} });

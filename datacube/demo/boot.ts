@@ -720,6 +720,8 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
    * write its classes to (config.json's `depot`); offered only on a grid whose planner writes classes.
    */
   let createClass: ((grid: CubeApp, place: GridPlace, cube: string | undefined) => void) | undefined;
+  /** The page's model now (where its classes are), once the page can make them. */
+  let pageModelNow: (() => PageModelRef | undefined) | undefined;
   /** The page renamed in its name box: its name from now (once the page can be saved, a change until it is). */
   let renamePage = (name: string): void => page.setTitle(name);
   /** Told when a grid is made on the page, by its tile's id: what the page keeps of it (its file). */
@@ -780,6 +782,13 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
       ...planeMenu(),
     ],
     onHostMenu: (item) => onHostItem(item),
+    // A PAGE FILE carries the page, not the classes of its project in this browser's model home: refused while it has
+    // them (§15.3; a file carrying its model comes with the Studio line's export, S23)
+    exportRefusal: () => (pageModelNow?.()
+      ? `This page's classes are in ${pageModelNow()!.project}, in this browser: a page file cannot carry them yet. `
+        + 'Save the page here, or open the project in Studio.'
+      : undefined),
+    refuse: (text) => window.alert(text),
     // THE HOST'S TEXT, IN THE STATUS BAR (planner progress, errors, the planner's word): the page's first grid's, at the
     // right of its status bar -- a readout belongs there, not in the bar that says what is on screen. MOVED rather than
     // copied, on each render of that bar: `status` is the same node the planner writes to.
@@ -1001,8 +1010,11 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
      * `trades` is the sample grid's from the start.
      */
     const taken = new Set<string>(['trades']);
+    /** The names a saved page's model keeps for its grids, while that page opens: a fresh name takes none of them, so
+     *  each grid that keeps one gets it whatever order the grids open in (the audit's S3). */
+    const reserved = new Set<string>();
     const freshTable = (base: string): string => {
-      const busy = (t: string): boolean => taken.has(t);
+      const busy = (t: string): boolean => taken.has(t) || reserved.has(t);
       let name = base;
       for (let n = 2; busy(name); n += 1) name = `${base}_${n}`;
       taken.add(name);
@@ -1369,6 +1381,7 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
       const makers = new Map<string, GridMaker>();
       const read: Opened[] = [];
       const notes: string[] = [];
+      for (const table of Object.values(doc.model?.tables ?? {})) reserved.add(table);
       try {
         for (const { id: cubeId, cube } of doc.cubes) {
           const o = await reopened(cube, handleKeys(id, gridOfCube(doc, cubeId)), doc.cubes.length > 1, doc.model?.tables[cubeId]);
@@ -1388,6 +1401,8 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
         // a source that could not be opened: what the others read goes, and the page on screen stays
         for (const r of read) await r.discard?.();
         throw e;
+      } finally {
+        reserved.clear();
       }
       if (makers.size === 0) {
         library?.say(`not opened: "${doc.name}" -- none of its sources was opened`, 'warn');
@@ -1776,6 +1791,7 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
       current = { ...current, model };
       onCubeView?.();
     };
+    pageModelNow = () => current.model;
     createClass = (grid, place, cube) => {
       void makeClass(grid, place, cube).catch((e: unknown) => window.alert(`Create a Class: ${e instanceof Error ? e.message : String(e)}`));
     };

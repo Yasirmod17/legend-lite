@@ -438,6 +438,11 @@ TEST_IMPORTS = {
         "src/tree.ts",
         "src/treeview.ts",
     ],
+    "class-dialog": [
+        "src/focus.ts",
+        "src/promote.ts",
+        "src/ui/class-dialog.ts",
+    ],
     "column-editor": [
         "src/calc-fix.ts",
         "src/calc.ts",

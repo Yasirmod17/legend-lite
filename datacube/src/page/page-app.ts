@@ -89,6 +89,13 @@ export interface PageAppOptions {
   /** Hand a file to the user: Export ▸ Page File. */
   readonly download?: (name: string, mime: string, content: string) => void;
   /**
+   * Why the page cannot be exported as a file now, when the host says it cannot: its classes are in this browser's
+   * project, which a file cannot carry yet (docs/DATACUBE_MODEL_DESIGN_2026_10_10.md §15.3). Said, and nothing written.
+   */
+  readonly exportRefusal?: () => string | undefined;
+  /** Say a refusal to the person (the host's way: a page of its own alerts). */
+  readonly refuse?: (text: string) => void;
+  /**
    * The host's readout (where the planner runs, what went wrong), at the right of the page's FIRST grid's status bar
    * -- it moves when another grid becomes the first -- on each of that bar's renders.
    */
@@ -728,6 +735,11 @@ export class PageApp {
         this.#page.setEditing(!this.#page.editing);
         return;
       case 'page.export': {
+        const refused = this.#options.exportRefusal?.();
+        if (refused !== undefined) {
+          this.#options.refuse?.(refused);
+          return;
+        }
         const name = this.suggestedName || 'page';
         const doc = this.document(name);
         if (doc) this.#options.download?.(`${name}.page.json`, 'application/json', pageToJson(doc));

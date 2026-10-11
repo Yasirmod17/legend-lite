@@ -126,7 +126,7 @@ class PromoteRelationToModelTest {
         assertEquals(List.of("CREATE trades::store::Browser", "CREATE trades::connection::Browser",
                 "CREATE trades::runtime::Browser", "CREATE " + FUNCTION, "CREATE trades::domain::Trade",
                 "CREATE trades::mapping::TradeMapping", "CREATE trades::mapping::Model",
-                "CREATE trades::data::Trades2Sample"), changes(a));
+                "CREATE trades::data::Trades_2Sample"), changes(a));
         assertEquals("""
                 Class trades::domain::Trade
                 {
@@ -189,7 +189,7 @@ class PromoteRelationToModelTest {
         Map<String, Object> a = promote(TAB, QUERY, "Trade", KEYED + ", " + WHERE);
         assertEquals("""
                 ###Data
-                Data trades::data::Trades2Sample
+                Data trades::data::Trades_2Sample
                 {
                   Relational
                   #{
@@ -200,7 +200,7 @@ class PromoteRelationToModelTest {
                       '3,11,AMER,,300\\n';
                   }#
                 }
-                """, file(a, "trades::data::Trades2Sample"));
+                """, file(a, "trades::data::Trades_2Sample"));
         // a service over the class, its test's data the sample: run by lite's service test runner on DuckDB
         String model = project(a) + """
                 ###Service
@@ -225,7 +225,7 @@ class PromoteRelationToModelTest {
                           browser:
                             Reference
                             #{
-                              trades::data::Trades2Sample
+                              trades::data::Trades_2Sample
                             }#
                         ]
                       ]
@@ -351,11 +351,26 @@ class PromoteRelationToModelTest {
     }
 
     @Test
+    @DisplayName("made again with another filter: its function alone changes, cut out of the model and written anew")
+    void madeAgainItsFunctionChanges() {
+        Map<String, Object> first = promote(TAB, QUERY, "Trade", KEYED + ", " + WHERE);
+        String model = project(first) + "\n" + TAB;
+        Map<String, Object> again = promote(model, QUERY.replace("'APAC'", "'EMEA'"), "Trade", KEYED + ", " + WHERE);
+        assertEquals(List.of("MODIFY " + FUNCTION), changes(again));
+        assertTrue(file(again, FUNCTION).contains("$x.region != 'EMEA'"), file(again, FUNCTION));
+        String project = project(first, again);
+        assertEquals(List.of(), com.legend.Compiler.compileErrors(project));
+        String sql = com.legend.Compiler.query(com.legend.Compiler.compileModel(project), "|" + again.get("query"))
+                .plan("trades::runtime::Browser").sql();
+        assertTrue(sql.contains("'EMEA'") && !sql.contains("'APAC'"), sql);
+    }
+
+    @Test
     @DisplayName("a row whose value holds a line break is left out of the sample, and said")
     void aLineBreakRowIsLeftOut() {
         Map<String, Object> a = promote(TAB, QUERY, "Trade", KEYED + ", " + WHERE.replace("\"first, of two\"",
                 "\"two\\nlines\""));
-        String data = file(a, "trades::data::Trades2Sample");
+        String data = file(a, "trades::data::Trades_2Sample");
         assertFalse(data.contains("'1,10"), data);
         assertEquals(List.of("1 of trades_2's sample rows left out: a value holds a line break, which relational "
                 + "test data cannot"), a.get("notes"));
@@ -413,6 +428,23 @@ class PromoteRelationToModelTest {
         String changed = project(first) + "\n" + TAB.replace("notional DECIMAL(18,2)", "notional DECIMAL(18,2),\n"
                 + "    extra INTEGER");
         refused(body(changed, QUERY, "Trade", KEYED + ", " + WHERE), "declares the table default.trades_2 otherwise");
+        // a relation reading a store the class's place does not write: its file would read what the project lacks
+        String two = TAB + "###Relational\nDatabase other::DB ( Table desks ( desk VARCHAR(10) ) )\n";
+        refused(body(two, "|#>{other::DB.desks}#", "Desk", WHERE.replace("\"samples\"", "\"none\"")),
+                "the relation reads the store 'other::DB'");
+        // a class's name taken by a class of another table: not written over
+        String withCustomers = project(first) + "\n" + CUSTOMERS;
+        refused(body(withCustomers, "|#>{local::DB.customers}#", "Trade", WHERE.replace("\"samples\"", "\"none\"")),
+                "'trades::domain::Trade' is already the class of trades::store::Browser.default.trades_2");
+        // a sample's name taken by another table's sample: `a_b` and `A_b` are both A_bSample
+        String sample = """
+                "where": {"from": "local::DB", "runtime": "local::RT", "as": "Browser", "samples": {"%s": {"columns":
+                  ["trade_id", "customer_id", "region", "Trade Note", "notional"], "rows": [["1", null, "EMEA", null, "1"]]}}}""";
+        Map<String, Object> ab = promote(TAB.replace("Table trades_2", "Table a_b"), "|#>{local::DB.a_b}#", "Ab",
+                sample.formatted("a_b"));
+        assertTrue(changes(ab).contains("CREATE trades::data::A_bSample"), changes(ab).toString());
+        refused(body(project(ab) + "\n" + TAB.replace("Table trades_2", "Table A_b"), "|#>{local::DB.A_b}#", "Ab2",
+                sample.formatted("A_b")), "the sample 'trades::data::A_bSample' holds the rows of default.a_b");
         // a request without the place is malformed: 500, as the routes answer one
         assertEquals(500, route(body(TAB, QUERY, "Trade", "\"x\": 1")).status());
     }

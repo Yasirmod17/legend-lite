@@ -501,7 +501,9 @@ With a class, everything it needs to run, in upstream's promotion's layout (lege
 A grid over a class plans `<pkg>::domain::Trade.all()->project(~[...])`, its columns the properties, against the
 project's elements and the page's runtime, through the mapping -- a planner holding that model (step 1). A class made
 again (renamed, a property added) is a new revision; the page re-pins to it, and its grids plan against the model held
-anew.
+anew. **A class made again is its own relation's** (as built, 2026-10-10, the audit's C2): a class of the same name
+over other tables is another class and is refused by name, never written over; a sample of the same name holding
+another table's rows likewise.
 
 ### 15.5 Python
 
@@ -521,12 +523,17 @@ anew.
   2026-10-10). In: **the model as a model context** (`{"_type":"text", ...}` -- read as the compile route reads it, so
   when its leg 8 makes every route take `{"_type":"data", ...}` too, this one does), the relation (protocol JSON), the
   class's name, its package, and each property's name and documentation when the person changed them. Out: the elements
-  to write in **the SDLC's own `PureFile` shape, `{path, pureCode}`**, `path` the element's path (`pkg::domain::Trade`;
-  the SDLC maps it to its file, `Sdlc.filePathOf`, so the engine's route knows nothing of the SDLC's layout -- the Studio
-  design's S1) -- the function, the class, the mapping, and the source's store when it is not in the model yet --
-  which DataCube hands to `performPureChanges` as `{type: CREATE, path, pureCode}` unchanged. Names by §3.3's rules,
-  types by the compiler's reading of the relation; refused by name, in the server's own kinds, what cannot be a class (a
-  pivot's dynamic columns, a column of no type a property can hold).
+  to write in **the SDLC's own change shape, `{type: CREATE|MODIFY, path, pureCode}`** (as built, 2026-10-10: a
+  second class modifies the store and the model's mapping, so the route says which; DataCube hands the changes to
+  `performPureChanges` unchanged), `path` the element's path (`pkg::domain::Trade`; a function's its signature's name,
+  `TradeFn__Relation_1_`, as the grammar names it; the SDLC maps it to its file, `Sdlc.filePathOf`, so the engine's
+  route knows nothing of the SDLC's layout -- the Studio design's S1) -- every file of §15.2 the class needs that the
+  model does not hold as written. Names by §3.3's rules, types by the compiler's reading of the relation; refused by
+  name, in the server's own kinds (400 COMPILATION), what cannot be a class: a pivot's dynamic columns, a column of no
+  type a property can hold (left out, its type is the relation's still), a relation reading a store its place does not
+  write, a class's or a sample's name taken by another table's, a name Pure reads as a word of its own (`let`, `true`:
+  upstream's printer writes it unquoted, so its file would not read back). The model DataCube sends is the project's
+  files and the source's model, the latter under a section header of its own (the Plan Gen line's review).
 - **Asked through `pure/v1`'s routing**, as the tab and Python ask every compiler question
   (PROTOCOL_PROGRAM invariant 5): `pureV1OrError` in the tab, `lite_pure_v1` in Python; no export of its own. Built on
   this line's branch; the Studio line edits `PureV1Api` in its leg 8 step 3 too, and whichever lands second rebases.
@@ -542,6 +549,15 @@ anew.
   file export refused while its model is only here.
 - Python: `create_class`, `create_association`, `create_data_space`, the page document carrying the model's files, the
   widget reading a class.
+- **As built in step 2's first landing (Create a Class…, 2026-10-10)**: the route's tests (core) for a class -- the
+  sample proved by lite's own ServiceTestRunner loading it and the class reading it, the mapping test waiting for a
+  runner (§15.2); the browser: two grids made classes, the second reading the first's files back as changed, the page
+  file export refused, the share link saying the classes stay here, the page saved, reloaded and reopened with each
+  grid's table under its kept name; a stale save made again once, its workspace made again after a commit, in unit tests
+  against a stand-in SDLC; Studio opening the project and Query reading the class at HEAD tried by hand on the one-origin
+  site (a site-level check is the Studio line's, `site/verify.mjs`, offered). **Not in this landing**: associations and
+  data spaces (§15.1's next two), a grid over a class (step 3's dashboards read classes), Python (§15.5); a page reopened
+  in a tab where another grid holds a kept table's name reads it under a fresh one, and says so.
 
 ### 15.8 Not in step 2
 

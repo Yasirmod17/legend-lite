@@ -227,7 +227,10 @@ export function classDialog(doc: Document, o: ClassDialogOptions): Promise<Creat
     // ASKED AGAIN AS THE CHOICES CHANGE: the latest ask wins, an older answer arriving later is dropped
     let asked = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    // a create in flight or done is the window's last word: no preview is asked or drawn over it (the audit's S1)
+    const over = (): boolean => busy || created !== undefined || done;
     const ask = async (): Promise<void> => {
+      if (over()) return;
       const c = choice();
       const mine = (asked += 1);
       if (typeof c === 'string') {
@@ -238,13 +241,13 @@ export function classDialog(doc: Document, o: ClassDialogOptions): Promise<Creat
       say('Writing the class…', 'working');
       try {
         const answer = await o.preview(c);
-        if (mine !== asked || done) return;
+        if (mine !== asked || over()) return;
         drawColumns(answer);
         drawFiles(answer);
         primary.disabled = false;
         say('', '');
       } catch (e) {
-        if (mine !== asked || done) return;
+        if (mine !== asked || over()) return;
         primary.disabled = true;
         say(e instanceof Error ? e.message : String(e), 'failed');
       }
@@ -263,6 +266,8 @@ export function classDialog(doc: Document, o: ClassDialogOptions): Promise<Creat
       if (created) { finish(); return; }
       const c = choice();
       if (typeof c === 'string') { say(c, 'failed'); return; }
+      // no preview after this: one waiting is dropped, and one in flight is drawn by no one (`over`)
+      clearTimeout(timer);
       busy = true;
       win.classList.add('dc-busy');
       say(`Creating ${c.className}…`, 'working');

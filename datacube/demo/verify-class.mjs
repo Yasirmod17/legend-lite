@@ -31,8 +31,20 @@ const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
 const errors = [];
 page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
-page.on('dialog', async (d) => { errors.push(`alert: ${d.message()}`); await d.dismiss(); });
+page.on('dialog', async (d) => {
+  // a page about to be left asks first (beforeunload) while it holds work -- the files picked in this tab, here: left
+  if (d.type() === 'beforeunload') { await d.accept(); return; }
+  alerts.push(d.message());
+  await d.dismiss();
+});
+const alerts = [];
 
+
+/** A condition of this harness's own (an alert recorded), waited on -- never a fixed sleep (G-11). */
+async function until(condition, timeout) {
+  const end = Date.now() + timeout;
+  while (!condition() && Date.now() < end) await new Promise((r) => setImmediate(r));
+}
 const item = (label) => page.locator('.dc-menu .dc-menu-item', { has: page.locator(`:scope > .dc-menu-label:text-is(${JSON.stringify(label)})`) }).first();
 /** A file opened through the source picker, as a person does: its grid's tile is the `n`th. */
 async function openFile(path, n) {
@@ -80,7 +92,7 @@ try {
   check(JSON.stringify(first.slice(0, 7)) === JSON.stringify(['newtrades::store::Browser', 'newtrades::connection::Browser',
     'newtrades::runtime::Browser', 'newtrades::function::TradeFn', 'newtrades::domain::Trade',
     'newtrades::mapping::TradeMapping', 'newtrades::mapping::Model']) && first.length === 8
-    && /^newtrades::data::Trades(2)?Sample$/.test(first[7] ?? ''), `the files it writes, all new: ${first.join(', ')}`);
+    && /^newtrades::data::Trades(_2)?Sample$/.test(first[7] ?? ''), `the files it writes, all new: ${first.join(', ')}`);
   const cls = await pure('trades::domain::Trade');
   check(cls.includes('tradeId: Integer[0..1];') && cls.includes('notional: Float[0..1];') && !cls.includes('customerId')
     && !cls.includes('region'), `the class: a key only and a column left out are not on it\n${cls}`);
@@ -115,7 +127,71 @@ try {
   await page.waitForFunction(() => document.querySelector('.dc-class .dc-picker-status.dc-ok, .dc-class .dc-picker-status.dc-failed'),
     undefined, { timeout: 60_000 });
   check(/Created trades::domain::Customer/.test(await page.locator('.dc-class .dc-picker-status').textContent()), 'the second class created');
-  check(errors.length === 0, `no page errors or alerts${errors.length ? `: ${errors.join('; ')}` : ''}`);
+  await page.locator('.dc-class .dc-primary').click();
+  await page.locator('.dc-class').waitFor({ state: 'detached', timeout: 10_000 });
+
+  // A PAGE FILE cannot carry the classes yet: refused, said, nothing written
+  const downloads = [];
+  page.on('download', (d) => downloads.push(d.suggestedFilename()));
+  await page.click('.dc-titlebar-menu');
+  await item('Export').hover();
+  await item('Page File (JSON)').click();
+  await until(() => alerts.length > 0, 10_000);
+  check(alerts.some((a) => /a page file cannot carry them yet/.test(a)) && downloads.length === 0,
+    `the page file refused while its classes are only here: ${alerts.join(' | ') || '(nothing said)'}`);
+  alerts.length = 0;
+
+  // A SHARE LINK carries the page's settings, not its classes, and says so
+  await page.click('.dc-titlebar-menu');
+  await item('Share…').click();
+  await page.waitForFunction(() => /Its classes stay in datacube:trades/.test(document.querySelector('#sharenote')?.textContent ?? ''),
+    undefined, { timeout: 10_000 }).then(() => check(true, 'the share link says the classes stay in this browser'),
+    async () => bad(`the share note: ${await page.locator('#sharenote').textContent()}`));
+  await page.click('#sharewin .hostwin-close');
+
+  // SAVED, RELOADED AND OPENED AGAIN: each grid's file asked for, and read under the table name its class's store reads
+  await page.click('.dc-titlebar-menu');
+  await item('Save As\u2026').click();
+  await page.locator('.dc-save').waitFor({ timeout: 10_000 });
+  await page.fill('.dc-save-input', 'Classes');
+  await page.locator('.dc-save-foot .dc-primary').click();
+  await page.locator('.dc-save').waitFor({ state: 'detached', timeout: 30_000 });
+  // saved with its model: the page is not changed since (a title led by a dot is a changed page's)
+  const title = await page.title();
+  check(title.startsWith('Classes') && !title.startsWith('\u2022'), `saved, its model with it, unchanged since: ${title}`);
+  await page.goto(`http://127.0.0.1:${port}/demo/index.html`, { waitUntil: 'load', timeout: 120_000 });
+  await page.waitForFunction(() => document.querySelectorAll('.dc-row').length > 0, undefined, { timeout: 120_000 });
+  await page.click('.dc-titlebar-menu');
+  await item('Open\u2026').click();
+  const row = page.locator('#cubelib .dc-lib-row', { hasText: 'Classes' });
+  await row.waitFor({ timeout: 10_000 });
+  await row.locator('.dc-lib-button', { hasText: 'Open' }).click();
+  for (let asked = 0; asked < 2; asked += 1) {
+    await page.waitForSelector('#cubelib .dc-lib-ask:not([hidden])', { timeout: 30_000 });
+    const ask = await page.locator('#cubelib .dc-lib-ask').textContent() ?? '';
+    await page.setInputFiles('#cubelib .dc-lib-choose', /customers\.csv/.test(ask) ? customers : trades);
+    await page.waitForFunction((n) => !document.querySelector('#cubelib .dc-lib-ask:not([hidden])')
+      || !document.querySelector('#cubelib .dc-lib-ask')?.textContent?.includes(n), /customers\.csv/.test(ask) ? 'customers.csv' : 'trades.csv',
+    { timeout: 30_000 });
+  }
+  await page.waitForFunction(() => /opened/.test(document.querySelector('#cubelib .dc-lib-message')?.textContent ?? ''),
+    undefined, { timeout: 60_000 });
+  const opened = await page.locator('#cubelib .dc-lib-message').textContent();
+  check(!/not .* as the page's classes read it/.test(opened ?? ''), `opened, each table under its kept name: ${opened}`);
+  await page.waitForFunction(() => document.querySelectorAll('.dc-tile-menu').length >= 2, undefined, { timeout: 60_000 });
+  // the trades grid's class made again, as it was: nothing to write -- its store's table is the grid's own still
+  await page.locator('.dc-tile-menu').nth(0).click();
+  await item('Create a Class…').click();
+  await page.locator('.dc-class-table tbody tr').nth(3).waitFor({ timeout: 60_000 });
+  const again = page.locator('.dc-class-table tbody tr');
+  await again.nth(1).locator('select').selectOption('key');
+  await again.nth(2).locator('select').selectOption('omit');
+  await page.waitForFunction(() => document.querySelectorAll('.dc-class-file').length === 0
+    && document.querySelector('.dc-class .dc-primary:not([disabled])'), undefined, { timeout: 30_000 })
+    .then(() => check(true, 'reopened: the class made again writes nothing (its grid reads the table its store names)'),
+      async () => bad(`reopened, the class made again writes: ${(await files()).join(', ')}`));
+  check(errors.length === 0 && alerts.length === 0,
+    `no page errors or other alerts${errors.length + alerts.length ? `: ${[...errors, ...alerts].join('; ')}` : ''}`);
 } catch (e) {
   bad(`${e instanceof Error ? e.message : String(e)}${errors.length ? `\n  page: ${errors.join('; ')}` : ''}`);
 } finally {

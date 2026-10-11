@@ -160,6 +160,21 @@ public final class PromoteRelationToModel {
         // the relation, reading its tables from the store it is written with
         List<String[]> read = new ArrayList<>();
         Json.Node body = rewritten(lambda.getArr("body"), from, store, read);
+        // every table the function reads is the project's store's: a file reading another store (the tab's own, which
+        // the project does not hold) would compile here, beside the tab's model, and nowhere else (the audit's C1)
+        for (String other : storesRead(body)) {
+            if (!other.equals(store)) {
+                throw refused("the relation reads the store '" + other + "', which this class's place does not write: "
+                        + "a class reads the tables of one place");
+            }
+        }
+        // a class made again is its own relation's: a class of the same name over other tables is another class, and
+        // is not written over it (the audit's C2; the design's §15.4)
+        Json.Obj made = elementWhoseName(elements, pkg + "::function", name + "Fn");
+        if (made != null && !tablesRead(made.getArr("body")).equals(tablesRead(body))) {
+            throw refused("'" + className + "' is already the class of " + String.join(", ", tablesRead(made.getArr("body")))
+                    + ": name this class otherwise");
+        }
         List<AddedTable> addedTables = new ArrayList<>();
         if (!from.equals(store)) {
             changes.addAll(storeAndConnection(elements, from, where.getString("runtime"), place, read, addedTables));
@@ -178,7 +193,15 @@ public final class PromoteRelationToModel {
         for (AddedTable table : addedTables) {
             Json.Obj sample = samples.getObjOr(table.name(), null);
             if (sample != null) {
-                String data = pkg + "::data::" + identifier(camelCase(table.name(), true)) + "Sample";
+                // named after its table as it is (`trades_2` Trades_2Sample, `trades2` Trades2Sample), so two tables'
+                // samples are two elements; one already holding another table's rows is not written over (C2)
+                String held = identifier(table.name());
+                String data = pkg + "::data::" + held.substring(0, 1).toUpperCase(Locale.ROOT) + held.substring(1) + "Sample";
+                Json.Obj existing = elements.get(data);
+                if (existing != null && !sampleTables(existing).equals(List.of(table.schema() + "." + table.name()))) {
+                    throw refused("the sample '" + data + "' holds the rows of " + String.join(", ", sampleTables(existing))
+                            + ", not of " + table.name() + ": name the source's table otherwise");
+                }
                 add(changes, elements, element("###Data\n" + dataText(data, table, sample, notes)));
             }
         }
@@ -280,6 +303,12 @@ public final class PromoteRelationToModel {
         return as;
     }
 
+    /** Whether a property can hold a value of {@code t}. */
+    private static boolean holdable(Type t) {
+        return t instanceof Type.Primitive || t instanceof Type.PrecisionDecimal || t instanceof Type.EnumType
+                || com.legend.compiler.element.type.PlatformTypes.isVariant(t);
+    }
+
     /** A property's type: its column's, a decimal {@code Decimal}; a type a property cannot hold is refused by name. */
     private static String propertyType(Column c) {
         Type t = c.type();
@@ -306,7 +335,9 @@ public final class PromoteRelationToModel {
     private static String relationType(List<Column> columns) {
         List<String> cols = new ArrayList<>();
         for (Column c : columns) {
-            cols.add(quotedIfNeeded(c.name()) + ":" + propertyType(c));
+            // a column left out is still the relation's: its type as the compiler names it, held by no property
+            cols.add(quotedIfNeeded(c.name()) + ":" + ("omit".equals(c.as()) && !holdable(c.type()) ? c.type().typeName()
+                    : propertyType(c)));
         }
         return RELATION + "<(" + String.join(", ", cols) + ")>";
     }
@@ -415,7 +446,8 @@ public final class PromoteRelationToModel {
     }
 
     /** One CSV cell: quoted when it holds a comma or a quote, its quotes doubled (RFC 4180, the relational CSV
-     *  reader's rule). */
+     *  reader's rule). An empty text and a null are one empty field: the relational CSV reader (setup's CsvSeed) reads
+     *  an empty cell, quoted or not, as null -- a sample keeps no empty text apart from a missing value. */
     private static String cell(String text) {
         return text.indexOf(',') < 0 && text.indexOf('"') < 0 ? text : "\"" + text.replace("\"", "\"\"") + "\"";
     }
@@ -595,6 +627,74 @@ public final class PromoteRelationToModel {
             fields.put(e.getKey(), rewritten(e.getValue(), from, store, read));
         }
         return new Json.Obj(fields);
+    }
+
+    /** The stores {@code node} reads tables of ({@code #>{store.table}#}), in the order read. */
+    private static java.util.Set<String> storesRead(Json.Node node) {
+        java.util.Set<String> out = new java.util.LinkedHashSet<>();
+        for (List<String> path : accessors(node)) {
+            out.add(path.get(0));
+        }
+        return out;
+    }
+
+    /** The tables {@code node} reads, each {@code store.schema.table} ({@code default} when it names no schema). */
+    private static List<String> tablesRead(Json.Node node) {
+        List<String> out = new ArrayList<>();
+        for (List<String> path : accessors(node)) {
+            String t = path.size() == 3 ? path.get(0) + "." + path.get(1) + "." + path.get(2)
+                    : path.get(0) + ".default." + path.get(1);
+            if (!out.contains(t)) {
+                out.add(t);
+            }
+        }
+        return out;
+    }
+
+    /** Each store accessor's path in {@code node}. */
+    private static List<List<String>> accessors(Json.Node node) {
+        List<List<String>> out = new ArrayList<>();
+        collectAccessors(node, out);
+        return out;
+    }
+
+    private static void collectAccessors(Json.Node node, List<List<String>> out) {
+        if (node instanceof Json.Arr a) {
+            for (Json.Node n : a.items()) {
+                collectAccessors(n, out);
+            }
+        } else if (node instanceof Json.Obj o) {
+            if ("classInstance".equals(o.getStringOr("_type", "")) && ">".equals(o.getStringOr("type", ""))) {
+                out.add(o.getObj("value").getStringArray("path"));
+                return;
+            }
+            for (Json.Node n : o.fields().values()) {
+                collectAccessors(n, out);
+            }
+        }
+    }
+
+    /** The function of {@code pkg} named {@code name} in the model (its element named by its signature), or null. */
+    private static @com.legend.base.Nullable Json.Obj elementWhoseName(Map<String, Json.Obj> elements, String pkg,
+            String name) {
+        for (Json.Obj e : elements.values()) {
+            if ("function".equals(e.getStringOr("_type", "")) && e.has("package") && pkg.equals(e.getString("package"))
+                    && e.getString("name").startsWith(name + "_")) {
+                return e;
+            }
+        }
+        return null;
+    }
+
+    /** The tables a Data element's relational CSV holds, each {@code schema.table}. */
+    private static List<String> sampleTables(Json.Obj data) {
+        List<String> out = new ArrayList<>();
+        Json.Obj value = objOf(data, "data");
+        for (Json.Node t : arrOf(value, "tables").items()) {
+            Json.Obj table = (Json.Obj) t;
+            out.add(table.getString("schema") + "." + table.getString("table"));
+        }
+        return out;
     }
 
     // ---------------------------------------------------------------------
