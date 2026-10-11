@@ -112,6 +112,47 @@ class SqlParserTest {
     }
 
     @Test
+    void powerIsLeftAssociativeAndLooserThanASign() {
+        // Postgres: - 2 ^ 2 is 4, 2 ^ 3 ^ 2 is 64
+        SqlAst.Binary signed = (SqlAst.Binary) item("- 2 ^ 2");
+        assertEquals(SqlAst.BinaryOp.POWER, signed.op());
+        assertEquals(SqlAst.UnaryOp.MINUS, ((SqlAst.Unary) signed.left()).op());
+        SqlAst.Binary chain = (SqlAst.Binary) item("2 ^ 3 ^ 2");
+        assertEquals(SqlAst.BinaryOp.POWER, ((SqlAst.Binary) chain.left()).op());
+        assertEquals(SqlAst.BinaryOp.POWER, ((SqlAst.Binary) ((SqlAst.Binary) item("a * b ^ c")).right()).op());
+    }
+
+    @Test
+    void everyOtherOperatorSharesPostgresOpLevel() {
+        // looser than + -, tighter than LIKE and =, left-associative with ||
+        SqlAst.Operator regex = (SqlAst.Operator) item("a + b ~ c");
+        assertEquals("~", regex.operator());
+        assertEquals(SqlAst.BinaryOp.PLUS, ((SqlAst.Binary) java.util.Objects.requireNonNull(regex.left())).op());
+        SqlAst.Operator afterConcat = (SqlAst.Operator) item("a || b ~ c");
+        assertEquals(SqlAst.BinaryOp.CONCAT,
+                ((SqlAst.Binary) java.util.Objects.requireNonNull(afterConcat.left())).op());
+        SqlAst.Binary eq = (SqlAst.Binary) where("j ->> 'k' = 'v'");
+        assertEquals("->>", ((SqlAst.Operator) eq.left()).operator());
+        assertInstanceOf(SqlAst.Operator.class, ((SqlAst.Like) where("a ~ b like c")).operand());
+        // a prefix operator takes all that binds tighter than its level
+        SqlAst.Operator prefix = (SqlAst.Operator) item("@ a * 2 + 1");
+        assertNull(prefix.left());
+        assertEquals(SqlAst.BinaryOp.PLUS, ((SqlAst.Binary) prefix.right()).op());
+    }
+
+    @Test
+    void operatorsAreReadByPostgresRule() {
+        // =- has no character outside SQL's operators, so it is = then -
+        SqlAst.Binary eq = (SqlAst.Binary) item("a=-1");
+        assertEquals(SqlAst.BinaryOp.EQ, eq.op());
+        assertEquals(SqlAst.UnaryOp.MINUS, ((SqlAst.Unary) eq.right()).op());
+        assertEquals("@-", ((SqlAst.Operator) item("a @- 1")).operator());
+        // an operator stops where a comment starts
+        assertEquals(SqlAst.BinaryOp.LT, ((SqlAst.Binary) item("1 </*c*/ 2")).op());
+        assertInstanceOf(SqlAst.IntegerLit.class, ((SqlAst.SelectExpr) select("select 2--1").items().get(0)).expr());
+    }
+
+    @Test
     void betweenTakesItsOwnAnd() {
         SqlAst.Binary and = (SqlAst.Binary) where("a between 1 and 2 and b");
         assertEquals(SqlAst.BinaryOp.AND, and.op());
@@ -180,6 +221,42 @@ class SqlParserTest {
         assertEquals("timestamp without time zone",
                 ((SqlAst.TypedLit) item("timestamp without time zone '2024-01-31 10:00:00'")).type().name());
         assertEquals(1, ((SqlAst.Param) item("$1")).index());
+    }
+
+    @Test
+    void postgres16IntegersAndDigitSeparators() {
+        assertEquals(BigInteger.valueOf(31), ((SqlAst.IntegerLit) item("0x1F")).value());
+        assertEquals(BigInteger.valueOf(15), ((SqlAst.IntegerLit) item("0o17")).value());
+        assertEquals(BigInteger.valueOf(5), ((SqlAst.IntegerLit) item("0b101")).value());
+        assertEquals(BigInteger.valueOf(31), ((SqlAst.IntegerLit) item("0x_1F")).value());
+        assertEquals(BigInteger.valueOf(1_000_000), ((SqlAst.IntegerLit) item("1_000_000")).value());
+        assertEquals(new BigDecimal("1000.0001"), ((SqlAst.NumericLit) item("1_000.000_1")).value());
+        // Postgres's messages, the whole constant quoted
+        assertEquals("invalid hexadecimal integer at or near \"0x\"",
+                assertThrows(SqlSyntaxException.class, () -> SqlParser.parse("select 0x")).getMessage());
+        for (String junk : List.of("1__0", "1_", "0o19", "123abc", "1e+")) {
+            assertEquals("trailing junk after numeric literal at or near \"" + junk + "\"",
+                    assertThrows(SqlSyntaxException.class, () -> SqlParser.parse("select " + junk)).getMessage(), junk);
+        }
+    }
+
+    @Test
+    void anyWordButTheAsLabelOnesIsABareAlias() {
+        // Postgres 14+: select 1 select names its column "select"; day, filter, over ... need AS
+        SqlAst.SelectExpr reserved = (SqlAst.SelectExpr) select("select 1 select").items().get(0);
+        assertEquals("select", java.util.Objects.requireNonNull(reserved.alias()).text());
+        assertEquals("desc", java.util.Objects.requireNonNull(
+                ((SqlAst.SelectExpr) select("select a desc from t").items().get(0)).alias()).text());
+        assertEquals("syntax error at or near \"day\"",
+                assertThrows(SqlSyntaxException.class, () -> SqlParser.parse("select 1 day")).getMessage());
+    }
+
+    @Test
+    void anEmptySelectList() {
+        assertTrue(select("select from t").items().isEmpty());
+        assertTrue(select("select").items().isEmpty());
+        // but not after DISTINCT
+        assertThrows(SqlSyntaxException.class, () -> SqlParser.parse("select distinct from t"));
     }
 
     @Test

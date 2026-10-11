@@ -102,7 +102,8 @@ public final class SqlAst {
 
     /** A value expression. */
     public sealed interface Expr permits ColumnRef, IntegerLit, NumericLit, StringLit, BooleanLit, NullLit, TypedLit,
-            Param, Unary, Binary, IsNull, IsTruth, IsDistinct, InList, Between, Like, Case, FunctionCall, Cast {
+            Param, Unary, Binary, Operator, IsNull, IsTruth, IsDistinct, InList, Between, Like, Case, FunctionCall,
+            Cast {
         Pos pos();
     }
 
@@ -149,10 +150,17 @@ public final class SqlAst {
     }
 
     /** A binary operator. */
-    public enum BinaryOp { OR, AND, EQ, NE, LT, LE, GT, GE, PLUS, MINUS, TIMES, DIVIDE, MODULO, CONCAT }
+    public enum BinaryOp { OR, AND, EQ, NE, LT, LE, GT, GE, PLUS, MINUS, TIMES, DIVIDE, MODULO, POWER, CONCAT }
 
     /** {@code left op right}. */
     public record Binary(BinaryOp op, Expr left, Expr right, Pos pos) implements Expr {
+    }
+
+    /** Any other operator, as Postgres reads one ({@code ~}, {@code ->>}, {@code @>}, ...): its spelling and its
+     *  operands, a prefix operator's left one null. Postgres gives them all one precedence (its {@code Op}); what one
+     *  means is the translator's business, which refuses those it does not know. */
+    public record Operator(String operator, @com.legend.base.Nullable Expr left, Expr right, Pos pos)
+            implements Expr {
     }
 
     /** {@code x IS [NOT] NULL}. */

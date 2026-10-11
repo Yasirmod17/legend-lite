@@ -332,6 +332,9 @@ public final class SqlToPure {
         if (from == null) {
             throw SqlTranslationException.unsupported("a query without FROM is not supported yet", s.pos());
         }
+        if (s.items().isEmpty()) {
+            throw SqlTranslationException.unsupported("a select list with no columns is not supported yet", s.pos());
+        }
         ValueSpecification relation = source(from);
         List<Col> columns = new ArrayList<>();
         sources.columns(relation, (name, type, nullable) -> columns.add(new Col(name, kindOf(type), nullable)));
@@ -941,6 +944,10 @@ public final class SqlToPure {
                     + " supported yet", p.pos());
             case SqlAst.Unary u -> unary(u, scope, row);
             case SqlAst.Binary b -> binary(b, scope, row);
+            case SqlAst.Operator o -> throw SqlTranslationException.unsupported(switch (o.operator()) {
+                case "~", "~*", "!~", "!~*" -> "regular expression operators (~, ~*, !~, !~*) are";
+                default -> "the operator " + o.operator() + " is";
+            } + " not supported yet", o.pos());
             case SqlAst.IsNull n -> {
                 ValueSpecification v = valueOf(tx(n.operand(), scope, row));
                 Tx isNull = Tx.condition(call("isEmpty", v), call("isNotEmpty", v), false);
@@ -1024,6 +1031,18 @@ public final class SqlToPure {
                 }
                 return strict(Kind.FLOAT, List.of(l, r), v -> call("divide", v.get(0), v.get(1)));
             }
+            case POWER -> {
+                Tx l = tx(b.left(), scope, row);
+                Tx r = tx(b.right(), scope, row);
+                numericOperand(l, b.left());
+                numericOperand(r, b.right());
+                // Postgres computes ^ in double precision but for a numeric operand, where it is exact; pow is a Float
+                if (exactNumeric(l.kind()) || exactNumeric(r.kind())) {
+                    throw SqlTranslationException.unsupported("^ on numeric values (exact in Postgres) is not supported"
+                            + " yet", b.pos());
+                }
+                return strict(Kind.FLOAT, List.of(l, r), v -> call("pow", v.get(0), v.get(1)));
+            }
             case MODULO -> {
                 Tx l = tx(b.left(), scope, row);
                 Tx r = tx(b.right(), scope, row);
@@ -1047,6 +1066,10 @@ public final class SqlToPure {
             }
         }
         throw new IllegalStateException("unreachable: " + b.op());
+    }
+
+    private static boolean exactNumeric(Kind kind) {
+        return kind == Kind.DECIMAL || kind == Kind.NUMBER;
     }
 
     /** The operands of a run of {@code ||}, left to right. */
@@ -1425,6 +1448,11 @@ public final class SqlToPure {
             case SqlAst.Param p -> "param(" + p.index() + ")";
             case SqlAst.Unary u -> u.op() + "(" + canon(u.operand(), in) + ")";
             case SqlAst.Binary b -> b.op() + "(" + canon(b.left(), in) + "," + canon(b.right(), in) + ")";
+            case SqlAst.Operator o -> {
+                SqlAst.Expr left = o.left();
+                yield "op(" + o.operator() + "," + (left == null ? "" : canon(left, in)) + "," + canon(o.right(), in)
+                        + ")";
+            }
             case SqlAst.IsNull n -> "isnull" + n.negated() + "(" + canon(n.operand(), in) + ")";
             case SqlAst.IsTruth t -> "is" + t.negated() + t.truth() + "(" + canon(t.operand(), in) + ")";
             case SqlAst.IsDistinct d -> "distinct" + d.negated() + "(" + canon(d.left(), in) + ","
@@ -1475,6 +1503,10 @@ public final class SqlToPure {
             case SqlAst.Param p -> List.of();
             case SqlAst.Unary u -> List.of(u.operand());
             case SqlAst.Binary b -> List.of(b.left(), b.right());
+            case SqlAst.Operator o -> {
+                SqlAst.Expr left = o.left();
+                yield left == null ? List.of(o.right()) : List.of(left, o.right());
+            }
             case SqlAst.IsNull n -> List.of(n.operand());
             case SqlAst.IsTruth t -> List.of(t.operand());
             case SqlAst.IsDistinct d -> List.of(d.left(), d.right());

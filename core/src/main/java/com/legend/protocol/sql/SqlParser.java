@@ -42,6 +42,17 @@ public final class SqlParser {
             "cross", "current_schema", "freeze", "full", "ilike", "inner", "is", "isnull", "join", "left", "like",
             "natural", "notnull", "outer", "overlaps", "right", "similar", "tablesample", "verbose");
 
+    /** The key words that may name a select-list column only after {@code AS} (Postgres 16's kwlist.h, the
+     *  {@code AS_LABEL} ones): every other word may stand bare, {@code select 1 select} included. */
+    private static final Set<String> AS_LABEL = Set.of("array", "as", "char", "character", "create", "day", "except",
+            "fetch", "filter", "for", "from", "grant", "group", "having", "hour", "intersect", "into", "isnull", "limit",
+            "minute", "month", "notnull", "offset", "on", "order", "over", "overlaps", "precision", "returning",
+            "second", "to", "union", "varying", "where", "window", "with", "within", "without", "year");
+
+    /** The operators the levels below {@code Op} read themselves; Postgres reads every other one at {@code Op}. */
+    private static final Set<String> OWN_LEVEL_OPERATORS = Set.of("+", "-", "*", "/", "%", "^", "<", ">", "=", "<=",
+            ">=", "<>", "!=", "::", "=>");
+
     /** The SQL value functions written without parentheses (Postgres §9.9.5): read as calls with no arguments. */
     private static final Set<String> VALUE_FUNCTIONS = Set.of("current_date", "current_time", "current_timestamp",
             "localtime", "localtimestamp");
@@ -103,9 +114,12 @@ public final class SqlParser {
             acceptWord("all");
         }
         List<SqlAst.SelectItem> items = new ArrayList<>();
-        do {
-            items.add(selectItem());
-        } while (accept(Kind.COMMA));
+        // Postgres allows an empty select list (SELECT FROM t), though not after DISTINCT
+        if (distinct || !endsTargetList(peek())) {
+            do {
+                items.add(selectItem());
+            } while (accept(Kind.COMMA));
+        }
 
         SqlAst.FromItem from = null;
         if (acceptWord("from")) {
@@ -184,6 +198,14 @@ public final class SqlParser {
             throw unsupported("locking clauses (FOR UPDATE, FOR SHARE) are");
         }
         return new SqlAst.Select(distinct, items, from, where, groupBy, having, orderBy, limit, offset, pos);
+    }
+
+    /** True iff {@code t} cannot begin a select list, so the list before it is empty. */
+    private static boolean endsTargetList(Token t) {
+        return t.kind() == Kind.EOF || t.kind() == Kind.SEMICOLON || t.kind() == Kind.RPAREN || t.is("from")
+                || t.is("where") || t.is("group") || t.is("having") || t.is("window") || t.is("union")
+                || t.is("intersect") || t.is("except") || t.is("order") || t.is("limit") || t.is("offset")
+                || t.is("fetch") || t.is("for") || t.is("into");
     }
 
     private SqlAst.SelectItem selectItem() {
@@ -379,7 +401,7 @@ public final class SqlParser {
 
     /** {@code [NOT] BETWEEN | IN | LIKE | ILIKE | SIMILAR TO} over the "other operators" level. */
     private SqlAst.Expr predicate() {
-        SqlAst.Expr left = concat();
+        SqlAst.Expr left = other();
         Token t = peek();
         boolean negated = false;
         if (t.is("not") && (peekAt(1).is("between") || peekAt(1).is("in") || peekAt(1).is("like")
@@ -393,9 +415,9 @@ public final class SqlParser {
             if (peek().is("symmetric") || peek().is("asymmetric")) {
                 throw unsupported("BETWEEN SYMMETRIC is");
             }
-            SqlAst.Expr low = concat();
+            SqlAst.Expr low = other();
             expectWord("and");
-            return new SqlAst.Between(left, low, concat(), negated, t.pos());
+            return new SqlAst.Between(left, low, other(), negated, t.pos());
         }
         if (t.is("in")) {
             at++;
@@ -412,8 +434,8 @@ public final class SqlParser {
         }
         if (t.is("like") || t.is("ilike")) {
             at++;
-            SqlAst.Expr pattern = concat();
-            SqlAst.Expr escape = acceptWord("escape") ? concat() : null;
+            SqlAst.Expr pattern = other();
+            SqlAst.Expr escape = acceptWord("escape") ? other() : null;
             return new SqlAst.Like(left, pattern, escape, negated, t.is("ilike"), t.pos());
         }
         if (t.is("similar")) {
@@ -422,13 +444,22 @@ public final class SqlParser {
         return left;
     }
 
-    private SqlAst.Expr concat() {
+    /** Postgres's {@code Op} level: every operator but the arithmetic and comparison ones, left-associative,
+     *  binding looser than {@code + -} and tighter than {@code LIKE}, {@code IN} and the comparisons. {@code ||} is
+     *  concatenation; the rest are kept by spelling for the translator. */
+    private SqlAst.Expr other() {
         SqlAst.Expr left = additive();
-        while (peek().isOp("||")) {
+        while (isOtherOperator(peek())) {
             Token op = next();
-            left = new SqlAst.Binary(SqlAst.BinaryOp.CONCAT, left, additive(), op.pos());
+            SqlAst.Expr right = additive();
+            left = op.text().equals("||") ? new SqlAst.Binary(SqlAst.BinaryOp.CONCAT, left, right, op.pos())
+                    : new SqlAst.Operator(op.text(), left, right, op.pos());
         }
         return left;
+    }
+
+    private static boolean isOtherOperator(Token t) {
+        return t.kind() == Kind.OP && !OWN_LEVEL_OPERATORS.contains(t.text());
     }
 
     private SqlAst.Expr additive() {
@@ -442,7 +473,7 @@ public final class SqlParser {
     }
 
     private SqlAst.Expr multiplicative() {
-        SqlAst.Expr left = unary();
+        SqlAst.Expr left = power();
         while (peek().isOp("*") || peek().isOp("/") || peek().isOp("%")) {
             Token op = next();
             SqlAst.BinaryOp kind = switch (op.text()) {
@@ -450,7 +481,18 @@ public final class SqlParser {
                 case "/" -> SqlAst.BinaryOp.DIVIDE;
                 default -> SqlAst.BinaryOp.MODULO;
             };
-            left = new SqlAst.Binary(kind, left, unary(), op.pos());
+            left = new SqlAst.Binary(kind, left, power(), op.pos());
+        }
+        return left;
+    }
+
+    /** {@code ^}: left-associative in Postgres ({@code 2 ^ 3 ^ 2} is 64), and looser than a sign
+     *  ({@code - 2 ^ 2} is 4). */
+    private SqlAst.Expr power() {
+        SqlAst.Expr left = unary();
+        while (peek().isOp("^")) {
+            Token op = next();
+            left = new SqlAst.Binary(SqlAst.BinaryOp.POWER, left, unary(), op.pos());
         }
         return left;
     }
@@ -460,6 +502,11 @@ public final class SqlParser {
             Token op = next();
             return new SqlAst.Unary(op.text().equals("-") ? SqlAst.UnaryOp.MINUS : SqlAst.UnaryOp.PLUS, unary(),
                     op.pos());
+        }
+        if (isOtherOperator(peek())) {
+            // a prefix operator (@ x, |/ x) takes all that binds tighter than its level: @ 3 * 2 + 1 is @ (3 * 2 + 1)
+            Token op = next();
+            return new SqlAst.Operator(op.text(), null, additive(), op.pos());
         }
         return postfix();
     }
@@ -717,9 +764,11 @@ public final class SqlParser {
         throw unexpected();
     }
 
-    /** An alias without {@code AS}: an identifier that is no reserved key word. */
-    private boolean isBareLabel(Token t) {
-        return t.kind() == Kind.QUOTED_IDENT || t.kind() == Kind.IDENT && !isKeyword(t);
+    /** An alias without {@code AS}: any identifier or key word but the {@code AS_LABEL} ones (Postgres's
+     *  {@code BareColLabel}). */
+    private static boolean isBareLabel(Token t) {
+        return t.kind() == Kind.QUOTED_IDENT
+                || t.kind() == Kind.IDENT && !AS_LABEL.contains(t.text().toLowerCase(Locale.ROOT));
     }
 
     private static boolean isKeyword(Token t) {

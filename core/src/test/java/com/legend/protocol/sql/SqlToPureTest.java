@@ -117,6 +117,28 @@ class SqlToPureTest {
     }
 
     @Test
+    void powerIsPowOverIntegersAndFloats() {
+        assertEquals("#>{s::DB.T}#->extend(~[p:r|$r.ID->pow(2)])->select(~[p])",
+                pure("select ID ^ 2 as p from tb('s::DB.T')"));
+        assertEquals("#>{s::DB.T}#->extend(~[p:r|if($r.age->isEmpty(), |[], |$r.age->toOne()->pow(2))])"
+                + "->select(~[p])", pure("select age ^ 2 as p from tb('s::DB.T')"));
+        // Postgres computes numeric ^ exactly; pow is a Float
+        assertEquals("^ on numeric values (exact in Postgres) is not supported yet",
+                refusal("select 2.5 ^ ID from tb('s::DB.T')").getMessage());
+    }
+
+    @Test
+    void otherOperatorsAreRefusedByName() {
+        SqlTranslationException regex = refusal("select ID from tb('s::DB.T') where dept ~ 'e'");
+        assertEquals(SqlTranslationException.Kind.UNSUPPORTED, regex.kind());
+        assertEquals("regular expression operators (~, ~*, !~, !~*) are not supported yet", regex.getMessage());
+        assertEquals("the operator ->> is not supported yet",
+                refusal("select dept ->> 'k' from tb('s::DB.T')").getMessage());
+        assertEquals("a select list with no columns is not supported yet",
+                refusal("select from tb('s::DB.T')").getMessage());
+    }
+
+    @Test
     void isDistinctFromIsPureEquality() {
         assertEquals("#>{s::DB.T}#->filter(r|$r.firstName != $r.dept)->select(~[ID])",
                 pure("select ID from tb('s::DB.T') where firstName is distinct from dept"));
