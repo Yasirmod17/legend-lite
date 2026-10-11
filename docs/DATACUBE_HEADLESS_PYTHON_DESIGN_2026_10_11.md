@@ -1,6 +1,7 @@
 # DataCube headless in Python: DataCube's own code, embedded, with no WebAssembly (design, 2026-10-11)
 
-**Status: agreed by the user, 2026-10-11; under review by the Plan Gen / Exec Split and Compiler Rewrite lines (§9).**
+**Status: agreed by the user, 2026-10-11. Reviewed by the Plan Gen / Exec Split line (yes, with one gap, closed in
+§3: the plan of a query over a held model natively); under review by the Compiler Rewrite line (§9).**
 The user, on the measurement: "this is so awesome lets do it"; on §10: "yes one one package, v8 for sure, yes do this
 before create*; yes rename would helpful". Builds on `docs/DATACUBE_PYTHON_SHOW_DESIGN_2026_10_08.md` (the engine in Python, the notebook cube),
 `docs/DATACUBE_PYTHON_PAGES_DESIGN_2026_10_09.md` (pages built in code) and `docs/DATACUBE_MODEL_DESIGN_2026_10_10.md`
@@ -61,9 +62,15 @@ Python process
 
 - **The planner.** It is DataCube's `WasmPlanner`, unchanged, over its worker transport. The browser already runs its
   module in a Web Worker (`planner-worker.ts`); here the "worker" is the host, which answers each message with the
-  native library's function of the same name (`lite_hold_model`, `lite_plan_json_held`, ...). `planHeld` (the plan of a
-  query written as Pure text) is served by `lite_plan_text` over the held model's text. `testDataSql` has no native
-  function yet; one is added (§8).
+  native library's function of the same name (`lite_hold_model`, `lite_plan_json_held`, ...).
+  - **Each request kind is answered by the same `Boundary` function in both hosts** (the Plan Gen line's review). The
+    worker's nine kinds (`hold`, `release`, `relationType`, `tableModel`, `catalogColumnsSql`, `planJson`, `pureV1`,
+    `testData`, `plan`) are one exported TypeScript type, which both hosts are checked against (§6).
+  - Two have no native function yet, and get one beside the held functions in `native/.../nativelib/Compiler.java`:
+    `plan`, as `lite_plan_held` over `Boundary.planHeld` (the query planned against the model held, compiled once),
+    and `testData`, as `lite_test_data_sql`. The measurement answered `plan` by `lite_plan_text` over the held model's
+    text, which compiles the whole model again for every query: not production's path, and it undoes compile-once.
+    The design does not.
   - `WasmPlanner` names how the browser delivers its module, not what it is. It is renamed `LitePlanner` (ruled, §10),
     with the Plan Gen / Exec Split line, whose boundary it is.
 - **The database.** It is DataCube's `DuckDbEngine`, unchanged, over a connection whose `query(sql)` runs on Python's
@@ -133,6 +140,8 @@ The measurement becomes a lane, `//datacube:headless_test`, run on all three pla
   - the runfiles placeholder.
 - **Conformance tests for the web layer**, each against its standard's own test vectors where they exist (`URL`:
   whatwg-url's; UTF-8: the Encoding standard's).
+- **The worker contract's guard** (the real guard of §7's check): a lane test that the request kinds' type,
+  `planner-worker.ts`'s switch and the Python host's table are the same set, so a new kind fails both hosts at once.
 - **A guard:** the headless bundle imports nothing of the DOM or of Node (esbuild `--platform=neutral`, and the lane's
   run).
 - **An opportunity, not a commitment:** with the lane, DataCube's unit tests no longer need Node to run (the "no Node in
@@ -146,8 +155,9 @@ The measurement becomes a lane, `//datacube:headless_test`, run on all three pla
   library must agree on their interface exactly, so two wheels would need a pinned pair and a version handshake. One
   package has one version.
 - The existing `notebook` extra is the same pattern.
-- **An interface check at start:** the bundle states the module interface it expects (the planner's functions and the
-  protocol's version), and the native library states its own. A mismatch fails at once with both named.
+- **An interface check at start, by lists, not a version** (the Plan Gen line's review: `Boundary` has no version, and a
+  hand-kept one gets forgotten). The bundle lists the request kinds it sends; the native library lists the functions
+  it exports (`lite_interface()`). A kind with no function fails at once, with both lists named.
 
 ## 8. What it costs, and the risks
 
@@ -160,18 +170,19 @@ The measurement becomes a lane, `//datacube:headless_test`, run on all three pla
   V8. It matched Node's in all 23 measured formatting tests, and may differ from a user's Chrome in an edge case.
 - **A dependency to own:** `mini-racer`, its V8 upgrades and security releases at its pace. The JavaScript run is ours,
   never a user's, which lowers the exposure.
-- **`testDataSql` has no native function.** It is added to the native library beside its other `Boundary` functions,
-  so the headless planner answers what the browser's does.
+- **Two worker kinds have no native function** (`plan` and `testData`, §3). They are added to the native library beside
+  its other held functions, so the headless planner answers what the browser's does, by the same Java.
 - **Size:** +15-22 MB for the extra's users.
 
 ## 9. The plan (in order; each a landing of its own)
 
 0. **The rename** (§3): `WasmPlanner` to `LitePlanner`, `wasm-planner.ts` to `lite-planner.ts`, with its test, its
-   callers and the comments that name it. A landing of its own, so the lane's diff is only the lane. Review: the Plan
-   Gen / Exec Split line.
+   callers and the comments that name it (in `wasm/`'s `Boundary.java` and `README.md`, and `tools/teavm/TeaVmCompile.java`,
+   comment-only, told to the Compiler Rewrite line). A landing of its own, so the lane's diff is only the lane. The
+   name agreed by the Plan Gen / Exec Split line.
 1. **The lane (§6).**
    - The test helpers made asynchronous; the hooks made supported options; the web layer with its conformance tests;
-     `testDataSql` natively.
+     the worker's request kinds as one type, with their guard; `lite_plan_held` and `lite_test_data_sql` natively.
    - Reviews: the Compiler Rewrite line for the BUILD lines and the new pinned Python dependency (`mini-racer` in
      `@pypi`); the Plan Gen / Exec Split line for the planner's hooks and the rename.
 2. **The headless grid** (§4: the bundle's entry point; `grid.view()`, `grid.relation`, `grid.to_pandas()`), and the
@@ -190,4 +201,4 @@ depends on steps 1-2. Steps 3-4 can follow the model plan's step 3 (dashboards o
 1. **One package**, with a `datacube` extra, not two wheels.
 2. **V8** (`mini-racer`), at its size (+15-22 MB, +51 MB of memory), not QuickJS.
 3. **Before the model plan's Python calls** (§15.5): this design's steps 0-2 first.
-4. **The rename**, `WasmPlanner` to `LitePlanner`, with the Plan Gen / Exec Split line.
+4. **The rename**, `WasmPlanner` to `LitePlanner`, with the Plan Gen / Exec Split line (agreed by it, 2026-10-11).
