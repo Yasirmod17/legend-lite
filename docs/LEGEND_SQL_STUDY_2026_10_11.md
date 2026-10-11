@@ -365,17 +365,20 @@ pgwire Q/P         ┘    (hand-written)       (records,       (scopes,      (Re
   - spec: the Postgres manual, not Crate's grammar.
 - **AST:** about 60 immutable records with **source spans** and a **quoted-identifier flag**. Errors carry
   positions so the LSP can underline SQL.
-- **Placement (decided, D2): a new package, *not* `com.legend.sql`.** The IR is a back-end IR. It carries
-  `TypeFact`s and lowering-only variants (`CheckedDefects`, `DeferredTdsString`, `PlanParam`…). Later,
-  `docs/LEGEND_SQL_VISION.md`'s "standalone N-in" reader can add a syntax-AST → IR step for raw-SQL transpiling
-  (`RawSqlBoundary`'s replacement). Proposed layout:
+- **Placement (D2: a new package, not `com.legend.sql`; settled by the architecture tests in step 1):
+  `com.legend.protocol.sql`**, the reader and the translator together. Three rules decided it:
+  - the compiler layer never touches `com.legend.parser` (`ParserBoundaryArchTest`, no exceptions), so the Typer
+    cannot call a translator in the parser;
+  - only the parser and the protocol packages build calls before name resolution
+    (`ArchitectureTest.callsAreBuiltOnlyByTheBuilder`, `protocolNodesAreConstructedOnlyByTheParserAndTheNormalizer`);
+  - `com.legend.protocol` is the bottom layer and depends only on the JDK, `values` and JSON
+    (`ArchitectureTest.protocolIsTheBottomLayer`), so the protocol package cannot depend on a separate `pg` library.
 
-  | Package | Contents | Depends on |
-  |---|---|---|
-  | `com.legend.pg.syntax` | lexer, parser, AST, printer | nothing: an ArchUnit standalone rule like `sql`'s |
-  | `com.legend.pg.translate` | AST → `protocol.spec` | |
-  | `com.legend.pg.catalog` | the system views (§3.5) | |
-  | `com.legend.pg.wire` | the protocol server | |
+  So the reader (lexer, parser, AST) and the translator sit in the protocol layer, where every other pre-resolution
+  front end already is, and depend on nothing but the JDK. The compiler's one seam is `compiler/spec/SqlIslands`.
+  The future wire server reads SQL through the same package.
+  Later, `docs/LEGEND_SQL_VISION.md`'s "standalone N-in" reader can add a syntax-AST → IR step for raw-SQL
+  transpiling (`RawSqlBoundary`'s replacement).
 - **Printer:** a true fixpoint, checked as `parse(print(ast)) == ast` over a property corpus and the 83 upstream
   cases.
 
@@ -446,7 +449,7 @@ queries the *logical* model. §3.6 is the proposed projection.
 
 | Topic | Postgres (the spec) | Upstream | Plan |
 |---|---|---|---|
-| Identifiers | unquoted ones fold to lowercase; quoted ones are exact; names over 63 bytes are truncated | case preserved, exact match | **Postgres exactly (D1, decided).** Legend names are published verbatim, so a camelCase name needs quotes in hand-written SQL, as for any Postgres table created with quoted names. Errors carry Postgres's own `HINT: Perhaps you meant to reference the column "person.firstName".` Names over 63 bytes are truncated when the catalog is published, as Postgres truncates at `CREATE`; names that collide after truncation are an error naming both |
+| Identifiers | unquoted ones fold to lowercase; quoted ones are exact; names over 63 bytes are truncated | case preserved, exact match | **Recommended (D1, below): Postgres's rule first, then a case-insensitive match.** A quoted name matches exactly. An unquoted one matches the name equal to its folding when there is one (Postgres's rule), else the ONE name equal to it ignoring case; two such names are an error asking for quotes. Every query Postgres accepts resolves exactly as in Postgres, and `select firstName` finds the model's `firstName` unquoted. Output names keep the case they are written in. A quoted name in the wrong case gets Postgres's hint ("perhaps you meant \"firstName\""). Implemented in step 1 (register S43) |
 | Output column names | an alias as written (folded); a column reference keeps its name; a function call is named after the function (`count`); anything else is `?column?`; **duplicates are allowed** | derived from the expression text; duplicates throw | **Postgres rules.** A Relation needs unique column names, so duplicates get internal names while the wire's RowDescription carries the Postgres names. A reference to an ambiguous name raises Postgres's `column reference "x" is ambiguous` |
 | `=` with NULL | three-valued | plan flag `LEGACY_SQL_NULL_UNSAFE_EQUALS` | Postgres three-valued logic, explicit in the translation |
 | Numeric literals | exact `numeric` | `DoubleLiteral` | exact Decimal, sent as OID `numeric` |
@@ -737,15 +740,20 @@ proves the translator against 2,340 oracle cases before any wire or dbt work sta
 
 **Decided by the user, 2026-10-11:**
 
-- **D1. Identifiers: native Postgres** (§3.4).
-  - Unquoted names fold to lowercase, quoted names are exact, and names over 63 bytes are truncated.
-  - Hints are Postgres's own.
-  - **Consequence:** camelCase Legend names need quotes in hand-written SQL (`"firstName"`), as for any Postgres
-    object created with a quoted name. BI tools quote every name they read from the catalog, so they are
-    unaffected.
-  - A snake_case naming profile (publishing `first_name` for `firstName`) remains a possible later opt-in, never
-    the default: it gives each element two names.
-- **D2. A new package** (§3.1, `com.legend.pg.*`).
+- **D1. Identifiers.** The user's first answer was native Postgres. Asked for an unbiased view, I recommend
+  Postgres's rule first, then a unique case-insensitive match (§3.4, register S43):
+  - **Native Postgres:** zero deviation, but every camelCase Legend name needs quotes (`"firstName"`), and an alias
+    `AS totalAmount` comes out as `totalamount`, which a Pure caller then cannot read as `$x.totalAmount`.
+  - **Exact, case-sensitive (upstream):** rejects queries Postgres accepts (`select NAME from t` with a column
+    `name`).
+  - **Fully case-insensitive (DuckDB's rule):** forgiving, but a model with `name` and `Name` makes valid Postgres
+    ambiguous.
+  - **snake_case aliases:** two names for every element.
+  - **The recommendation:** keeps every valid Postgres query's meaning, and adds only what Postgres would refuse.
+    Its one visible difference is that output names keep their written case.
+
+  Implemented in step 1, pending the user's ruling.
+- **D2. A new package** (§3.1): it is `com.legend.protocol.sql`, which the architecture tests require.
 - **D3. A hand-written wire protocol with no dependencies.** libpg_query only as a test oracle (§3.5).
 - **Overall: as close as possible to native Postgres in everything** (§0 point 4, §3.4).
 
@@ -755,9 +763,9 @@ proves the translator against 2,340 oracle cases before any wire or dbt work sta
   active lines in priority order: the build rebuild, Studio, the database owner, DataCube with Python. Each line
   announces the files it will touch so that sessions do not collide. The question is whether this becomes a new
   line now, beside the others, or waits.
-  - Phase 1 is mostly new files under `com.legend.pg`. Its touch points elsewhere are small:
-    - the `Typer`'s `SqlIsland` arm, in `compiler/spec`, which the Bazel line currently holds for its
-      reference-lane fix;
+  - Phase 1 is mostly new files under `com.legend.protocol.sql`. Its touch points elsewhere are small:
+    - the `Typer`'s `SqlIsland` arm, in `compiler/spec` (the Bazel line's hold on it ended when its reference-lane
+      fix landed);
     - route registration in `server/LegendHttpServer`;
     - new natives (`intersect`, `except`) in `builtin/`.
   - **Proposal:** a new line, announced in `IN_FLIGHT`, starting with phase 1.
@@ -767,7 +775,58 @@ proves the translator against 2,340 oracle cases before any wire or dbt work sta
 
 ---
 
-## 9. Sources
+## 9. Step 1: `#SQL{...}#` queries (built 2026-10-11, on the branch)
+
+**What works.** A Postgres `SELECT` over one `tb('pkg::Database[.schema].table')` source, as an island in any Pure
+query:
+- clauses: `WHERE`, `GROUP BY` (names, ordinals, aliases, expressions), `HAVING`, aggregates without `GROUP BY`,
+  `ORDER BY` (names, ordinals, aliases, expressions, `NULLS FIRST/LAST`), `DISTINCT`, `LIMIT`, `OFFSET`,
+  `FETCH FIRST`;
+- expressions: comparisons, `AND/OR/NOT`, `IS [NOT] NULL/TRUE/FALSE/UNKNOWN`, `IS [NOT] DISTINCT FROM`, `[NOT] IN`,
+  `[NOT] BETWEEN`, `[NOT] LIKE/ILIKE`, `CASE` (both forms), `+ - * / % ||`, `coalesce`, `upper`, `lower`, `length`,
+  `trim`, `abs`, `ceil`, `floor`, `current_date`, `now()`;
+- aggregates: `count`, `count(DISTINCT)`, `sum`, `avg`, `min`, `max`;
+- dates: `DATE '…'` and `TIMESTAMP '…'`, and ISO strings compared with dates.
+
+Everything else is refused by name and position.
+
+**How.**
+- `#SQL{}#` parses as before.
+- The Typer's arm hands it to `compiler/spec/SqlIslands`. The seam types each FROM source for the translator
+  (`protocol/sql/SqlToPure`), resolves the Relation expression it gets back, and the Typer types that once.
+- The generated Pure reads like hand-written Pure, for example:
+  `#>{s::DB.T}#->groupBy(~[dept], ~[n:r|1:y|$y->count()])->filter(r|$r.n > 1)->select(~[dept, n])`.
+
+**Evidence.**
+- **The cases:** 45 queries (`core/src/test/java/com/legend/testcases/SqlIslandCases.java`), each with the rows the
+  pinned embedded Postgres 16.15 returned, recorded.
+- **On DuckDB:** they pass through `#SQL{}#` (`SqlIslandIntegrationTest`, 51 tests).
+- **On Postgres:** they pass both as plain SQL and as islands through the Postgres dialect
+  (`SqlIslandPostgresTest`, 90 tests, its own target `//core:sql_island_postgres_test` in `//gates:core`).
+- **Units:** the reader and the translator have 38 unit tests (`protocol/sql/SqlParserTest`, `SqlToPureTest`).
+- **Regressions:** core's guardrail (88) and census (12) suites pass.
+
+All of this ran locally on `javac` and JUnit with Maven Central's jars. Bazel itself could not run in this session:
+the environment's network policy blocks the GitHub archive downloads its toolchains need. The new Bazel target is
+therefore unproven until a Bazel run.
+
+**Known differences from Postgres,** each refused or recorded:
+- `avg` returns Pure's Float where Postgres returns numeric (`SqlIslandIntegrationTest.anAverageIsAFloat…`).
+- Integer `/` is refused (S47).
+- Non-ISO date strings are refused (S46).
+- Duplicate output names are refused: a Pure relation needs distinct column names.
+- `NULL` in an `IN` list and comparison with a `NULL` constant are refused.
+
+**Next steps, by size:**
+1. Joins and subqueries in FROM.
+2. `func(...)`, `csv(...)` and CTE sources.
+3. Casts, and the rest of upstream's function table.
+4. `FILTER`, window functions.
+5. Set operations, which need `intersect`/`except` natives.
+
+Then the HTTP routes (`/api/sql/v1/...`), then the wire.
+
+## 10. Sources
 
 - **Upstream code:** `finos/legend-engine` `e60ab67a`, sparse checkout of `legend-engine-xts-sql/`,
   `legend-engine-xts-relationalStore/.../legend-engine-xt-relationalStore-postgresSql/`, and `docs/`.

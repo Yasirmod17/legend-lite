@@ -14,7 +14,7 @@ load("//tools/guards:defs.bzl", "guards_package")
 
 # the engine: the compiler's unit tests (gate 1), spec parity (gate 3), the JSON and protocol libraries, the
 # engine-runner binaries through their launchers (P3-26), the server's Postgres arm (one query against the embedded
-# Postgres 16)
+# Postgres 16), the #SQL{}# island's cases on the same Postgres
 test_suite(
     name = "core",
     tests = [
@@ -29,6 +29,9 @@ test_suite(
         # the planner on java.base alone (P3-19): seconds
         "//core:planner_on_java_base_test",
         "//core:postgres_arm_test",
+        # the #SQL{}# island's cases on the embedded Postgres 16: Postgres's own answers, and the islands through the
+        # Postgres dialect
+        "//core:sql_island_postgres_test",
         "//spec:spec_tests",
         "//json:tests",
         # TeaVM's corrected number conversions against the JDK, on the JVM (seconds)

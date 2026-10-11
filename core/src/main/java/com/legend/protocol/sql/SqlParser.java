@@ -1,0 +1,827 @@
+// Copyright 2026 Legend Contributors
+// SPDX-License-Identifier: Apache-2.0
+
+package com.legend.protocol.sql;
+
+import com.legend.protocol.sql.SqlLexer.Kind;
+import com.legend.protocol.sql.SqlLexer.Token;
+
+import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+
+/**
+ * Postgres SQL text to {@link SqlAst}: a hand-written recursive-descent parser over {@link SqlLexer}'s tokens, with
+ * Postgres's operator precedence (the manual's §4.1.6, lowest first): {@code OR}; {@code AND}; {@code NOT};
+ * {@code IS}, {@code ISNULL}, {@code NOTNULL}; comparison; {@code BETWEEN}, {@code IN}, {@code LIKE}, {@code ILIKE};
+ * other operators ({@code ||}); {@code + -}; {@code * / %}; unary {@code + -}; {@code ::}.
+ *
+ * <p>It accepts ONE query statement: a single {@code SELECT} over at most one FROM item, with {@code WHERE},
+ * {@code GROUP BY}, {@code HAVING}, {@code ORDER BY}, {@code LIMIT}, {@code OFFSET} and {@code FETCH FIRST}. Every
+ * Postgres form outside that is refused here with its name and position ("joins are not supported yet"), never
+ * parsed as something else: the set grows construct by construct.
+ */
+public final class SqlParser {
+
+    /** Postgres's reserved key words (Appendix C, "reserved"): never a column name, never a bare alias. */
+    private static final Set<String> RESERVED = Set.of("all", "analyse", "analyze", "and", "any", "array", "as", "asc",
+            "asymmetric", "both", "case", "cast", "check", "collate", "column", "constraint", "create",
+            "current_catalog", "current_date", "current_role", "current_time", "current_timestamp", "current_user",
+            "default", "deferrable", "desc", "distinct", "do", "else", "end", "except", "false", "fetch", "for",
+            "foreign", "from", "grant", "group", "having", "in", "initially", "intersect", "into", "lateral", "leading",
+            "limit", "localtime", "localtimestamp", "not", "null", "offset", "on", "only", "or", "order", "placing",
+            "primary", "references", "returning", "select", "session_user", "some", "symmetric", "system_user", "table",
+            "then", "to", "trailing", "true", "union", "unique", "user", "using", "variadic", "when", "where", "window",
+            "with");
+
+    /** Postgres's "reserved (can be function or type name)" key words: a function name, never a column name. */
+    private static final Set<String> TYPE_FUNC_NAME = Set.of("authorization", "binary", "collation", "concurrently",
+            "cross", "current_schema", "freeze", "full", "ilike", "inner", "is", "isnull", "join", "left", "like",
+            "natural", "notnull", "outer", "overlaps", "right", "similar", "tablesample", "verbose");
+
+    /** The SQL value functions written without parentheses (Postgres §9.9.5): read as calls with no arguments. */
+    private static final Set<String> VALUE_FUNCTIONS = Set.of("current_date", "current_time", "current_timestamp",
+            "localtime", "localtimestamp");
+
+    private final List<Token> tokens;
+    private int at;
+
+    private SqlParser(List<Token> tokens) {
+        this.tokens = tokens;
+    }
+
+    /** The one statement {@code sql} holds (an optional trailing {@code ;}). */
+    public static SqlAst.Statement parse(String sql) {
+        SqlParser p = new SqlParser(SqlLexer.tokenize(sql));
+        SqlAst.Statement statement = p.statement();
+        if (p.peek().kind() == Kind.SEMICOLON) {
+            p.at++;
+        }
+        if (p.peek().kind() != Kind.EOF) {
+            if (p.tokens.get(p.at - 1).kind() == Kind.SEMICOLON) {
+                throw p.error("only one statement is supported");
+            }
+            throw p.unexpected();
+        }
+        return statement;
+    }
+
+    // ------------------------------------------------------------------ statements
+
+    private SqlAst.Statement statement() {
+        Token t = peek();
+        if (t.is("with")) {
+            throw unsupported("WITH queries are");
+        }
+        if (t.is("values")) {
+            throw unsupported("VALUES lists are");
+        }
+        if (t.kind() == Kind.LPAREN) {
+            throw unsupported("parenthesized queries are");
+        }
+        if (!t.is("select")) {
+            if (t.kind() == Kind.EOF) {
+                throw error("syntax error at end of input");
+            }
+            throw error("only queries are supported: a statement must begin with SELECT, not \"" + t.text() + "\"");
+        }
+        return select();
+    }
+
+    private SqlAst.Select select() {
+        SqlAst.Pos pos = expectWord("select").pos();
+        boolean distinct = false;
+        if (acceptWord("distinct")) {
+            if (peek().is("on")) {
+                throw unsupported("DISTINCT ON is");
+            }
+            distinct = true;
+        } else {
+            acceptWord("all");
+        }
+        List<SqlAst.SelectItem> items = new ArrayList<>();
+        do {
+            items.add(selectItem());
+        } while (accept(Kind.COMMA));
+
+        SqlAst.FromItem from = null;
+        if (acceptWord("from")) {
+            from = fromItem();
+            if (peek().kind() == Kind.COMMA || isJoinWord(peek())) {
+                throw unsupported("joins are");
+            }
+        }
+        SqlAst.Expr where = acceptWord("where") ? expr() : null;
+        List<SqlAst.Expr> groupBy = new ArrayList<>();
+        if (acceptWord("group")) {
+            expectWord("by");
+            if (peek().is("all") || peek().is("distinct")) {
+                throw unsupported("GROUP BY ALL / DISTINCT is");
+            }
+            do {
+                if ((peek().is("rollup") || peek().is("cube")) && peekAt(1).kind() == Kind.LPAREN
+                        || peek().is("grouping") && peekAt(1).is("sets")) {
+                    throw unsupported("ROLLUP, CUBE and GROUPING SETS are");
+                }
+                groupBy.add(expr());
+            } while (accept(Kind.COMMA));
+        }
+        SqlAst.Expr having = acceptWord("having") ? expr() : null;
+        if (peek().is("window")) {
+            throw unsupported("the WINDOW clause is");
+        }
+        if (peek().is("union") || peek().is("intersect") || peek().is("except")) {
+            throw unsupported(peek().text().toUpperCase(Locale.ROOT) + " is");
+        }
+        List<SqlAst.SortItem> orderBy = new ArrayList<>();
+        if (acceptWord("order")) {
+            expectWord("by");
+            do {
+                orderBy.add(sortItem());
+            } while (accept(Kind.COMMA));
+        }
+        SqlAst.Expr limit = null;
+        SqlAst.Expr offset = null;
+        boolean sawLimit = false;
+        boolean sawOffset = false;
+        while (true) {
+            if (!sawLimit && peek().is("limit")) {
+                at++;
+                sawLimit = true;
+                if (!acceptWord("all")) {
+                    limit = expr();
+                }
+            } else if (!sawOffset && peek().is("offset")) {
+                at++;
+                sawOffset = true;
+                offset = expr();
+                if (!acceptWord("row")) {
+                    acceptWord("rows");
+                }
+            } else if (!sawLimit && peek().is("fetch")) {
+                at++;
+                sawLimit = true;
+                if (!acceptWord("first")) {
+                    expectWord("next");
+                }
+                limit = peek().is("row") || peek().is("rows") ? new SqlAst.IntegerLit(BigInteger.ONE, peek().pos())
+                        : expr();
+                if (!acceptWord("row")) {
+                    expectWord("rows");
+                }
+                if (peek().is("with")) {
+                    throw unsupported("FETCH ... WITH TIES is");
+                }
+                expectWord("only");
+            } else {
+                break;
+            }
+        }
+        if (peek().is("for")) {
+            throw unsupported("locking clauses (FOR UPDATE, FOR SHARE) are");
+        }
+        return new SqlAst.Select(distinct, items, from, where, groupBy, having, orderBy, limit, offset, pos);
+    }
+
+    private SqlAst.SelectItem selectItem() {
+        Token t = peek();
+        if (t.isOp("*")) {
+            at++;
+            return new SqlAst.AllColumns(null, t.pos());
+        }
+        if (isName(t) && peekAt(1).kind() == Kind.DOT && peekAt(2).isOp("*")) {
+            at += 3;
+            return new SqlAst.AllColumns(ident(t), t.pos());
+        }
+        SqlAst.Expr e = expr();
+        SqlAst.Ident alias = null;
+        if (acceptWord("as")) {
+            alias = label();
+        } else if (isBareLabel(peek())) {
+            alias = ident(next());
+        }
+        return new SqlAst.SelectExpr(e, alias, t.pos());
+    }
+
+    private SqlAst.SortItem sortItem() {
+        SqlAst.Expr e = expr();
+        boolean descending = false;
+        if (acceptWord("desc")) {
+            descending = true;
+        } else if (!acceptWord("asc") && peek().is("using")) {
+            throw unsupported("ORDER BY ... USING is");
+        }
+        Boolean nullsFirst = null;
+        if (acceptWord("nulls")) {
+            if (acceptWord("first")) {
+                nullsFirst = Boolean.TRUE;
+            } else {
+                expectWord("last");
+                nullsFirst = Boolean.FALSE;
+            }
+        }
+        return new SqlAst.SortItem(e, descending, nullsFirst, e.pos());
+    }
+
+    // ------------------------------------------------------------------ FROM
+
+    private SqlAst.FromItem fromItem() {
+        Token t = peek();
+        if (t.kind() == Kind.LPAREN) {
+            throw unsupported("subqueries in FROM are");
+        }
+        if (t.is("lateral")) {
+            throw unsupported("LATERAL is");
+        }
+        if (t.is("only")) {
+            throw unsupported("FROM ONLY is");
+        }
+        List<SqlAst.Ident> name = qualifiedName();
+        if (accept(Kind.LPAREN)) {
+            List<SqlAst.Arg> args = new ArrayList<>();
+            if (!accept(Kind.RPAREN)) {
+                do {
+                    args.add(arg());
+                } while (accept(Kind.COMMA));
+                expect(Kind.RPAREN);
+            }
+            if (peek().is("with") && peekAt(1).is("ordinality")) {
+                throw unsupported("WITH ORDINALITY is");
+            }
+            return new SqlAst.TableFunction(name, args, tableAlias(), t.pos());
+        }
+        if (peek().is("tablesample")) {
+            throw unsupported("TABLESAMPLE is");
+        }
+        return new SqlAst.TableName(name, tableAlias(), t.pos());
+    }
+
+    private SqlAst.Arg arg() {
+        if (isName(peek()) && peekAt(1).isOp("=>")) {
+            SqlAst.Ident name = ident(next());
+            at++;
+            return new SqlAst.Arg(name, expr());
+        }
+        return new SqlAst.Arg(null, expr());
+    }
+
+    private SqlAst.@com.legend.base.Nullable Ident tableAlias() {
+        SqlAst.Ident alias = null;
+        if (acceptWord("as")) {
+            alias = ident(expectName());
+        } else if (isName(peek()) && !isKeyword(peek())) {
+            alias = ident(next());
+        }
+        if (alias != null && peek().kind() == Kind.LPAREN) {
+            throw unsupported("column alias lists in FROM are");
+        }
+        return alias;
+    }
+
+    // ------------------------------------------------------------------ expressions
+
+    /** A value expression (Postgres's {@code a_expr}). */
+    private SqlAst.Expr expr() {
+        return or();
+    }
+
+    private SqlAst.Expr or() {
+        SqlAst.Expr left = and();
+        while (peek().is("or")) {
+            Token op = next();
+            left = new SqlAst.Binary(SqlAst.BinaryOp.OR, left, and(), op.pos());
+        }
+        return left;
+    }
+
+    private SqlAst.Expr and() {
+        SqlAst.Expr left = not();
+        while (peek().is("and")) {
+            Token op = next();
+            left = new SqlAst.Binary(SqlAst.BinaryOp.AND, left, not(), op.pos());
+        }
+        return left;
+    }
+
+    private SqlAst.Expr not() {
+        if (peek().is("not")) {
+            Token op = next();
+            return new SqlAst.Unary(SqlAst.UnaryOp.NOT, not(), op.pos());
+        }
+        return is();
+    }
+
+    private SqlAst.Expr is() {
+        SqlAst.Expr left = comparison();
+        while (true) {
+            Token t = peek();
+            if (t.is("isnull") || t.is("notnull")) {
+                at++;
+                left = new SqlAst.IsNull(left, t.is("notnull"), t.pos());
+            } else if (t.is("is")) {
+                at++;
+                boolean negated = acceptWord("not");
+                if (acceptWord("null")) {
+                    left = new SqlAst.IsNull(left, negated, t.pos());
+                } else if (acceptWord("true")) {
+                    left = new SqlAst.IsTruth(left, SqlAst.Truth.TRUE, negated, t.pos());
+                } else if (acceptWord("false")) {
+                    left = new SqlAst.IsTruth(left, SqlAst.Truth.FALSE, negated, t.pos());
+                } else if (acceptWord("unknown")) {
+                    left = new SqlAst.IsTruth(left, SqlAst.Truth.UNKNOWN, negated, t.pos());
+                } else if (acceptWord("distinct")) {
+                    expectWord("from");
+                    left = new SqlAst.IsDistinct(left, comparison(), negated, t.pos());
+                } else {
+                    throw unexpected();
+                }
+            } else {
+                return left;
+            }
+        }
+    }
+
+    private SqlAst.Expr comparison() {
+        SqlAst.Expr left = predicate();
+        SqlAst.BinaryOp op = comparisonOp(peek());
+        if (op == null) {
+            return left;
+        }
+        Token t = next();
+        if (peek().is("any") || peek().is("some") || peek().is("all")) {
+            throw unsupported("quantified comparisons (ANY, SOME, ALL) are");
+        }
+        SqlAst.Expr result = new SqlAst.Binary(op, left, predicate(), t.pos());
+        if (comparisonOp(peek()) != null) {
+            // Postgres's comparison operators do not associate: a < b < c is a syntax error there too
+            throw unexpected();
+        }
+        return result;
+    }
+
+    private static SqlAst.@com.legend.base.Nullable BinaryOp comparisonOp(Token t) {
+        if (t.kind() != Kind.OP) {
+            return null;
+        }
+        return switch (t.text()) {
+            case "=" -> SqlAst.BinaryOp.EQ;
+            case "<>", "!=" -> SqlAst.BinaryOp.NE;
+            case "<" -> SqlAst.BinaryOp.LT;
+            case "<=" -> SqlAst.BinaryOp.LE;
+            case ">" -> SqlAst.BinaryOp.GT;
+            case ">=" -> SqlAst.BinaryOp.GE;
+            default -> null;
+        };
+    }
+
+    /** {@code [NOT] BETWEEN | IN | LIKE | ILIKE | SIMILAR TO} over the "other operators" level. */
+    private SqlAst.Expr predicate() {
+        SqlAst.Expr left = concat();
+        Token t = peek();
+        boolean negated = false;
+        if (t.is("not") && (peekAt(1).is("between") || peekAt(1).is("in") || peekAt(1).is("like")
+                || peekAt(1).is("ilike") || peekAt(1).is("similar"))) {
+            negated = true;
+            at++;
+            t = peek();
+        }
+        if (t.is("between")) {
+            at++;
+            if (peek().is("symmetric") || peek().is("asymmetric")) {
+                throw unsupported("BETWEEN SYMMETRIC is");
+            }
+            SqlAst.Expr low = concat();
+            expectWord("and");
+            return new SqlAst.Between(left, low, concat(), negated, t.pos());
+        }
+        if (t.is("in")) {
+            at++;
+            expect(Kind.LPAREN);
+            if (peek().is("select") || peek().is("with") || peek().is("values")) {
+                throw unsupported("subqueries are");
+            }
+            List<SqlAst.Expr> values = new ArrayList<>();
+            do {
+                values.add(expr());
+            } while (accept(Kind.COMMA));
+            expect(Kind.RPAREN);
+            return new SqlAst.InList(left, values, negated, t.pos());
+        }
+        if (t.is("like") || t.is("ilike")) {
+            at++;
+            SqlAst.Expr pattern = concat();
+            SqlAst.Expr escape = acceptWord("escape") ? concat() : null;
+            return new SqlAst.Like(left, pattern, escape, negated, t.is("ilike"), t.pos());
+        }
+        if (t.is("similar")) {
+            throw unsupported("SIMILAR TO is");
+        }
+        return left;
+    }
+
+    private SqlAst.Expr concat() {
+        SqlAst.Expr left = additive();
+        while (peek().isOp("||")) {
+            Token op = next();
+            left = new SqlAst.Binary(SqlAst.BinaryOp.CONCAT, left, additive(), op.pos());
+        }
+        return left;
+    }
+
+    private SqlAst.Expr additive() {
+        SqlAst.Expr left = multiplicative();
+        while (peek().isOp("+") || peek().isOp("-")) {
+            Token op = next();
+            left = new SqlAst.Binary(op.text().equals("+") ? SqlAst.BinaryOp.PLUS : SqlAst.BinaryOp.MINUS, left,
+                    multiplicative(), op.pos());
+        }
+        return left;
+    }
+
+    private SqlAst.Expr multiplicative() {
+        SqlAst.Expr left = unary();
+        while (peek().isOp("*") || peek().isOp("/") || peek().isOp("%")) {
+            Token op = next();
+            SqlAst.BinaryOp kind = switch (op.text()) {
+                case "*" -> SqlAst.BinaryOp.TIMES;
+                case "/" -> SqlAst.BinaryOp.DIVIDE;
+                default -> SqlAst.BinaryOp.MODULO;
+            };
+            left = new SqlAst.Binary(kind, left, unary(), op.pos());
+        }
+        return left;
+    }
+
+    private SqlAst.Expr unary() {
+        if (peek().isOp("-") || peek().isOp("+")) {
+            Token op = next();
+            return new SqlAst.Unary(op.text().equals("-") ? SqlAst.UnaryOp.MINUS : SqlAst.UnaryOp.PLUS, unary(),
+                    op.pos());
+        }
+        return postfix();
+    }
+
+    private SqlAst.Expr postfix() {
+        SqlAst.Expr e = primary();
+        while (true) {
+            if (peek().isOp("::")) {
+                Token op = next();
+                e = new SqlAst.Cast(e, typeName(), op.pos());
+            } else if (peek().kind() == Kind.LBRACKET) {
+                throw unsupported("array subscripts are");
+            } else if (peek().is("at") && (peekAt(1).is("time") || peekAt(1).is("local"))) {
+                throw unsupported("AT TIME ZONE is");
+            } else if (peek().is("collate")) {
+                throw unsupported("COLLATE is");
+            } else {
+                return e;
+            }
+        }
+    }
+
+    private SqlAst.Expr primary() {
+        Token t = peek();
+        switch (t.kind()) {
+            case INTEGER -> {
+                at++;
+                return new SqlAst.IntegerLit(new BigInteger(t.text()), t.pos());
+            }
+            case NUMERIC -> {
+                at++;
+                return new SqlAst.NumericLit(new BigDecimal(t.text()), t.pos());
+            }
+            case STRING -> {
+                at++;
+                return new SqlAst.StringLit(t.text(), t.pos());
+            }
+            case PARAM -> {
+                at++;
+                return new SqlAst.Param(Integer.parseInt(t.text()), t.pos());
+            }
+            case LPAREN -> {
+                at++;
+                if (peek().is("select") || peek().is("with") || peek().is("values")) {
+                    throw unsupported("subqueries are");
+                }
+                SqlAst.Expr inner = expr();
+                if (peek().kind() == Kind.COMMA) {
+                    throw unsupported("row constructors are");
+                }
+                expect(Kind.RPAREN);
+                return inner;
+            }
+            case QUOTED_IDENT -> {
+                return nameOrCall();
+            }
+            case IDENT -> {
+                return keywordOrName(t);
+            }
+            default -> throw unexpected();
+        }
+    }
+
+    private SqlAst.Expr keywordOrName(Token t) {
+        String word = t.text().toLowerCase(Locale.ROOT);
+        switch (word) {
+            case "true", "false" -> {
+                at++;
+                return new SqlAst.BooleanLit(word.equals("true"), t.pos());
+            }
+            case "null" -> {
+                at++;
+                return new SqlAst.NullLit(t.pos());
+            }
+            case "case" -> {
+                return caseExpr();
+            }
+            case "cast" -> {
+                at++;
+                expect(Kind.LPAREN);
+                SqlAst.Expr operand = expr();
+                expectWord("as");
+                SqlAst.TypeName type = typeName();
+                expect(Kind.RPAREN);
+                return new SqlAst.Cast(operand, type, t.pos());
+            }
+            case "exists" -> throw unsupported("EXISTS subqueries are");
+            case "array" -> throw unsupported("ARRAY constructors are");
+            case "interval" -> throw unsupported("INTERVAL constants are");
+            case "row" -> throw unsupported("ROW constructors are");
+            default -> {
+            }
+        }
+        if (VALUE_FUNCTIONS.contains(word)) {
+            at++;
+            if (peek().kind() == Kind.LPAREN) {
+                throw unsupported(word.toUpperCase(Locale.ROOT) + " with a precision is");
+            }
+            return new SqlAst.FunctionCall(List.of(new SqlAst.Ident(word, false, t.pos())), List.of(), false, false,
+                    t.pos());
+        }
+        // a typed constant: type 'string' (DATE '2024-01-31', TIMESTAMP '2024-01-31 10:00:00')
+        if (peekAt(1).kind() == Kind.STRING && !RESERVED.contains(word)) {
+            at++;
+            String value = next().text();
+            return new SqlAst.TypedLit(new SqlAst.TypeName(word, List.of(), t.pos()), value, t.pos());
+        }
+        if ((word.equals("timestamp") || word.equals("time")) && peekAt(1).is("with") || peekAt(1).is("without")
+                && (word.equals("timestamp") || word.equals("time"))) {
+            SqlAst.TypeName type = typeName();
+            if (peek().kind() != Kind.STRING) {
+                throw unexpected();
+            }
+            return new SqlAst.TypedLit(type, next().text(), t.pos());
+        }
+        if (RESERVED.contains(word)) {
+            throw unexpected();
+        }
+        if (TYPE_FUNC_NAME.contains(word) && peekAt(1).kind() != Kind.LPAREN) {
+            throw unexpected();
+        }
+        return nameOrCall();
+    }
+
+    /** A column reference ({@code a}, {@code t.a}) or a function call ({@code f(...)}, {@code s.f(...)}). */
+    private SqlAst.Expr nameOrCall() {
+        Token first = peek();
+        List<SqlAst.Ident> name = new ArrayList<>();
+        name.add(ident(next()));
+        while (peek().kind() == Kind.DOT) {
+            at++;
+            if (peek().isOp("*")) {
+                throw unsupported("\"" + first.text() + ".*\" outside a select list is");
+            }
+            name.add(ident(expectName()));
+        }
+        if (peek().kind() != Kind.LPAREN) {
+            return new SqlAst.ColumnRef(name, first.pos());
+        }
+        at++;
+        boolean distinct = false;
+        boolean star = false;
+        List<SqlAst.Expr> args = new ArrayList<>();
+        if (peek().isOp("*") && peekAt(1).kind() == Kind.RPAREN) {
+            at++;
+            star = true;
+        } else if (peek().kind() != Kind.RPAREN) {
+            if (acceptWord("distinct")) {
+                distinct = true;
+            } else {
+                acceptWord("all");
+            }
+            if (peek().is("variadic")) {
+                throw unsupported("VARIADIC arguments are");
+            }
+            do {
+                if (isName(peek()) && peekAt(1).isOp("=>")) {
+                    throw unsupported("named arguments to scalar functions are");
+                }
+                args.add(expr());
+            } while (accept(Kind.COMMA));
+            if (peek().is("order")) {
+                throw unsupported("ORDER BY inside an aggregate is");
+            }
+        }
+        expect(Kind.RPAREN);
+        if (peek().is("within")) {
+            throw unsupported("WITHIN GROUP is");
+        }
+        if (peek().is("filter")) {
+            throw unsupported("FILTER (WHERE ...) is");
+        }
+        if (peek().is("over")) {
+            throw unsupported("window functions (OVER) are");
+        }
+        return new SqlAst.FunctionCall(name, args, distinct, star, first.pos());
+    }
+
+    private SqlAst.Expr caseExpr() {
+        SqlAst.Pos pos = expectWord("case").pos();
+        SqlAst.Expr operand = peek().is("when") ? null : expr();
+        List<SqlAst.When> whens = new ArrayList<>();
+        while (acceptWord("when")) {
+            SqlAst.Expr condition = expr();
+            expectWord("then");
+            whens.add(new SqlAst.When(condition, expr()));
+        }
+        if (whens.isEmpty()) {
+            throw unexpected();
+        }
+        SqlAst.Expr otherwise = acceptWord("else") ? expr() : null;
+        expectWord("end");
+        return new SqlAst.Case(operand, whens, otherwise, pos);
+    }
+
+    /** A type name: its words ({@code double precision}, {@code timestamp with time zone}) and its modifiers
+     *  ({@code numeric(10,2)}); an array type is refused. */
+    private SqlAst.TypeName typeName() {
+        Token first = peek();
+        StringBuilder name = new StringBuilder();
+        if (first.kind() == Kind.QUOTED_IDENT) {
+            name.append(next().text());
+        } else {
+            String word = expectWord().toLowerCase(Locale.ROOT);
+            name.append(word);
+            switch (word) {
+                case "double" -> name.append(' ').append(expectWord("precision").text().toLowerCase(Locale.ROOT));
+                case "character", "char" -> {
+                    if (acceptWord("varying")) {
+                        name.append(" varying");
+                    }
+                }
+                default -> {
+                }
+            }
+        }
+        List<Integer> modifiers = new ArrayList<>();
+        if (accept(Kind.LPAREN)) {
+            do {
+                Token n = expect(Kind.INTEGER);
+                modifiers.add(Integer.parseInt(n.text()));
+            } while (accept(Kind.COMMA));
+            expect(Kind.RPAREN);
+        }
+        String base = name.toString();
+        if ((base.equals("timestamp") || base.equals("time")) && (peek().is("with") || peek().is("without"))) {
+            name.append(' ').append(next().text().toLowerCase(Locale.ROOT));
+            expectWord("time");
+            expectWord("zone");
+            name.append(" time zone");
+        }
+        if (peek().kind() == Kind.LBRACKET || peek().is("array")) {
+            throw unsupported("array types are");
+        }
+        return new SqlAst.TypeName(name.toString(), modifiers, first.pos());
+    }
+
+    // ------------------------------------------------------------------ names
+
+    private List<SqlAst.Ident> qualifiedName() {
+        List<SqlAst.Ident> name = new ArrayList<>();
+        name.add(ident(expectName()));
+        while (accept(Kind.DOT)) {
+            name.add(ident(expectName()));
+        }
+        return name;
+    }
+
+    /** An alias after {@code AS}: any identifier, key words included (Postgres's {@code ColLabel}). */
+    private SqlAst.Ident label() {
+        Token t = peek();
+        if (t.kind() == Kind.IDENT || t.kind() == Kind.QUOTED_IDENT) {
+            return ident(next());
+        }
+        throw unexpected();
+    }
+
+    /** An alias without {@code AS}: an identifier that is no reserved key word. */
+    private boolean isBareLabel(Token t) {
+        return t.kind() == Kind.QUOTED_IDENT || t.kind() == Kind.IDENT && !isKeyword(t);
+    }
+
+    private static boolean isKeyword(Token t) {
+        if (t.kind() != Kind.IDENT) {
+            return false;
+        }
+        String word = t.text().toLowerCase(Locale.ROOT);
+        return RESERVED.contains(word) || TYPE_FUNC_NAME.contains(word);
+    }
+
+    private static boolean isJoinWord(Token t) {
+        return t.is("join") || t.is("inner") || t.is("left") || t.is("right") || t.is("full") || t.is("cross")
+                || t.is("natural");
+    }
+
+    /** An identifier usable as a name: quoted, or unquoted and not reserved. */
+    private static boolean isName(Token t) {
+        return t.kind() == Kind.QUOTED_IDENT
+                || t.kind() == Kind.IDENT && !RESERVED.contains(t.text().toLowerCase(Locale.ROOT));
+    }
+
+    private static SqlAst.Ident ident(Token t) {
+        return new SqlAst.Ident(t.text(), t.kind() == Kind.QUOTED_IDENT, t.pos());
+    }
+
+    private Token expectName() {
+        Token t = peek();
+        if (isName(t)) {
+            at++;
+            return t;
+        }
+        throw unexpected();
+    }
+
+    // ------------------------------------------------------------------ tokens
+
+    private Token peek() {
+        return tokens.get(at);
+    }
+
+    private Token peekAt(int ahead) {
+        return tokens.get(Math.min(at + ahead, tokens.size() - 1));
+    }
+
+    private Token next() {
+        Token t = tokens.get(at);
+        if (t.kind() != Kind.EOF) {
+            at++;
+        }
+        return t;
+    }
+
+    private boolean accept(Kind kind) {
+        if (peek().kind() == kind) {
+            at++;
+            return true;
+        }
+        return false;
+    }
+
+    private Token expect(Kind kind) {
+        if (peek().kind() == kind) {
+            return next();
+        }
+        throw unexpected();
+    }
+
+    private boolean acceptWord(String word) {
+        if (peek().is(word)) {
+            at++;
+            return true;
+        }
+        return false;
+    }
+
+    private Token expectWord(String word) {
+        if (peek().is(word)) {
+            return next();
+        }
+        throw unexpected();
+    }
+
+    private String expectWord() {
+        if (peek().kind() == Kind.IDENT) {
+            return next().text();
+        }
+        throw unexpected();
+    }
+
+    private SqlSyntaxException unexpected() {
+        Token t = peek();
+        if (t.kind() == Kind.EOF) {
+            return new SqlSyntaxException("syntax error at end of input", t.pos());
+        }
+        return new SqlSyntaxException("syntax error at or near \"" + t.text() + "\"", t.pos());
+    }
+
+    private SqlSyntaxException unsupported(String what) {
+        return SqlSyntaxException.unsupported(what + " not supported yet", peek().pos());
+    }
+
+    private SqlSyntaxException error(String message) {
+        return new SqlSyntaxException(message, peek().pos());
+    }
+}
