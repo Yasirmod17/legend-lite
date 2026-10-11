@@ -32,6 +32,7 @@ import { modelRequestBody, type AssociationAction, type ClassAction, type DataSp
 import type { PrintStyle } from '../../engine-client/src/pure-v1.ts';
 import { relationColumns, type Plan, type PlanColumn } from '../../engine-client/src/relation-type.ts';
 import type { SeedTable, TableSeed } from '../../engine-client/src/model-data.ts';
+import type { PlannerWorker, RequestBody, Response } from './planner-protocol.ts';
 
 /** The subset of TeaVM's module surface this file uses. */
 interface TeavmModule {
@@ -96,6 +97,12 @@ export interface LitePlannerOptions {
    * differential harnesses run the module in-thread.
    */
   readonly workerUrl?: string;
+  /**
+   * Run the module on a worker the HOST makes: one that answers planner-protocol.ts's messages, as planner-worker.ts
+   * does in a tab -- Python's headless host answers each with the native library's function of the same name
+   * (docs/DATACUBE_HEADLESS_PYTHON_DESIGN_2026_10_11.md §3). Given, it is used instead of a `Worker` from `workerUrl`.
+   */
+  readonly worker?: () => PlannerWorker;
 }
 
 /**
@@ -118,7 +125,7 @@ export class PlannerUnavailableError extends Error {
 /** What a planner and the planners `withModel` made from it share. */
 interface Transport {
   module: Promise<TeavmModule> | undefined;
-  worker: Worker | undefined;
+  worker: PlannerWorker | undefined;
   readonly pending: Map<number, { resolve(answer: string): void; reject(e: unknown): void }>;
   nextId: number;
   /** Which module holds the models held: one more each time a module, or a worker with its own, starts (a handle
@@ -161,28 +168,27 @@ export class LitePlanner implements Planner, TableModels, ModelWriter {
 
   /** True when the module should run off the main thread. */
   #useWorker(): boolean {
-    return this.#options.workerUrl !== undefined
-      && typeof Worker !== 'undefined';
+    return this.#options.worker !== undefined
+      || (this.#options.workerUrl !== undefined && typeof Worker !== 'undefined');
   }
 
-  #ensureWorker(): Worker {
+  #ensureWorker(): PlannerWorker {
     if (this.#t.worker) return this.#t.worker;
-    const w = new Worker(this.#options.workerUrl!, { type: 'module' });
+    const w = this.#options.worker?.()
+      ?? (new Worker(this.#options.workerUrl!, { type: 'module' }) as unknown as PlannerWorker);
     // its module is its own: none of the models held before are held by it
     this.#t.generation += 1;
-    w.onmessage = (e: MessageEvent<{
-      id: number; ok: boolean; answer?: string; error?: string;
-    }>) => {
+    w.onmessage = (e: { readonly data: Response }) => {
       const waiting = this.#t.pending.get(e.data.id);
       if (!waiting) return;
       this.#t.pending.delete(e.data.id);
-      if (e.data.ok) waiting.resolve(e.data.answer ?? '');
+      if (e.data.ok) waiting.resolve(e.data.answer);
       else {
         waiting.reject(new PlannerUnavailableError(
           `the planner worker failed: ${e.data.error}`));
       }
     };
-    w.onerror = (e: ErrorEvent) => {
+    w.onerror = (e: { readonly message: string }) => {
       // A worker that dies takes every in-flight request with it, and
       // leaving them pending would hang the grid rather than fail it.
       const dead = new PlannerUnavailableError(
@@ -197,7 +203,7 @@ export class LitePlanner implements Planner, TableModels, ModelWriter {
     return w;
   }
 
-  #ask(request: Record<string, unknown>): Promise<string> {
+  #ask(request: RequestBody): Promise<string> {
     const w = this.#ensureWorker();
     const id = this.#t.nextId++;
     return new Promise<string>((resolve, reject) => {

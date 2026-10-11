@@ -10,6 +10,7 @@ import {
   PlannerUnavailableError,
   LitePlanner,
 } from '../src/lite-planner.ts';
+import type { PlannerWorker } from '../src/planner-protocol.ts';
 
 /** A module's OK answer: the SQL and its result type (here, typing nothing). */
 function ok(sql: string): string {
@@ -440,6 +441,17 @@ describe('LitePlanner off the main thread: the models its worker holds', () => {
     } finally {
       delete g.Worker;
     }
+  });
+
+  it('a worker its host makes is used, with no Worker in the global scope: the same messages, answered as a tab answers them', async () => {
+    FakeWorker.made = [];
+    assert.equal(g.Worker, undefined, 'no Worker here, as in an embedded engine');
+    const p = new LitePlanner({ model: 'm', runtime: 'r', worker: () => new FakeWorker() as unknown as PlannerWorker, cache: false });
+    assert.equal((await p.planText('a')).sql, 'SELECT 1');
+    assert.equal(FakeWorker.made.length, 1);
+    assert.deepEqual(FakeWorker.made[0]!.holds, ['m'], 'its model held on the host\'s worker');
+    p.dispose();
+    assert.equal(FakeWorker.made[0]!.terminated, true, 'and let go with the planner');
   });
 });
 
