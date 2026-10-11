@@ -45,10 +45,7 @@ public class Test_LegendLite_Databricks_GrammarFunctions_PCT extends PCTReportCo
             one("meta::pure::functions::collection::tests::map::testMapRelationshipFromManyToMany_Function_1__Boolean_1_", "instanceOf meta::pure::functions::collection::tests::map::model::M_Location"),
             one("meta::pure::functions::collection::tests::map::testMapRelationshipFromManyToOne_Function_1__Boolean_1_", "instanceOf meta::pure::functions::collection::tests::map::model::M_Address"),
             // HARNESS SERIALIZATION LOSS (as on DuckDB): the captured $address never reaches the serialized text
-            one("meta::pure::functions::collection::tests::map::testMapRelationshipFromOneToOne_Function_1__Boolean_1_", "\"unbound variable '$address'\""),
-            // Class.all() is a query over the platform's metamodel tables, which live in its in-process database
-            // (as on Postgres): a warehouse has no private in-memory instance
-            one("meta::pure::functions::collection::tests::getAll::testBasic_Function_1__Boolean_1_", "no in-memory instance of database type 'Databricks'")
+            one("meta::pure::functions::collection::tests::map::testMapRelationshipFromOneToOne_Function_1__Boolean_1_", "\"unbound variable '$address'\"")
     );
 
     public static Test suite() {

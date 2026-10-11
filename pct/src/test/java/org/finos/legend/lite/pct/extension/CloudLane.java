@@ -26,7 +26,10 @@ import java.util.Properties;
  *   <li>{@code c.property.<name>}: each driver property the session opens with (the credentials among them);</li>
  *   <li>the coordinates the runtime declares, which are not secret: Databricks {@code hostname} and
  *       {@code httpPath}; Snowflake {@code account}, {@code warehouse}, {@code region} and {@code database};
- *       BigQuery {@code projectId} and {@code defaultDataset}.</li>
+ *       BigQuery {@code projectId} and {@code defaultDataset};</li>
+ *   <li>{@code c.system.property.<name>}: each driver property the SYSTEM connection adds to the session's (the
+ *       platform's system database for the engine, {@link #openSystem}): Snowflake's {@code schema}, where its
+ *       temporary tables live; BigQuery's {@code EnableSession}, without which it makes no temporary table.</li>
  * </ul>
  *
  * A missing file or key is refused by name, never defaulted. One session per test JVM, opened at the first test and
@@ -101,13 +104,7 @@ final class CloudLane {
         }
         if (session == null || session.isClosed()) {
             Properties p = properties();
-            Properties driver = new Properties();
-            String prefix = cloud.key + ".property.";
-            for (String name : p.stringPropertyNames()) {
-                if (name.startsWith(prefix)) {
-                    driver.setProperty(name.substring(prefix.length()), p.getProperty(name));
-                }
-            }
+            Properties driver = driverProperties(p, cloud.key + ".property.", new Properties());
             Connection opened;
             try {
                 opened = DriverManager.getConnection(required(p, cloud.key + ".url"), driver);
@@ -137,6 +134,29 @@ final class CloudLane {
                         throw e.getCause();
                     }
                 });
+    }
+
+    /**
+     * A NEW session on {@code cloud} for the platform's system database (closing it closes it, and the server drops its
+     * temporary tables). This harness gives the system connection the suite's own account and credentials -- its
+     * choice: a host configures its system connection apart -- with the system's own driver properties,
+     * {@code c.system.property.<name>}, added.
+     */
+    static synchronized Connection openSystem(Cloud cloud) throws SQLException {
+        Properties p = properties();
+        Properties driver = driverProperties(p, cloud.key + ".system.property.",
+                driverProperties(p, cloud.key + ".property.", new Properties()));
+        return DriverManager.getConnection(required(p, cloud.key + ".url"), driver);
+    }
+
+    /** {@code into} with each {@code prefix<name>} of {@code p} set as the driver property {@code <name>}. */
+    private static Properties driverProperties(Properties p, String prefix, Properties into) {
+        for (String name : p.stringPropertyNames()) {
+            if (name.startsWith(prefix)) {
+                into.setProperty(name.substring(prefix.length()), p.getProperty(name));
+            }
+        }
+        return into;
     }
 
     private static Properties properties() {

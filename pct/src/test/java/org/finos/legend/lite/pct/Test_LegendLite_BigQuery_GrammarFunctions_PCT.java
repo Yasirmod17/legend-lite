@@ -49,10 +49,7 @@ public class Test_LegendLite_BigQuery_GrammarFunctions_PCT extends PCTReportConf
             // only, measured)
             one("meta::pure::functions::string::tests::plus::testPlusInIterate_Function_1__Boolean_1_", "\"a fold reached BigQuery, which has no lambdas and no correlated recursion (WITH RECURSIVE is top-level only, measured)\""),
             // BIGQUERY'S OWN LIMIT: a date-time past BigQuery's range (years 1 to 9999) is refused
-            one("meta::pure::functions::lang::tests::compare::testDateCompare_Function_1__Boolean_1_", "\"BigQueryException during runQuery\nInput calculates to invalid datetime: 10999-01-01 0000:00:00\""),
-            // Class.all() reads the platform's metamodel tables, which live in its in-process database (as on
-            // Postgres): a warehouse has no private in-memory instance
-            one("meta::pure::functions::collection::tests::getAll::testBasic_Function_1__Boolean_1_", "\"no in-memory instance of database type 'BigQuery'\"")
+            one("meta::pure::functions::lang::tests::compare::testDateCompare_Function_1__Boolean_1_", "\"BigQueryException during runQuery\nInput calculates to invalid datetime: 10999-01-01 0000:00:00\"")
     );
 
     public static Test suite() {

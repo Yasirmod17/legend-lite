@@ -49,6 +49,23 @@ public final class Sessions {
         Session open(Target target, com.legend.compiler.element.ModelContext ctx);
     }
 
+    /** Opens a session on a system connection: the HOST's to configure, apart from every runtime's (the platform holds
+     *  no server credential, C3b) -- a server engine's system database lives in it ({@link SystemDatabase}). */
+    @FunctionalInterface
+    public interface Opener {
+        Connection open() throws SQLException;
+    }
+
+    /** Does {@code type} have a private in-process instance ({@link #openPrivate})? A server engine has none: its
+     *  system database is on a system connection the host configures ({@link Opener}). */
+    public static boolean inProcess(DatabaseType type) {
+        return switch (type) {
+            case H2, DuckDB, SQLite -> true;
+            case Postgres, DB2, MemSQL, Sybase, SybaseIQ, Composite, SqlServer, Hive, Snowflake, Presto, Trino,
+                 BigQuery, Redshift, Databricks, Spanner, Athena, Oracle, ClickHouse, Aurora, MariaDB, MySQL -> false;
+        };
+    }
+
     /** A caller's own session: checked against the target's database, never closed here. */
     public static Source given(Connection connection) {
         return (target, ctx) -> {

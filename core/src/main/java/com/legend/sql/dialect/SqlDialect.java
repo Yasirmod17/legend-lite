@@ -28,6 +28,14 @@ public interface SqlDialect {
         return java.util.List.of();
     }
 
+    /** The statements that make {@code table} (TEMPORARY) a table only this session sees, holding {@code rows} (null:
+     *  none) and only read after (a server engine's system database, exec.SystemDatabase). Default: the table, then
+     *  one INSERT of its rows -- this interface's own DDL and DML renders. */
+    default java.util.List<String> sessionTable(com.legend.sql.SqlDdl.CreateTable table,
+            com.legend.sql.SqlDml.@com.legend.base.Nullable InsertValues rows) {
+        return rows == null ? java.util.List.of(render(table)) : java.util.List.of(render(table), render(rows));
+    }
+
     /** A STORED name — a table, schema or column as its database holds it, or a quote-bearing declaration
      *  ({@code "date"}) that is its own spelling — as this dialect's queries reference it: a seed writing the
      *  table and a query reading it spell one name (C3c). */

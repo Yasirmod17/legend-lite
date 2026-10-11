@@ -786,6 +786,17 @@ and `tools/mariadb/` (the server, as a Bazel repository); `MODULE.bazel`, `tools
 test-only); guard edits, each with its dated reason: `DialectBoundaryTest` (a JDBC URL), `TenetRatchetTest` (one
 accessor), `SqlTextRatchetTest` (one session read); `gates/BUILD.bazel` puts the MariaDB lanes in `heavy`;
 `tools/census/RenderCensus.java` renders MariaDB.
+**2026-10-11, the system database on a server engine** (the user's design; the plan's §14): a query reading the
+metamodel store on a server runs on the HOST's system connection for that engine, configured apart from every runtime
+(`ExecuteOptions.withSystemConnections`, `Sessions.Opener`), checked to be the runtime's engine, seeded once per graph
+with every table as session-private temporary tables named `metamodel_<table>` and read through the table renames.
+Edits: `exec/SystemDatabase.java` (`routeFor`, `Route`), `exec/Sessions.java` (`Opener`, `inProcess`),
+`ExecuteOptions.java`, `StatementExecutor.java` (`withSystemRoute`), `setup/Ddl.java` (`systemTable`,
+`metamodelTemporary`), `setup/RowLoad.java` (`casts`), `sql/dialect/SqlDialect.java` (`sessionTable`),
+`AnsiSqlRenderer.java` (`ddlNullability`), `Databricks.java` (a temporary view; DDL spellings), `BigQuery.java`
+(`CREATE TEMP TABLE`); the PCT harness (`PctBackend.systemConnections`, `CloudLane.openSystem`, the
+`c.system.property.*` keys). `testBasic` unpinned on Snowflake (35), Databricks (41), BigQuery (82), MariaDB (61) and
+Postgres (verified by CI only: the embedded Postgres refuses root); it passes on MySQL.
 **Next** (the user's order): MySQL, Trino, ClickHouse, MongoDB, Elasticsearch, SingleStore (the plan's §2).
 
 ## Rules between sessions

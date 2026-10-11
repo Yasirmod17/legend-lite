@@ -91,11 +91,11 @@ measured on the account before it is trusted (execution beats documentation).
   (`StorelessRuntime.declaring`).
 - **The suites**: `Test_LegendLite_<Cloud>_<Suite>Functions_PCT`, fifteen classes with EMPTY expected-failure lists:
   the first run on each account fills them.
-- **Databricks: done** (2026-10-11, §8): the dialect, all five suites green on the account with 42 pinned rows of
+- **Databricks: done** (2026-10-11, §8): the dialect, all five suites green on the account with 41 pinned rows of
   1,250 tests, the census at 0 divergence (no ceiling raised).
-- **Snowflake: done** (2026-10-11, §9): the dialect, all five suites green on the account with 36 pinned rows of
+- **Snowflake: done** (2026-10-11, §9): the dialect, all five suites green on the account with 35 pinned rows of
   1,250 tests, the census at 0 divergence (no ceiling raised).
-- **BigQuery: done** (2026-10-11, §10): the dialect, all five suites green on the account with 83 pinned rows of
+- **BigQuery: done** (2026-10-11, §10): the dialect, all five suites green on the account with 82 pinned rows of
   1,250 tests, the census at 0 divergence (no ceiling raised).
 - **SQLite: done** (2026-10-11, §12): the dialect, all five suites green in-process with 52 pinned rows of 1,249
   tests, the census at 0 divergence (no ceiling raised).
@@ -115,6 +115,9 @@ c.property.<name>=<value>
 databricks.hostname=...        databricks.httpPath=...
 snowflake.account=...          snowflake.warehouse=...   snowflake.region=...   snowflake.database=...
 bigquery.projectId=...         bigquery.defaultDataset=...
+# the SYSTEM connection's own driver properties, added to the session's (§14; not secret)
+snowflake.system.property.schema=INTEGRATION_SCHEMA1
+bigquery.system.property.EnableSession=1
 ```
 
 A missing file or key is refused by name. Examples of the URL and properties, to confirm on the account:
@@ -222,19 +225,20 @@ runtime fallback between engines) and the bundle budget.
 
 ## 8. Databricks, measured (2026-10-11)
 
-**Result:** all five suites pass on the account, each failure pinned by its message: 1,250 tests, 42 pinned (Grammar
-10 of 137, Essential 26 of 346, Relation 5 of 469, Standard 1 of 205, Unclassified 0 of 93), the census divergence 0
+**Result:** all five suites pass on the account, each failure pinned by its message: 1,250 tests, 41 pinned (Grammar
+9 of 137, Essential 26 of 346, Relation 5 of 469, Standard 1 of 205, Unclassified 0 of 93), the census divergence 0
 in every suite. Burned down in six runs from 185 failing (the first run: Grammar 10, Essential 77, Relation 77,
 Standard 18, Unclassified 3); 44 -> 42 later the same day, when Jaro-Winkler was written exactly (§9; Unclassified
-re-run on the account, 93 green). A run of the five is about 10.5 minutes with three suites at a time.
+re-run on the account, 93 green); 42 -> 41 when the system database came to the server (§14; Grammar re-run on the
+account, 137 green). A run of the five is about 10.5 minutes with three suites at a time.
 
-What the 42 are: 30 are the platform's own, pinned on the DuckDB lane by the same cause (instance identity, fold name
+What the 41 are: 30 are the platform's own, pinned on the DuckDB lane by the same cause (instance identity, fold name
 resolution, error positions and messages, the 0-based `indexOf`, `testBigFloatAbs`, the class `toString`, the
-variant-array `joinStrings`, the ExtendedInteger type, the harness's lost `$address`); the other 14 are Databricks'
+variant-array `joinStrings`, the ExtendedInteger type, the harness's lost `$address`); the other 11 are Databricks'
 own, each measured: a date-time past Spark's range overflows (4), the driver gives a BC date-time back as the
 Timestamp's text with its sign lost (1), no as-of join and no correlated subquery in a
 join condition to emulate one (4), the lowering's subquery inside a higher-order function (1; Postgres refuses it
-too), the moments computed in double precision (1), and `Class.all()` over the platform's in-process metamodel (1).
+too), and the moments computed in double precision (1).
 
 The account: a Databricks SQL warehouse (`dbsql_version` 2026.39); the JDBC driver (databricks-jdbc 3.4.3) reports the
 product `SparkSQL` (`Sessions.jdbcProduct`). Every spelling in `core/.../sql/dialect/Databricks.java` was measured there
@@ -264,18 +268,18 @@ answer:
 
 ## 9. Snowflake, measured (2026-10-11)
 
-**Result:** all five suites pass on the account, each failure pinned by its message: 1,250 tests, 36 pinned (Grammar
-10 of 137, Essential 25 of 345, Relation 1 of 469, Standard 0 of 205, Unclassified 0 of 93), the census divergence 0
+**Result:** all five suites pass on the account, each failure pinned by its message: 1,250 tests, 35 pinned (Grammar
+9 of 137, Essential 25 of 345, Relation 1 of 469, Standard 0 of 205, Unclassified 0 of 93), the census divergence 0
 in every suite. Burned down in seven runs from 144 failing (the first run: Essential 70, Relation 35, Standard 34,
 Unclassified 5; Grammar's 10 pinned from the start); 40 -> 38 later the same day, when the comparator dedup's nested
 lambda was carried (below; Essential re-run on the account, 345 green); 38 -> 36 when Jaro-Winkler was written exactly
-(below; Unclassified re-run on the account, 93 green).
+(below; Unclassified re-run on the account, 93 green); 36 -> 35 when the system database came to the server (§14;
+Grammar re-run on the account, 137 green).
 
-What the 36 are: 34 are the platform's own, pinned on the DuckDB lane by the same cause (instance identity, fold name
+What the 35 are: 34 are the platform's own, pinned on the DuckDB lane by the same cause (instance identity, fold name
 resolution, error positions and messages, the 0-based `indexOf`, `testBigFloatAbs`, the class `toString`, the
 variant-array `joinStrings`, the ExtendedInteger type, the harness's lost `$address`, a date-time out of range); the
-other 2 are Snowflake's own, each measured: the driver's Timestamp drops a BC year's sign (1), and `Class.all()` over
-the platform's in-process metamodel (1).
+other 1 is Snowflake's own, measured: the driver's Timestamp drops a BC year's sign.
 
 The account: warehouse `INTEGRATION_WH1`, database `INTEGRATION_DB1`, key-pair login; the JDBC driver
 (snowflake-jdbc 4.4.0) reports the product `Snowflake` (`Sessions.jdbcProduct`), version 10.36. Every spelling in
@@ -318,20 +322,20 @@ BigQuery have no lambdas and keep their wall.
 
 ## 10. BigQuery, measured (2026-10-11)
 
-**Result:** all five suites pass on the account, each failure pinned by its message: 1,250 tests, 83 pinned (Grammar
-12 of 137, Essential 49 of 345, Relation 13 of 469, Standard 7 of 206, Unclassified 2 of 93), the census divergence 0
+**Result:** all five suites pass on the account, each failure pinned by its message: 1,250 tests, 82 pinned (Grammar
+11 of 137, Essential 49 of 345, Relation 13 of 469, Standard 7 of 206, Unclassified 2 of 93), the census divergence 0
 in every suite. Burned down in six runs from 347 failing (the first run: Essential 107, Grammar 31, Relation 112,
-Standard 75, Unclassified 22).
+Standard 75, Unclassified 22); 83 -> 82 when the system database came to the server (§14; Grammar re-run on the
+account, 137 green).
 
-What the 83 are: 34 are the platform's own, pinned on the DuckDB lane by the same cause (as on Snowflake); 2 are the
+What the 82 are: 34 are the platform's own, pinned on the DuckDB lane by the same cause (as on Snowflake); 2 are the
 portable carrier strategies' own, pinned on Postgres too (a filter's lambda parameter left unbound on a lambda-less
 dialect); 1 is the dialect's own gap, named (a lambda parameter over a JSON array carries no type, so its cast is a
-scalar CAST, refused on JSON); the other 46 are BigQuery's own limits, each measured: no MAP type (11), no lambdas
+scalar CAST, refused on JSON); the other 45 are BigQuery's own limits, each measured: no MAP type (11), no lambdas
 and no correlated recursion to fold with (10), no correlated derived table -- only an UNNEST correlates (8), no mode
 (6), an empty list of no element type (a bare NULL is an INT64, and UNNEST refuses it: 3), a date-time past years
 1 to 9999 (2), no Jaro-Winkler function (2), PERCENTILE_CONT over a window ascending only (1), a statement past the
-maximum query length (1), no minimal-fraction date format code (1), and
-`Class.all()` over the platform's in-process metamodel (1).
+maximum query length (1), and no minimal-fraction date format code (1).
 
 The account: project `legend-integration-testing`, a service-account key; the JDBC driver (Google's
 google-cloud-bigquery-jdbc 1.6.0, the shaded jar) reports the product `Google BigQuery` (`Sessions.jdbcProduct`).
@@ -464,14 +468,14 @@ from MariaDB's own Linux tarball (`@embedded_mariadb`, `tools/mariadb/`, the ser
 started once per test JVM on a free loopback port with its data in the test's temporary directory
 (`testing/.../EmbeddedMariaDb.java`). The driver is MariaDB Connector/J 3.5.10 (`@mariadb_jdbc`, LGPL, test-only).
 
-**Result:** all five suites pass on MariaDB, each failure pinned by its message: 1,249 tests, 62 pinned (Essential 33
-of 345, Grammar 11 of 137, Relation 13 of 469, Standard 3 of 205, Unclassified 2 of 93), the census divergence 0 in
-every suite (no ceiling raised).
+**Result:** all five suites pass on MariaDB, each failure pinned by its message: 1,249 tests, 61 pinned (Essential 33
+of 345, Grammar 10 of 137, Relation 13 of 469, Standard 3 of 205, Unclassified 2 of 93), the census divergence 0 in
+every suite (no ceiling raised); 62 -> 61 when the system database came to the server (§14; Grammar re-run, 137
+green).
 
-What the 62 are: 34 are the platform's own, pinned on the DuckDB lane by the same cause (6 of them instance
-identity); 2 are the portable carrier strategies' own (pinned on Postgres, BigQuery and SQLite too); 1 is a server
-database's (`getAll`'s in-memory metamodel instance, as on Postgres and the clouds). The other 25 are MariaDB's own
-limits, each measured:
+What the 61 are: 34 are the platform's own, pinned on the DuckDB lane by the same cause (6 of them instance
+identity); 2 are the portable carrier strategies' own (pinned on Postgres, BigQuery and SQLite too). The other 25
+are MariaDB's own limits, each measured:
 
 - GROUP_CONCAT, JSON_ARRAYAGG and a mode are no window functions (14): a windowed string aggregate (11) or mode (3);
 - a statement's memory (5): a Float's text canon written out in each of `format`'s arguments, or in each comparison
@@ -514,3 +518,46 @@ What differs from DuckDB, and the dialect's answer:
 The lanes run from a desk with `bazel test //pct:pct_mariadb`. Linux x86_64 only (the tarball's platform): on another
 platform the lanes are incompatible, not failing (`EMBEDDED_MARIADB_COMPATIBLE`). **MySQL** is next: its 8.4 server
 tarball, a sibling dialect where the two differ (its JSON functions and regular expressions).
+
+## 14. The system database on a server engine (2026-10-11)
+
+`Class.all()` (Grammar's `getAll::testBasic`) reads the platform's metamodel store, which lives in the graph's SYSTEM
+DATABASE (`exec/SystemDatabase.java`, the user's ruling of 2026-09-02): the metamodel rows in a database of their own,
+apart from every user connection, written once per graph, read-only after, of the same engine as the runtime (so each
+lane runs the metamodel queries in its own SQL). On DuckDB, H2 and SQLite it is a private in-memory instance. A server
+engine has none, so the test was pinned on every server lane ("no in-memory instance of database type ...").
+
+**The design (the user's, 2026-10-11): the same thing over a remote database.**
+
+- **A system connection, configured apart.** The host gives the platform a SYSTEM CONNECTION per engine
+  (`ExecuteOptions.withSystemConnections`, a `Sessions.Opener` per `DatabaseType`): the platform holds no server
+  credential, and nothing assumes the system connection is the runtime's server. A server engine with none is refused
+  by name. The opened session is checked to be the runtime's engine (`Sessions.check`), since the query is planned in
+  the runtime's dialect, and takes the dialect's session setup. The PCT harness gives it the lane's own server and
+  credentials, as its choice (`PctBackend.systemConnections`, `CloudLane.openSystem`): a NEW session, plus the
+  `c.system.property.*` driver properties (§4).
+- **Seeded once per graph, every table, as on DuckDB.** All 34 tables, on the graph's first metamodel query. A
+  per-table write is about 0.4-1 s on Snowflake and 1-3 s on Databricks (measured), so a graph's seed is under a
+  minute on Snowflake; only `testBasic` pays it on the cloud lanes.
+- **Session-private tables.** Each table is TEMPORARY, the system session's own: no other session sees it, two graphs
+  or two runs never collide, and the server drops it when the session ends, a crash included -- the private
+  instance's guarantees on a shared account (the Snowflake account is a shared integration database; nothing
+  permanent is created in it). A temporary table takes no schema on most servers, so each is named
+  `metamodel_<table>` (`Ddl.systemTable`) and the query reads it through its table renames (`SystemDatabase.Route`,
+  applied by the existing MIR rename before render).
+
+**Measured, per engine (what each server needed):**
+
+| Engine | Needed |
+|---|---|
+| all servers | no key and no length on these read-only copies (their rows are the ones the in-process engines load under both): Databricks refuses a key on a temporary table; MariaDB and MySQL refuse a key past 3,072 bytes (the store's `VARCHAR(1024)` keys in utf8mb4) and a row whose declared lengths pass 65,535 bytes; Snowflake and BigQuery enforce no key |
+| MariaDB, MySQL, BigQuery | each non-text cell CAST to its column's type (`RowLoad.casts`): MariaDB and MySQL take no `'true'` into a BOOLEAN, BigQuery no string into an INT64 or a BOOL; the dialect spells its own conversion |
+| Snowflake | a temporary table needs the session's current schema, and the session has none: `snowflake.system.property.schema` (a schema the role may create tables in) |
+| BigQuery | a temporary table exists only in a session: `bigquery.system.property.EnableSession=1` (the driver takes it as a property); `CREATE TEMP TABLE`, unqualified |
+| Databricks | a temporary TABLE is not read inside an `EXISTS` (`UC_COMMAND_NOT_SUPPORTED`, "Data source v2"; a scalar or `IN` subquery reads it): each system table is a `TEMPORARY VIEW` over its rows instead (`SqlDialect.sessionTable`, one statement, 0.2 s), each column cast to its type in the projection; Spark DDL spells an unbounded VARCHAR `STRING`, a BIT `BOOLEAN`, and a nullable column with no `NULL` |
+| MySQL | a temporary table cannot be read twice in one query ("Can't reopen table"): `testBasic` reads it once; a self-joining metamodel query would fail there by that message |
+
+**Result:** `testBasic` passes on Snowflake, Databricks, BigQuery, MariaDB and MySQL (each lane's Grammar re-run, every
+one green but MySQL's open list); its pin is gone from those lanes and from Postgres. **Postgres is not verified
+here**: the embedded Postgres refuses to start as root, and this session runs as root, so its lane runs only in CI.
+

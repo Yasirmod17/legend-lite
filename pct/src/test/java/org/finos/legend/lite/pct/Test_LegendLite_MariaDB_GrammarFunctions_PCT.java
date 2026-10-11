@@ -43,9 +43,6 @@ public class Test_LegendLite_MariaDB_GrammarFunctions_PCT extends PCTReportConfi
             one("meta::pure::functions::boolean::tests::equality::equal::testEqualPrimitiveExtension_Function_1__Boolean_1_", "\"unknown type 'meta::pure::functions::boolean::tests::equalitymodel::ExtendedInteger' in @meta::pure::functions::boolean::tests::equalitymodel::ExtendedInteger\""),
             one("meta::pure::functions::collection::tests::filter::testFilterInstance_Function_1__Boolean_1_", "Unknown table 'p' in WHERE\""),
             one("meta::pure::functions::collection::tests::map::testMapRelationshipFromOneToOne_Function_1__Boolean_1_", "\"unbound variable '$address'\""),
-            // A SERVER DATABASE (as on Postgres and the clouds): the harness's in-memory metamodel instance has no
-            // MariaDB form
-            one("meta::pure::functions::collection::tests::getAll::testBasic_Function_1__Boolean_1_", "\"no in-memory instance of database type 'MariaDB'\""),
             // MARIADB'S OWN LIMIT: a DATE or DATETIME is of the years 1000-9999 (a five-digit year has no value;
             // raised where an interval is added, a wrong comparison where a literal is one)
             one("meta::pure::functions::lang::tests::compare::testDateCompare_Function_1__Boolean_1_", "\"Assert failed\"")

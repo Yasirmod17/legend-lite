@@ -2247,17 +2247,14 @@ public final class BigQuery extends AnsiSqlRenderer {
     // DDL and DML (test fixtures)
     // ==================================================================
 
-    /** GoogleSQL DDL: no temporary table outside a session or script; a key is declared NOT ENFORCED. */
+    /** GoogleSQL DDL: a temporary table lives in a session (a connection opened with {@code EnableSession}; outside
+     *  one BigQuery refuses it, measured), unqualified; a key is declared NOT ENFORCED. */
     @Override
     public String render(com.legend.sql.SqlDdl ddl) {
         return switch (ddl) {
             case com.legend.sql.SqlDdl.CreateTable ct -> {
-                if (ct.temporary()) {
-                    throw new DialectCapability("a temporary table reached BigQuery, which creates one only inside a"
-                            + " session or a script");
-                }
-                StringBuilder sb = new StringBuilder("CREATE TABLE ").append(qualified(ct.schema(), ct.table()))
-                        .append(" (");
+                StringBuilder sb = new StringBuilder(ct.temporary() ? "CREATE TEMP TABLE " : "CREATE TABLE ")
+                        .append(qualified(ct.schema(), ct.table())).append(" (");
                 List<String> keys = new ArrayList<>();
                 for (int i = 0; i < ct.columns().size(); i++) {
                     com.legend.sql.SqlDdl.Column col = ct.columns().get(i);

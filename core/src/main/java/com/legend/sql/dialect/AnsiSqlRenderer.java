@@ -1504,7 +1504,7 @@ public class AnsiSqlRenderer implements SqlDialect {
                     first = false;
                     sb.append(ddlIdentifier(col.name(), col.declaredQuoted()))
                             .append(' ').append(ddlType(col.type()))
-                            .append(col.primaryKey() || col.notNull() ? " NOT NULL" : " NULL");
+                            .append(ddlNullability(col.primaryKey() || col.notNull()));
                 }
                 java.util.List<String> pks = ct.columns().stream()
                         .filter(com.legend.sql.SqlDdl.Column::primaryKey)
@@ -1583,6 +1583,11 @@ public class AnsiSqlRenderer implements SqlDialect {
 
     protected String ddlColumnSeparator() {
         return ", ";
+    }
+
+    /** A DDL column's nullability: {@code NOT NULL}, or the engine's explicit {@code NULL}. */
+    protected String ddlNullability(boolean notNull) {
+        return notNull ? " NOT NULL" : " NULL";
     }
 
     @Override

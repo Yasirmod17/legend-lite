@@ -29,13 +29,19 @@ import java.sql.SQLException;
  *
  * Session settings are the dialect's, applied at the platform's connection seam
  * ({@code SqlDialect.sessionSetup}, from {@code Compiler.dialectOf}); this only opens the connection.
+ *
+ * <p>A server lane is also the host of a SYSTEM CONNECTION ({@link #systemConnections}): where the platform's system
+ * database for that engine lives (a query reading the metamodel store runs there, apart from the user's session;
+ * exec.SystemDatabase). This harness gives it the lane's own server and credentials, as its choice; a host
+ * configures it apart. An in-process lane needs none (the platform opens its own private instance).
  */
 final class PctBackend {
 
     private PctBackend() {
     }
 
-    /** The lanes' databases: each one's declared type (the storeless runtime's connection) and its session. */
+    /** The lanes' databases: each one's declared type (the storeless runtime's connection), its session and, for a
+     *  server, its system connection. */
     private enum Lane {
         DUCKDB(DatabaseType.DuckDB) {
             @Override
@@ -60,10 +66,20 @@ final class PctBackend {
             Connection open() throws SQLException {
                 return DriverManager.getConnection(EmbeddedMariaDb.shared().jdbcUrl("pct"));
             }
+
+            @Override
+            Connection openSystem() throws SQLException {
+                return DriverManager.getConnection(EmbeddedMariaDb.shared().jdbcUrl("pct"));
+            }
         },
         MYSQL(DatabaseType.MySQL) {
             @Override
             Connection open() throws SQLException {
+                return DriverManager.getConnection(EmbeddedMySql.shared().jdbcUrl("pct"));
+            }
+
+            @Override
+            Connection openSystem() throws SQLException {
                 return DriverManager.getConnection(EmbeddedMySql.shared().jdbcUrl("pct"));
             }
         },
@@ -72,11 +88,21 @@ final class PctBackend {
             Connection open() throws SQLException {
                 return DriverManager.getConnection(EmbeddedPostgres.shared().jdbcUrl("postgres"));
             }
+
+            @Override
+            Connection openSystem() throws SQLException {
+                return DriverManager.getConnection(EmbeddedPostgres.shared().jdbcUrl("postgres"));
+            }
         },
         DATABRICKS(DatabaseType.Databricks) {
             @Override
             Connection open() throws SQLException {
                 return CloudLane.connect(CloudLane.Cloud.DATABRICKS);
+            }
+
+            @Override
+            Connection openSystem() throws SQLException {
+                return CloudLane.openSystem(CloudLane.Cloud.DATABRICKS);
             }
         },
         SNOWFLAKE(DatabaseType.Snowflake) {
@@ -84,11 +110,21 @@ final class PctBackend {
             Connection open() throws SQLException {
                 return CloudLane.connect(CloudLane.Cloud.SNOWFLAKE);
             }
+
+            @Override
+            Connection openSystem() throws SQLException {
+                return CloudLane.openSystem(CloudLane.Cloud.SNOWFLAKE);
+            }
         },
         BIGQUERY(DatabaseType.BigQuery) {
             @Override
             Connection open() throws SQLException {
                 return CloudLane.connect(CloudLane.Cloud.BIGQUERY);
+            }
+
+            @Override
+            Connection openSystem() throws SQLException {
+                return CloudLane.openSystem(CloudLane.Cloud.BIGQUERY);
             }
         };
 
@@ -99,6 +135,17 @@ final class PctBackend {
         }
 
         abstract Connection open() throws SQLException;
+
+        /** A NEW session for the platform's system database on this server (closing it closes it). An in-process
+         *  lane has none: asking is a harness bug. */
+        Connection openSystem() throws SQLException {
+            throw new IllegalStateException(this + " is in-process: the platform's system database is its own"
+                    + " private instance, on no system connection");
+        }
+
+        boolean inProcess() {
+            return com.legend.exec.Sessions.inProcess(type);
+        }
     }
 
     private static Lane lane() {
@@ -140,5 +187,12 @@ final class PctBackend {
     /** A session on this lane's database. */
     static Connection connect() throws SQLException {
         return lane().open();
+    }
+
+    /** The host's system connections: a server lane's own engine, opened by {@link Lane#openSystem}; none for an
+     *  in-process lane. */
+    static java.util.Map<DatabaseType, com.legend.exec.Sessions.Opener> systemConnections() {
+        Lane lane = lane();
+        return lane.inProcess() ? java.util.Map.of() : java.util.Map.of(lane.type, lane::openSystem);
     }
 }
