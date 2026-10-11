@@ -79,6 +79,9 @@ public final class SqlToPure {
     private final String rightRow;
     /** A subquery's row, in the {@code exists} and {@code map} that read an expression subquery. */
     private final String sub;
+    /** A window column's partition and window parameters: {@code {p, w, r | ...}}. */
+    private final String partition;
+    private final String window;
     private int fresh;
 
     private SqlToPure(Sources sources, Env env) {
@@ -90,6 +93,8 @@ public final class SqlToPure {
         this.leftRow = "a" + level;
         this.rightRow = "b" + level;
         this.sub = "s" + level;
+        this.partition = "p" + level;
+        this.window = "w" + level;
     }
 
     /** What a query level sees beyond its own FROM: the WITH queries in force, the enclosing query's scope and the
@@ -986,6 +991,8 @@ public final class SqlToPure {
                     having.pos());
         }
         Set<String> present = new HashSet<>(in.names());
+        Windowed windowed = windows(s, in, relation, present);
+        Scope scope = windowed.scope();
         List<Output> outputs = new ArrayList<>();
         Set<String> passed = new HashSet<>();
         for (SqlAst.SelectItem item : s.items()) {
@@ -1004,13 +1011,13 @@ public final class SqlToPure {
                         b.columns().forEach(c -> cols.add(c.col()));
                     }
                     for (Col c : cols) {
-                        outputs.add(passthrough(c, c.label(), passed, present, in));
+                        outputs.add(passthrough(c, c.label(), passed, present, scope));
                     }
                 }
-                case SqlAst.SelectExpr x -> outputs.add(output(x, in, passed, present));
+                case SqlAst.SelectExpr x -> outputs.add(output(x, scope, passed, present));
             }
         }
-        return assemble(s, in, relation, present, outputs);
+        return assemble(s, scope, windowed.relation(), present, outputs);
     }
 
     /** A query with GROUP BY or aggregates: keys and aggregates by groupBy (or aggregate), then HAVING, then as
@@ -1088,13 +1095,419 @@ public final class SqlToPure {
         for (Col c : byCanon.values()) {
             present.add(c.name());
         }
+        Windowed windowed = windows(s, g, relation, present);
         List<Output> outputs = new ArrayList<>();
         Set<String> passed = new HashSet<>();
         for (SqlAst.SelectItem item : s.items()) {
-            outputs.add(output((SqlAst.SelectExpr) item, g, passed, present));
+            outputs.add(output((SqlAst.SelectExpr) item, windowed.scope(), passed, present));
         }
-        return assemble(s, g, relation, present, outputs);
+        return assemble(s, windowed.scope(), windowed.relation(), present, outputs);
     }
+
+    // ------------------------------------------------------------------ windows
+
+    /** The relation with its window columns, and the scope in which each window call is its column. */
+    private record Windowed(ValueSpecification relation, Scope scope) {
+    }
+
+    /** A scope in which each window call is its column; everything else is {@code base}'s. */
+    private record WindowScope(Scope base, Map<SqlAst.Window, Col> calls) implements Scope {
+
+        @Override
+        public Col column(SqlAst.ColumnRef ref) {
+            return base.column(ref);
+        }
+
+        @Override
+        public @com.legend.base.Nullable Col grouped(SqlAst.Expr e) {
+            Col c = e instanceof SqlAst.Window w ? calls.get(w) : null;
+            return c != null ? c : base.grouped(e);
+        }
+
+        @Override
+        public @com.legend.base.Nullable String noAggregatesIn() {
+            return base.noAggregatesIn();
+        }
+    }
+
+    /** A window function's column: its {@code {p, w, r | ...}} (and an aggregate's reduce), its kind, and whether it
+     *  may be NULL. */
+    private record WindowColumn(LambdaFunction function, @com.legend.base.Nullable LambdaFunction reduce, Kind kind,
+            boolean nullable) {
+
+        ColSpec spec(String name) {
+            return new ColSpec(name, function, reduce, null);
+        }
+    }
+
+    /**
+     * The select list's and ORDER BY's window calls, each a column of {@code relation}: computed after WHERE (and
+     * after the grouping and HAVING), before the select list, in the order written. A partition key, a sort key or a
+     * function's argument that is not a column is computed first, as a column of its own; then
+     * {@code extend(over(...), ~column: {p, w, r | ...})}.
+     */
+    private Windowed windows(SqlAst.Select s, Scope scope, ValueSpecification relation, Set<String> present) {
+        List<SqlAst.Window> calls = new ArrayList<>();
+        Map<SqlAst.Window, String> named = new java.util.IdentityHashMap<>();
+        for (SqlAst.SelectItem item : s.items()) {
+            if (item instanceof SqlAst.SelectExpr x) {
+                windowCalls(x.expr(), calls);
+                if (x.expr() instanceof SqlAst.Window w) {
+                    SqlAst.Ident alias = x.alias();
+                    named.put(w, alias != null ? alias.text() : defaultName(w));
+                }
+            }
+        }
+        for (SqlAst.SortItem o : s.orderBy()) {
+            windowCalls(o.expr(), calls);
+        }
+        if (calls.isEmpty()) {
+            return new Windowed(relation, scope);
+        }
+        Map<SqlAst.Window, Col> columns = new java.util.IdentityHashMap<>();
+        ValueSpecification rel = relation;
+        for (SqlAst.Window w : calls) {
+            SqlAst.WindowSpec spec = windowSpec(w.spec(), s.windows());
+            List<ColSpec> computed = new ArrayList<>();
+            List<String> partitionKeys = new ArrayList<>();
+            for (SqlAst.Expr e : spec.partitionBy()) {
+                partitionKeys.add(windowKey(e, scope, present, computed).name());
+            }
+            List<ValueSpecification> sorts = new ArrayList<>();
+            Kind sortKind = null;
+            for (SqlAst.SortItem o : spec.orderBy()) {
+                Col key = windowKey(o.expr(), scope, present, computed);
+                sortKind = sortKind == null ? key.kind() : sortKind;
+                boolean nullsFirst = o.nullsFirst() != null ? java.util.Objects.requireNonNull(o.nullsFirst())
+                        : o.descending();
+                sorts.add(call(o.descending() ? "descending" : "ascending", colSpec(key.name()),
+                        new EnumValue(NULL_ORDER, nullsFirst ? "FIRST" : "LAST")));
+            }
+            WindowColumn column = windowColumn(w.call(), scope, present, computed);
+            SqlAst.Frame frame = spec.frame();
+            Bounds bounds = frame == null ? null : frame(frame, sorts.size(), sortKind);
+            if (!computed.isEmpty()) {
+                rel = call("extend", rel, new ColSpecArray(computed));
+            }
+            String want = named.get(w);
+            String name = want != null && !present.contains(want) && !want.startsWith(SYNTHETIC) ? want
+                    : fresh(present);
+            present.add(name);
+            rel = call("extend", rel, over(partitionKeys, sorts, bounds), column.spec(name));
+            columns.put(w, Col.of(name, column.kind(), column.nullable()));
+        }
+        return new Windowed(rel, new WindowScope(scope, columns));
+    }
+
+    /** The window calls of {@code e}, outermost first; one inside another's arguments or window is Postgres's
+     *  error. */
+    private static void windowCalls(SqlAst.Expr e, List<SqlAst.Window> out) {
+        if (e instanceof SqlAst.Window w) {
+            for (SqlAst.Expr inner : children(w)) {
+                if (containsWindow(inner)) {
+                    throw SqlTranslationException.invalid("window function calls cannot be nested", inner.pos());
+                }
+            }
+            out.add(w);
+            return;
+        }
+        for (SqlAst.Expr child : children(e)) {
+            windowCalls(child, out);
+        }
+    }
+
+    private static boolean containsWindow(SqlAst.Expr e) {
+        if (e instanceof SqlAst.Window) {
+            return true;
+        }
+        for (SqlAst.Expr child : children(e)) {
+            if (containsWindow(child)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** A window with its named base's clauses: a reference may add an ORDER BY (when the base has none) and a frame
+     *  (when the base has none), never a PARTITION BY (Postgres's rules). A named window builds only on one named
+     *  before it. */
+    private static SqlAst.WindowSpec windowSpec(SqlAst.WindowSpec spec, List<SqlAst.NamedWindow> windows) {
+        SqlAst.Ident base = spec.base();
+        if (base == null) {
+            return spec;
+        }
+        SqlAst.WindowSpec named = null;
+        for (int i = 0; i < windows.size() && named == null; i++) {
+            SqlAst.Ident n = windows.get(i).name();
+            if (resolve(base, List.of(n.quoted() ? n.text() : fold(n.text())), "window") != null) {
+                named = windowSpec(windows.get(i).spec(), windows.subList(0, i));
+            }
+        }
+        if (named == null) {
+            throw SqlTranslationException.invalid("window \"" + base.text() + "\" does not exist", base.pos());
+        }
+        if (!spec.partitionBy().isEmpty()) {
+            throw SqlTranslationException.invalid("cannot override PARTITION BY clause of window \"" + base.text()
+                    + "\"", spec.pos());
+        }
+        if (!spec.orderBy().isEmpty() && !named.orderBy().isEmpty()) {
+            throw SqlTranslationException.invalid("cannot override ORDER BY clause of window \"" + base.text() + "\"",
+                    spec.pos());
+        }
+        boolean adds = !spec.orderBy().isEmpty() || spec.frame() != null;
+        if (adds && named.frame() != null) {
+            throw SqlTranslationException.invalid("cannot copy window \"" + base.text() + "\" because it has a frame"
+                    + " clause", spec.pos());
+        }
+        return new SqlAst.WindowSpec(null, named.partitionBy(),
+                spec.orderBy().isEmpty() ? named.orderBy() : spec.orderBy(),
+                spec.frame() != null ? spec.frame() : named.frame(), spec.pos());
+    }
+
+    /** A partition key, a sort key or a window function's argument as a column of the relation: a column (or a group
+     *  key, or an aggregate) as itself; any other expression computed first, under a fresh name, into
+     *  {@code computed}. */
+    private Col windowKey(SqlAst.Expr e, Scope scope, Set<String> present, List<ColSpec> computed) {
+        Col g = scope.grouped(e);
+        Col c = g != null ? g : e instanceof SqlAst.ColumnRef ref ? scope.column(ref) : null;
+        if (c != null && c.var() == null) {
+            return c;
+        }
+        Tx t = tx(e, scope, row);
+        if (t.kind() == Kind.NULL) {
+            throw SqlTranslationException.unsupported("a NULL constant in a window is not supported yet", e.pos());
+        }
+        String name = fresh(present);
+        computed.add(new ColSpec(name, lambda(row, valueOf(t)), null, null));
+        return Col.of(name, t.kind(), t.nullable());
+    }
+
+    /** {@code {p, w, r | body}}: a window column's lambda over the partition, the window and the row. */
+    private LambdaFunction windowLambda(ValueSpecification body) {
+        return new LambdaFunction(List.of(new Variable(partition), new Variable(window), new Variable(row)),
+                List.of(body));
+    }
+
+    /** A window call's function: a ranking function, a value function (lag, lead, first_value, last_value, nth_value:
+     *  the other row's column), or an aggregate over the window's frame. */
+    private WindowColumn windowColumn(SqlAst.FunctionCall f, Scope scope, Set<String> present,
+            List<ColSpec> computed) {
+        if (f.name().size() != 1) {
+            throw SqlTranslationException.unsupported("schema-qualified function names are not supported yet",
+                    f.pos());
+        }
+        String fn = functionName(f.name().get(0));
+        if (f.distinct()) {
+            throw SqlTranslationException.unsupported("DISTINCT is not implemented for window functions", f.pos());
+        }
+        if (f.star() && !fn.equals("count")) {
+            throw SqlTranslationException.invalid(fn + "(*) is not a function; only count(*) is", f.pos());
+        }
+        Variable p = new Variable(partition);
+        Variable w = new Variable(window);
+        Variable r = new Variable(row);
+        switch (fn) {
+            case "row_number", "rank", "dense_rank", "percent_rank", "cume_dist" -> {
+                windowArguments(f, 0, 0);
+                ValueSpecification body = fn.equals("row_number") ? call("rowNumber", p, r)
+                        : call(java.util.Objects.requireNonNull(RANKINGS.get(fn)), p, w, r);
+                boolean fraction = fn.equals("percent_rank") || fn.equals("cume_dist");
+                return new WindowColumn(windowLambda(body), null, fraction ? Kind.FLOAT : Kind.INTEGER, false);
+            }
+            case "ntile" -> {
+                windowArguments(f, 1, 1);
+                long n = windowCount(f.args().get(0), fn, 1);
+                return new WindowColumn(windowLambda(call("ntile", p, r, new CInteger(n))), null, Kind.INTEGER, false);
+            }
+            case "lag", "lead" -> {
+                windowArguments(f, 1, 3);
+                if (f.args().size() == 3) {
+                    throw SqlTranslationException.unsupported(fn + "(...) with a default value is not supported yet",
+                            f.pos());
+                }
+                Col arg = windowKey(f.args().get(0), scope, present, computed);
+                long n = f.args().size() == 2 ? windowCount(f.args().get(1), fn, 0) : 1L;
+                ValueSpecification at = n == 1L ? call(fn, p, r) : call(fn, p, r, new CInteger(n));
+                return new WindowColumn(windowLambda(new AppliedProperty(at, arg.name())), null, arg.kind(), true);
+            }
+            case "first_value", "last_value" -> {
+                windowArguments(f, 1, 1);
+                Col arg = windowKey(f.args().get(0), scope, present, computed);
+                ValueSpecification at = call(fn.equals("first_value") ? "first" : "last", p, w, r);
+                return new WindowColumn(windowLambda(new AppliedProperty(at, arg.name())), null, arg.kind(), true);
+            }
+            case "nth_value" -> {
+                windowArguments(f, 2, 2);
+                Col arg = windowKey(f.args().get(0), scope, present, computed);
+                long n = windowCount(f.args().get(1), fn, 1);
+                ValueSpecification at = call("nth", p, w, r, new CInteger(n));
+                return new WindowColumn(windowLambda(new AppliedProperty(at, arg.name())), null, arg.kind(), true);
+            }
+            case "count", "sum", "avg", "min", "max" -> {
+                ValueSpecification value;
+                Kind argKind;
+                if (f.star()) {
+                    value = new CInteger(1L);
+                    argKind = Kind.INTEGER;
+                } else {
+                    windowArguments(f, 1, 1);
+                    Col arg = windowKey(f.args().get(0), scope, present, computed);
+                    value = property(row, arg.name());
+                    argKind = arg.kind();
+                }
+                Variable values = new Variable(group);
+                Kind kind = switch (fn) {
+                    case "count" -> Kind.INTEGER;
+                    case "avg" -> Kind.FLOAT;
+                    case "sum" -> argKind == Kind.DECIMAL ? Kind.NUMBER : argKind;
+                    default -> argKind;
+                };
+                if ((fn.equals("sum") || fn.equals("avg")) && !argKind.numeric()) {
+                    throw SqlTranslationException.invalid("function " + fn + "(" + argKind.name().toLowerCase(
+                            Locale.ROOT) + ") does not exist", f.pos());
+                }
+                String reduce = fn.equals("avg") ? "average" : fn;
+                return new WindowColumn(windowLambda(value), lambda(group, call(reduce, values)), kind,
+                        !fn.equals("count"));
+            }
+            default -> throw SqlTranslationException.unsupported("window function " + fn + "(...) is not supported"
+                    + " yet", f.pos());
+        }
+    }
+
+    /** Postgres's ranking functions and Pure's. */
+    private static final Map<String, String> RANKINGS = Map.of("rank", "rank", "dense_rank", "denseRank",
+            "percent_rank", "percentRank", "cume_dist", "cumulativeDistribution");
+
+    private static void windowArguments(SqlAst.FunctionCall f, int min, int max) {
+        if (f.star() || f.args().size() < min || f.args().size() > max) {
+            throw SqlTranslationException.unsupported(functionName(f.name().get(0)) + " with "
+                    + (f.star() ? "*" : f.args().size() + " arguments") + " is not supported yet", f.pos());
+        }
+    }
+
+    /** A window function's count argument (ntile's buckets, lag's offset, nth_value's position): an integer constant
+     *  of at least {@code min}. */
+    private static long windowCount(SqlAst.Expr e, String fn, long min) {
+        if (!(e instanceof SqlAst.IntegerLit n) || n.value().bitLength() > 31) {
+            throw SqlTranslationException.unsupported(fn + "(...) with a computed count is not supported yet",
+                    e.pos());
+        }
+        long v = n.value().longValue();
+        if (v < min) {
+            throw SqlTranslationException.unsupported(fn + "(...) with a count below " + min + " is not supported"
+                    + " yet", e.pos());
+        }
+        return v;
+    }
+
+    /**
+     * A frame as Pure's {@code rows(from, to)} or {@code _range(from, to)}: an offset signed (PRECEDING negative,
+     * FOLLOWING positive, CURRENT ROW zero), UNBOUNDED as {@code unbounded()}. RANGE from the partition's start to the
+     * current row's last peer is the default (none written); a whole-partition RANGE is the ROWS one.
+     */
+    private static @com.legend.base.Nullable Bounds frame(SqlAst.Frame f, int sortKeys,
+            @com.legend.base.Nullable Kind sortKind) {
+        if (f.unit() == SqlAst.FrameUnit.GROUPS) {
+            throw SqlTranslationException.unsupported("GROUPS frames are not supported yet", f.pos());
+        }
+        String exclude = f.exclude();
+        if (exclude != null) {
+            throw SqlTranslationException.unsupported("EXCLUDE " + exclude + " is not supported yet", f.pos());
+        }
+        SqlAst.BoundKind start = f.start().kind();
+        SqlAst.BoundKind end = f.end().kind();
+        if (start == SqlAst.BoundKind.UNBOUNDED_FOLLOWING) {
+            throw SqlTranslationException.invalid("frame start cannot be UNBOUNDED FOLLOWING", f.pos());
+        }
+        if (end == SqlAst.BoundKind.UNBOUNDED_PRECEDING) {
+            throw SqlTranslationException.invalid("frame end cannot be UNBOUNDED PRECEDING", f.pos());
+        }
+        if (start == SqlAst.BoundKind.CURRENT_ROW && end == SqlAst.BoundKind.PRECEDING) {
+            throw SqlTranslationException.invalid("frame starting from current row cannot have preceding rows",
+                    f.pos());
+        }
+        if (start == SqlAst.BoundKind.FOLLOWING
+                && (end == SqlAst.BoundKind.PRECEDING || end == SqlAst.BoundKind.CURRENT_ROW)) {
+            throw SqlTranslationException.invalid("frame starting from following row cannot have preceding rows",
+                    f.pos());
+        }
+        boolean offsets = f.start().offset() != null || f.end().offset() != null;
+        if (f.unit() == SqlAst.FrameUnit.RANGE) {
+            if (!offsets && start == SqlAst.BoundKind.UNBOUNDED_PRECEDING && end == SqlAst.BoundKind.CURRENT_ROW) {
+                return null;
+            }
+            if (!offsets && (sortKeys == 0 || start == SqlAst.BoundKind.UNBOUNDED_PRECEDING
+                    && end == SqlAst.BoundKind.UNBOUNDED_FOLLOWING)) {
+                // without ORDER BY every row is the current row's peer: the frame is the whole partition
+                return new Bounds(call("rows", call("unbounded"), call("unbounded")), false);
+            }
+            if (sortKeys != 1) {
+                throw offsets ? SqlTranslationException.invalid("RANGE with offset PRECEDING/FOLLOWING requires"
+                        + " exactly one ORDER BY column", f.pos())
+                        : SqlTranslationException.unsupported("a RANGE frame from the current row over several sort"
+                                + " keys is not supported yet", f.pos());
+            }
+            if (offsets && (sortKind == null || !sortKind.numeric())) {
+                throw SqlTranslationException.unsupported("RANGE offsets over a non-numeric sort key are not supported"
+                        + " yet", f.pos());
+            }
+        }
+        ValueSpecification from = bound(f.start(), f.unit());
+        ValueSpecification to = bound(f.end(), f.unit());
+        if (from instanceof CInteger a && to instanceof CInteger b && a.value().longValue() > b.value().longValue()) {
+            throw SqlTranslationException.unsupported("a frame that ends before it starts is not supported yet",
+                    f.pos());
+        }
+        boolean range = f.unit() == SqlAst.FrameUnit.RANGE;
+        return new Bounds(call(range ? "_range" : "rows", from, to), range);
+    }
+
+    /** A frame's Pure spelling, and whether it is a RANGE one (over() takes one sort key before it). */
+    private record Bounds(ValueSpecification spec, boolean range) {
+    }
+
+    private static ValueSpecification bound(SqlAst.FrameBound b, SqlAst.FrameUnit unit) {
+        return switch (b.kind()) {
+            case UNBOUNDED_PRECEDING, UNBOUNDED_FOLLOWING -> call("unbounded");
+            case CURRENT_ROW -> new CInteger(0L);
+            case PRECEDING, FOLLOWING -> {
+                SqlAst.Expr offset = java.util.Objects.requireNonNull(b.offset());
+                if (!(offset instanceof SqlAst.IntegerLit n) || n.value().bitLength() > 31) {
+                    throw SqlTranslationException.unsupported("a frame offset other than an integer constant is not"
+                            + " supported yet", offset.pos());
+                }
+                long v = n.value().longValue();
+                yield new CInteger(b.kind() == SqlAst.BoundKind.PRECEDING ? -v : v);
+            }
+        };
+    }
+
+    /** Pure's {@code over(...)} for the keys and the frame: the partition keys, the sort (one sort key, not a list,
+     *  before a RANGE frame), the frame; with no partition keys, {@code over([sorts])} ({@code OVER ()} for none),
+     *  or {@code over([], [sorts], rows(...))} with a ROWS frame. */
+    private static ValueSpecification over(List<String> partitionKeys, List<ValueSpecification> sorts,
+            @com.legend.base.Nullable Bounds frame) {
+        boolean range = frame != null && frame.range();
+        List<ValueSpecification> args = new ArrayList<>();
+        if (!partitionKeys.isEmpty()) {
+            List<ColSpec> keys = new ArrayList<>();
+            partitionKeys.forEach(k -> keys.add(colSpec(k)));
+            args.add(new ColSpecArray(keys));
+        } else if (frame != null && !range) {
+            args.add(new PureCollection(List.of()));
+        }
+        if (range) {
+            args.add(sorts.get(0));
+        } else if (!sorts.isEmpty() || partitionKeys.isEmpty()) {
+            args.add(new PureCollection(sorts));
+        }
+        if (frame != null) {
+            args.add(frame.spec());
+        }
+        return call("over", args);
+    }
+
 
     /** A GROUP BY item's expression: an ordinal names a select item; a bare name is an input column first, then an
      *  output name (Postgres's order). */
@@ -1191,6 +1604,7 @@ public final class SqlToPure {
         return switch (e) {
             case SqlAst.ColumnRef ref -> ref.parts().get(ref.parts().size() - 1).text();
             case SqlAst.FunctionCall f -> functionName(f.name().get(f.name().size() - 1));
+            case SqlAst.Window w -> functionName(w.call().name().get(w.call().name().size() - 1));
             case SqlAst.Case c -> "case";
             case SqlAst.Cast c -> defaultName(c.operand()).equals("?column?") ? c.type().name()
                     : defaultName(c.operand());
@@ -1330,6 +1744,10 @@ public final class SqlToPure {
     // ------------------------------------------------------------------ aggregates
 
     private static final Set<String> AGGREGATES = Set.of("count", "sum", "avg", "min", "max");
+
+    /** Postgres's window functions that are not aggregates: they need an OVER clause. */
+    private static final Set<String> WINDOW_FUNCTIONS = Set.of("row_number", "rank", "dense_rank", "percent_rank",
+            "cume_dist", "ntile", "lag", "lead", "first_value", "last_value", "nth_value");
 
     private static boolean isAggregate(SqlAst.FunctionCall f) {
         return f.name().size() == 1 && AGGREGATES.contains(functionName(f.name().get(0)));
@@ -1649,8 +2067,13 @@ public final class SqlToPure {
                 yield q.negated() ? not(any) : any;
             }
             case SqlAst.Quantified q -> quantified(q.left(), q.op(), q.all(), q.query(), scope, row, q.pos());
-            case SqlAst.Window w -> throw SqlTranslationException.unsupported("window functions (OVER) are not"
-                    + " supported yet", w.pos());
+            case SqlAst.Window w -> {
+                // the select list's and ORDER BY's are columns by now (windows); any other place is Postgres's error
+                String clause = scope.noAggregatesIn();
+                throw SqlTranslationException.invalid(clause != null && !clause.equals("the select list")
+                        ? "window functions are not allowed in " + clause
+                        : "window functions are not allowed here", w.pos());
+            }
         };
     }
 
@@ -2143,6 +2566,9 @@ public final class SqlToPure {
                     f.pos());
         }
         String fn = functionName(f.name().get(0));
+        if (WINDOW_FUNCTIONS.contains(fn)) {
+            throw SqlTranslationException.invalid("window function " + fn + " requires an OVER clause", f.pos());
+        }
         if (f.distinct() || f.star()) {
             throw SqlTranslationException.invalid(fn + " is not an aggregate", f.pos());
         }

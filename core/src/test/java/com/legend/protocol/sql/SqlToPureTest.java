@@ -196,6 +196,51 @@ class SqlToPureTest {
                 refusal("select (select max(t.age) from tb('s::DB.T') u) from tb('s::DB.T') t").getMessage());
     }
 
+    // ------------------------------------------------------------------ windows
+
+    @Test
+    void aWindowCallIsAColumnExtendedOverItsWindowBeforeTheSelectList() {
+        assertEquals("#>{s::DB.T}#->extend(over(~[dept], [~age->descending(meta::pure::functions::relation::NullOrder"
+                        + ".FIRST)]), ~rn:{p, w, r|$p->rowNumber($r)})->select(~[ID, rn])",
+                pure("select ID, row_number() over (partition by dept order by age desc) as rn from tb('s::DB.T')"));
+    }
+
+    @Test
+    void aWindowAggregateMapsEachRowAndReducesTheFrame() {
+        // rows(-1, 0): one preceding row to the current row
+        assertEquals("#>{s::DB.T}#->extend(over([], [~ID->ascending(meta::pure::functions::relation::NullOrder.LAST)],"
+                        + " -1->rows(0)), ~s:{p, w, r|$r.age}:y|$y->sum())->select(~[s])",
+                pure("select sum(age) over (order by ID rows between 1 preceding and current row) as s"
+                        + " from tb('s::DB.T')"));
+    }
+
+    @Test
+    void overNothingIsOnePartitionOfEveryRow() {
+        assertEquals("#>{s::DB.T}#->extend(over([]), ~n:{p, w, r|1}:y|$y->count())->select(~[n])",
+                pure("select count(*) over () as n from tb('s::DB.T')"));
+    }
+
+    @Test
+    void lagReadsTheOtherRowsColumnAndAnExpressionIsComputedFirst() {
+        assertEquals("#>{s::DB.T}#->extend(~[_sql_1:r|if($r.age->isEmpty(), |[], |$r.age->toOne() * 2)])"
+                        + "->extend(over([~ID->ascending(meta::pure::functions::relation::NullOrder.LAST)]),"
+                        + " ~prev:{p, w, r|$p->lag($r, 2)._sql_1})->select(~[prev])",
+                pure("select lag(age * 2, 2) over (order by ID) as prev from tb('s::DB.T')"));
+    }
+
+    @Test
+    void windowsArePostgresErrorsOutsideTheSelectListAndOrderBy() {
+        assertEquals("window functions are not allowed in WHERE",
+                refusal("select ID from tb('s::DB.T') where rank() over (order by ID) > 1").getMessage());
+        assertEquals("window function calls cannot be nested",
+                refusal("select sum(rank() over (order by ID)) over () from tb('s::DB.T')").getMessage());
+        assertEquals("window function rank requires an OVER clause",
+                refusal("select rank() from tb('s::DB.T')").getMessage());
+        assertEquals("EXCLUDE CURRENT ROW is not supported yet", refusal("select sum(age) over (order by ID rows"
+                + " between unbounded preceding and unbounded following exclude current row) from tb('s::DB.T')")
+                .getMessage());
+    }
+
     // ------------------------------------------------------------------ Postgres's NULL rules
 
     @Test
