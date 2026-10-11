@@ -1,7 +1,7 @@
 # Legend SQL ("AlloySQL"): what upstream built, how to port it, and SQL/dbt as modeling surfaces
 
-**Status: research and brainstorm (2026-10-11). Nothing here is decided, scheduled or announced in
-`docs/IN_FLIGHT.md`.** It answers the user's question of 2026-10-11: study the Postgres-compatible SQL front end
+**Status: research and brainstorm (2026-10-11), with the user's first decisions recorded in §8. Nothing is
+scheduled or announced in `docs/IN_FLIGHT.md`.** It answers the user's question of 2026-10-11: study the Postgres-compatible SQL front end
 of legend-engine/legend-pure deeply, port it to legend-lite, and consider (a) SQL as a modeling surface beside
 Pure grammar and Python, and (b) a dbt-compatible front end ("Postgres-compatible for queries, dbt-compatible
 for modeling, Postgres dialect throughout"). §0 is the answer; §1–§2 are the evidence; §3–§6 are the design;
@@ -49,12 +49,14 @@ upstream repository. Alloy is Legend's internal name, and the thing the user mea
    which the IR is downstream of. The real compiler then types the query **once**. Upstream instead re-derives
    the schema at 22 sites and re-compiles through text.
 
-4. **"Postgres-compatible" must be defined honestly.** That means:
-   - the wire protocol, the grammar, function names and the catalog are Postgres;
-   - the **semantics are Pure's**, executed by whichever database the runtime names.
+4. **Postgres is the spec** (the user, 2026-10-11: "stick as close as possible to native Postgres for
+   everything"). This covers the wire protocol, the grammar, names, the catalog **and results**:
+   - The translator emits Pure whose results equal Postgres's on every backend.
+   - The parity corpus's real-Postgres oracle defines "done".
+   - Where matching Postgres would need Java to compute values, the gap is a `docs/SEMANTICS_REGISTER.md` row,
+     never a silent default (§3.4). Postgres's many date input formats on DuckDB are one such case.
 
-   Every place where the two differ (NULL `=`, identifier case, numeric literals, INTERSECT precedence…) is a
-   `docs/SEMANTICS_REGISTER.md` row, never a silent default. Upstream already deviates (§1.3).
+   Upstream does not hold itself to this (§1.3).
 
 5. **SQL is the right modeling surface for the relational layer and the wrong one for the object layer.**
    - It fits stores, relation-valued functions, enums and constrained primitives.
@@ -271,7 +273,8 @@ ERROR / 88 BUG / 45 FAIL / 62 SKIP of 2,340** for the Relation path.
     details to follow".
   - The e2e suite uses Testcontainers `postgres:16-alpine` as the oracle and ratchets per-case statuses.
 
-**What is portable as plumbing (about 7–8k lines, Apache-2.0, keep the Crate NOTICE):**
+**What would be portable as plumbing (about 7–8k lines, Apache-2.0, keep the Crate NOTICE).** It is not used:
+D3 decided on a hand-written protocol.
 - the decoder, messages, type codecs, `Session`/`Portal`, the per-connection future chain, and `DelayableWriteChannel`.
 
 **What must be replaced:**
@@ -362,10 +365,17 @@ pgwire Q/P         ┘    (hand-written)       (records,       (scopes,      (Re
   - spec: the Postgres manual, not Crate's grammar.
 - **AST:** about 60 immutable records with **source spans** and a **quoted-identifier flag**. Errors carry
   positions so the LSP can underline SQL.
-- **Placement:** a syntax AST in its own package, *not* `com.legend.sql`. The IR is a back-end IR. It carries
-  `TypeFact`s and lowering-only variants (`CheckedDefects`, `DeferredTdsString`, `PlanParam`…), and
-  `docs/LEGEND_SQL_VISION.md`'s "standalone N-in" reader can later add a syntax-AST → IR step for raw-SQL transpiling (`RawSqlBoundary`'s
-  replacement). This is decision D2 (§8).
+- **Placement (decided, D2): a new package, *not* `com.legend.sql`.** The IR is a back-end IR. It carries
+  `TypeFact`s and lowering-only variants (`CheckedDefects`, `DeferredTdsString`, `PlanParam`…). Later,
+  `docs/LEGEND_SQL_VISION.md`'s "standalone N-in" reader can add a syntax-AST → IR step for raw-SQL transpiling
+  (`RawSqlBoundary`'s replacement). Proposed layout:
+
+  | Package | Contents | Depends on |
+  |---|---|---|
+  | `com.legend.pg.syntax` | lexer, parser, AST, printer | nothing: an ArchUnit standalone rule like `sql`'s |
+  | `com.legend.pg.translate` | AST → `protocol.spec` | |
+  | `com.legend.pg.catalog` | the system views (§3.5) | |
+  | `com.legend.pg.wire` | the protocol server | |
 - **Printer:** a true fixpoint, checked as `parse(print(ast)) == ast` over a property corpus and the 83 upstream
   cases.
 
@@ -418,28 +428,32 @@ adds** a *catalog-native* naming, so that BI tools browsing `information_schema`
 | Postgres | Legend |
 |---|---|
 | database (startup `database=`) | a project or **data space**: its default mapping and runtime supply execution context |
-| schema | a package |
-| table | a zero-parameter Relation function, a Database table, a service, or a **class** (projected through the data space's mapping) |
-| table function `f(...)` | a parameterised function or a service with parameters |
+| schema | a package, spelled verbatim as a quoted identifier (`"my::app"`; `::` is legal inside quotes, so there is no mangling). The session's `search_path` (native) resolves unqualified names, and it defaults to the data space's package |
+| table | a zero-parameter Relation function, a Database table, a service, or a **class** (§3.6) |
+| table function `f(...)` | a parameterised function, a service with parameters, or a milestoned class |
 | foreign keys in `pg_constraint` | **associations**, so BI tools auto-join along the semantic model |
 
 Classes as tables is the feature upstream lacks, and it is where Legend beats a raw warehouse: the SQL user
-queries the *logical* model. How to flatten a class is open (D6):
-- a class's primitive properties become columns;
-- to-one paths could appear as dotted columns (`"firm.legalName"`);
-- to-many associations become separate tables joined through the published FK.
+queries the *logical* model. §3.6 is the proposed projection.
 
-### 3.4 Semantics: each difference is a register row
+### 3.4 Semantics: Postgres is the spec
 
-| Topic | Postgres | Upstream | Proposal |
+**Postgres is the spec (decided 2026-10-11).**
+- The translator emits Pure whose results equal Postgres's, whichever backend runs it.
+- Where Pure has no native for a Postgres behaviour, the fix is a new native (one SQL lowering rule each), never
+  Java computing a value.
+- Until that native exists, the gap is a register row.
+
+| Topic | Postgres (the spec) | Upstream | Plan |
 |---|---|---|---|
-| Unquoted identifier case | folded to lowercase | preserved | **D1**: preserve and match exactly (as upstream), or match case-insensitively with ambiguity as an error. Never "try both" (invariant 4) |
-| `=` with NULL | three-valued | plan flag `LEGACY_SQL_NULL_UNSAFE_EQUALS` | explicit three-valued translation; a row against Pure `==` |
+| Identifiers | unquoted ones fold to lowercase; quoted ones are exact; names over 63 bytes are truncated | case preserved, exact match | **Postgres exactly (D1, decided).** Legend names are published verbatim, so a camelCase name needs quotes in hand-written SQL, as for any Postgres table created with quoted names. Errors carry Postgres's own `HINT: Perhaps you meant to reference the column "person.firstName".` Names over 63 bytes are truncated when the catalog is published, as Postgres truncates at `CREATE`; names that collide after truncation are an error naming both |
+| Output column names | an alias as written (folded); a column reference keeps its name; a function call is named after the function (`count`); anything else is `?column?`; **duplicates are allowed** | derived from the expression text; duplicates throw | **Postgres rules.** A Relation needs unique column names, so duplicates get internal names while the wire's RowDescription carries the Postgres names. A reference to an ambiguous name raises Postgres's `column reference "x" is ambiguous` |
+| `=` with NULL | three-valued | plan flag `LEGACY_SQL_NULL_UNSAFE_EQUALS` | Postgres three-valued logic, explicit in the translation |
 | Numeric literals | exact `numeric` | `DoubleLiteral` | exact Decimal, sent as OID `numeric` |
-| `'2023-01-01'` against a date column | an implicit cast in the database | parsed in Java (`parsePostgresDate`) | a cast **executed by the database** (`docs/TENET_CHARTER.md` C2.1/C2.2; register S2). `now`/`today` become the current-date natives, never JVM clock values. Whether a canonical ISO *token* may instead be re-spelled as a Pure date literal (compare, don't compute) is for the charter to adjudicate |
+| `'2023-01-01'` against a date column | an implicit cast, with Postgres's many input formats | parsed in Java (`parsePostgresDate`) | **The database executes the cast** (`docs/TENET_CHARTER.md` C2.1/C2.2; register S2), and `now`/`today` become the current-date natives. Non-Postgres backends do not accept every Postgres input format (`'January 8, 1999'`), so the translator accepts the formats all backends agree on (ISO 8601) and refuses the rest with a positioned error. **A register row: the one place where "as close as possible" stops**, because Java does not compute |
 | INTERSECT precedence | tighter than UNION | equal | Postgres |
-| NULL order for ASC | NULLS LAST | — | explicit in the translation (the dialects differ) |
-| Integer `/` | truncates | — | explicit |
+| NULL order | NULLS LAST for ASC, NULLS FIRST for DESC | — | Postgres, spelled out per dialect |
+| Integer `/` | truncates toward zero | — | Postgres. DuckDB's `/` returns a double, so the translation must say so |
 | Unknown result type over the wire | n/a | falls back to `varchar` | compile error |
 
 ### 3.5 HTTP, island, wire
@@ -449,8 +463,16 @@ queries the *logical* model. How to flatten a class is open (D6):
   upstream's APIs and nothing of its own" (`docs/UPSTREAM_ENDPOINTS_DESIGN_2026_09_27.md`). `lambda` returning the
   generated Pure is the cheapest demo of the whole thing.
 - **Island.** The `Typer` arm for `SqlIsland` calls the translator, so `#SQL{}#` composes with Pure.
-- **pgwire.** **One** wire module, shared with the warehouse's W3. The warehouse passes DuckDB SQL through; the
-  Legend handler translates. Requirements:
+- **pgwire: hand-written, no dependencies (D3, decided).**
+  - **Transport:** plain `java.nio` sockets with one virtual thread per connection. The repository's Java 21
+    language level already allows this, and the HTTP server likewise uses only the JDK's `com.sun.net.httpserver`.
+  - **TLS:** the JDK's `SSLEngine`. **SCRAM-SHA-256:** `javax.crypto` (HMAC-SHA-256, PBKDF2).
+  - **Spec:** protocol 3.0, written from the Postgres manual's "Frontend/Backend Protocol" chapter, not from
+    Crate's code.
+  - **Scope:** one module serves the Legend handler (translate). When the server program resumes, it also serves
+    the warehouse's W3 (DuckDB passthrough).
+
+  Requirements:
   - real BackendKeyData and cancel;
   - transaction status;
   - TLS and SCRAM;
@@ -467,6 +489,89 @@ queries the *logical* model. How to flatten a class is open (D6):
 
   Probe suites must cover psql `\d`, pgjdbc metadata, DBeaver, Tableau, Power BI/ODBC and psycopg. Upstream tests
   only pgjdbc.
+- **libpg_query, Postgres's own parser as a C library: a test oracle, not a runtime dependency.**
+
+  **What it is.** pganalyze extracts the real Postgres grammar (`gram.y`, `scan.l`) into a library. It is
+  BSD-3-Clause, tracks Postgres 18, and gives JSON parse trees with source locations, a scanner and
+  fingerprinting. It builds on Windows.
+
+  **Why not at runtime:**
+  - Core runs on the JVM, in the browser through TeaVM, and as a GraalVM native image. A C library reaches only
+    the JVM, through JNI or FFM, and needs a build per platform.
+  - Its output is Postgres's raw parse tree, hundreds of node types, which would still need translating into our
+    AST. It would save the grammar, the easy part, and not the translator.
+  - The DuckDB C library fits the warehouse because the warehouse *is* DuckDB. Core is not Postgres.
+
+  **Why as a test oracle**, in a test-only Bazel target like the reference lane (`tools/reference`):
+  1. **Acceptance:** every corpus statement is accepted or rejected by both parsers alike.
+  2. **Printer fidelity:** `pgquery(print(parse(sql))) == pgquery(sql)` with locations stripped. Postgres's own
+     parser certifies that our printer prints the same query.
+  3. **Fuzzing.**
+
+  The *semantic* oracle is a real Postgres, run once to generate the parity fixtures (§1.5).
+
+### 3.6 Classes as tables: the relational projection of the model
+
+**The rule:** a table per class the data space can query, and *identity* decides how references between classes
+appear. This is the standard object-to-relational projection (an ORM's entities, embeddables and element
+collections). It is also exactly what dbt's `semantic_models` need, entities with primary and foreign keys, so
+the same rule exports a Legend model as dbt semantic models and imports them back (§5).
+
+1. **Identity comes from the model.** It is the class's `<<equality.Key>>` properties, which legend-lite already
+   resolves (D91; `compiler/element/ClassCompiler.java:59`, `lowering/InstanceEquality.java`).
+   - A class with keys is an **entity**; a class without keys is a **value**.
+2. **Tables.** Each class with a root class mapping in the data space's mapping is one table: schema = its
+   package, name = its class name. Postgres allows tables without a primary key, so a mapped value gets a keyless
+   table.
+3. **Columns:**
+   - single-valued primitive and enum properties, inherited ones included;
+   - multi-valued primitive properties as Postgres arrays (`text[]`, `int8[]`);
+   - qualified properties without parameters as computed columns;
+   - the key properties declared `PRIMARY KEY` in `pg_constraint`;
+   - enumerations as Postgres `ENUM` types in `pg_type`.
+4. **A to-one property to an entity** becomes a foreign-key column per key property of the target, named by its
+   path (`"firm.id"`) and declared in `pg_constraint`. So `JOIN "Firm" f ON f.id = p."firm.id"` works, and BI
+   tools draw the join themselves.
+   - The column's values are computed through Legend's own property/association mapping. The key join is
+     therefore correct even when the mapping's join is not key equality.
+5. **A to-one property to a value** has the value's columns flattened into the owner as path columns
+   (`"address.city"`), recursively.
+   - A cycle among values cannot be flattened. It is a compile error naming the cycle, never a silent cut.
+6. **A to-many property:**
+   - **To an entity whose inverse end is to-one:** no column. The other table carries the FK (the ordinary
+     one-to-many).
+   - **A many-to-many association between entities:** a bridge table named after the association
+     (`"Person_Firm"`), with both FKs.
+   - **To values** (`addresses: Address[*]`): a child table `"Person.addresses"` with the owner's key and the
+     value's flattened columns.
+   - **From a keyless owner:** nothing can link the rows, so it is not exposed (a register row).
+7. **Inheritance.** Every mapped class is its own table, with its inherited columns. A superclass table also
+   returns its subclasses' rows, as Postgres table inheritance does without `ONLY` and as Legend's `getAll()`
+   does.
+8. **Milestoned classes** become table functions taking their temporal parameters:
+   `"Person"(business_date => DATE '2024-01-01')`. Named arguments are native Postgres syntax.
+
+**Why not embed everything:**
+- Cycles (Person → Firm → employees → Person).
+- Duplicated data, and very wide tables.
+- BI tools model star schemas through keys.
+
+**Why not foreign keys everywhere:**
+- Values have no key.
+- A synthesised surrogate key (a row number, a hash) is not stable across queries, so a join between two
+  queries' results would silently mismatch.
+
+**Alternative for values: Postgres composite types.** That means `CREATE TYPE "Address" AS (...)`, a column
+`address "Address"` read as `(address).city`, and arrays of composites for to-many.
+- **For:** structurally more "native Postgres".
+- **Against:** most BI tools and ODBC drivers cannot read composite or array columns.
+- **Proposal:** flattened path columns by default, and the composite form later as a per-connection option.
+
+**Open sub-decisions:**
+- **Identity source:** `<<equality.Key>>` only (proposed: one source of truth, in the model), or also a mapping's
+  primary key when a class declares none. "Make a class" can propose keys from a table's primary key, so models
+  get keys without a second rule.
+- **Qualified properties with parameters:** table functions, or not exposed.
 
 ---
 
@@ -615,10 +720,10 @@ Sizes are rough Java line counts, for comparison with upstream (§1.1).
 
 | Phase | Content | Gate | Size |
 |---|---|---|---|
-| **0. Decide** | §8's decisions; register rows (§3.4); package placement; an `IN_FLIGHT` slot (the DataCube line owns "Make a class"; the database-owner line owns `sql/dialect`/`lowering`) | — | doc |
-| **1. SQL over HTTP and islands** | parser + AST + printer; translator for `tb`/`func`/`csv`/CTE sources; function table; `/api/sql/v1/execution/*` + `getSchema`; the `#SQL{}#` Typer arm | 83 round-trip cases; the transpile pairs (Relation half); **parity corpus ratchet** (DuckDB execution against committed PG16 oracle answers) | 8–11k |
-| **2. Wire** | the shared pgwire module (with the warehouse's W3); a DuckDB-executed catalog generated from the model; session statements | probe suites per client (psql, pgjdbc, DBeaver, Tableau, ODBC, psycopg) | 6–9k |
-| **3. Legend sources** | `service`, data space as database, classes as tables, associations as FKs, bind parameters | parity corpus re-run through classes | 2–4k |
+| **0. Decide** | §8's open decisions; register rows (§3.4); an `IN_FLIGHT` slot (the DataCube line owns "Make a class"; the database-owner line owns `sql/dialect`/`lowering`) | — | doc |
+| **1. SQL over HTTP and islands** | parser + AST + printer; translator for `tb`/`func`/`csv`/CTE sources; function table; `/api/sql/v1/execution/*` + `getSchema`; the `#SQL{}#` Typer arm | 83 round-trip cases; the **libpg_query lane** (acceptance and printer fidelity); the transpile pairs (Relation half); **parity corpus ratchet** (DuckDB execution against committed Postgres oracle answers) | 8–11k |
+| **2. Wire** | the hand-written pgwire module (later shared with the warehouse's W3); a DuckDB-executed catalog generated from the model; session statements | probe suites per client (psql, pgjdbc, DBeaver, Tableau, ODBC, psycopg) | 6–9k |
+| **3. Legend sources** | `service`, data space as database, classes as tables (§3.6), associations as FKs, bind parameters | parity corpus re-run through classes | 2–4k |
 | **4. SQL/dbt modeling, read** | DDL reader → `Protocol`; dbt **L1** (manifest ingest); YAML contracts → declared return types; `semantic_models` → "Make a class" (shared with DataCube) | sample dbt projects compile; Pure print-back round trip | 3–5k |
 | **5. dbt author and run** | **L2** (YAML reader, Jinja subset, LSP); **L3** (needs BI-plan F1 writes, `Persistence`, tests as assertions) | `jaffle_shop`-class projects build on DuckDB and Postgres | 5–8k + F1 |
 | **6. Optional** | **L4** (dbt-postgres against pgwire); Legend → dbt export | dbt-postgres's own integration tests | — |
@@ -628,19 +733,37 @@ proves the translator against 2,340 oracle cases before any wire or dbt work sta
 
 ---
 
-## 8. Open decisions (the user's)
+## 8. Decisions
 
-- **D1. Identifier case:** preserve and match exactly (upstream), or match case-insensitively with ambiguity as
-  an error (DuckDB/Snowflake-like)? Postgres folding to lowercase would break camelCase Legend names for anyone
-  who does not quote.
-- **D2. Where the syntax AST lives:** a new front-end package (recommended), or readers into `com.legend.sql` per
-  `LEGEND_SQL_VISION.md`?
-- **D3. pgwire:** port Crate's plumbing (Apache-2.0, NOTICE kept), or hand-write it? Either way, one module shared
-  with the warehouse's W3, which means un-pausing part of the server program.
-- **D4. Priority:** where this sits against Bazel, Studio and the database-owner line (`docs/IN_FLIGHT.md`).
-- **D5. dbt target level:** L1+L2 (recommended), or aim for L4 drop-in?
-- **D6. Classes as SQL tables:** the flattening rule for to-one and to-many properties, and whether a data space
-  is the Postgres "database".
+**Decided by the user, 2026-10-11:**
+
+- **D1. Identifiers: native Postgres** (§3.4).
+  - Unquoted names fold to lowercase, quoted names are exact, and names over 63 bytes are truncated.
+  - Hints are Postgres's own.
+  - **Consequence:** camelCase Legend names need quotes in hand-written SQL (`"firstName"`), as for any Postgres
+    object created with a quoted name. BI tools quote every name they read from the catalog, so they are
+    unaffected.
+  - A snake_case naming profile (publishing `first_name` for `firstName`) remains a possible later opt-in, never
+    the default: it gives each element two names.
+- **D2. A new package** (§3.1, `com.legend.pg.*`).
+- **D3. A hand-written wire protocol with no dependencies.** libpg_query only as a test oracle (§3.5).
+- **Overall: as close as possible to native Postgres in everything** (§0 point 4, §3.4).
+
+**Open:**
+
+- **D4. Whether to start now.** Several sessions work in this repository at once. `docs/IN_FLIGHT.md` lists the
+  active lines in priority order: the build rebuild, Studio, the database owner, DataCube with Python. Each line
+  announces the files it will touch so that sessions do not collide. The question is whether this becomes a new
+  line now, beside the others, or waits.
+  - Phase 1 is mostly new files under `com.legend.pg`. Its touch points elsewhere are small:
+    - the `Typer`'s `SqlIsland` arm, in `compiler/spec`, which the Bazel line currently holds for its
+      reference-lane fix;
+    - route registration in `server/LegendHttpServer`;
+    - new natives (`intersect`, `except`) in `builtin/`.
+  - **Proposal:** a new line, announced in `IN_FLIGHT`, starting with phase 1.
+- **D5. dbt target level:** L1+L2 (proposed), or the L4 drop-in?
+- **D6. Classes as tables:** §3.6 is the proposal, and its two sub-decisions (identity source; qualified
+  properties with parameters) are open.
 
 ---
 
