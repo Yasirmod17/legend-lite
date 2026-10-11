@@ -82,8 +82,11 @@ generated file, never a signature we typed ourselves.
   digests recommended) and the lane query (a gate script, since the query cannot be a Bazel target; the script
   recommended). Nothing is built until both are ruled.
 - **Next: L4 (Phase 6)**, then L5 (Phase 4), L6 (Phase 5), the typing-order count, L8 (the bump). The order and
-  cadence: the plan's §6. Before L4: the DataCube line's compile phase split (promised 2026-10-10) and the Studio
-  line's leg 8 typing changes to review ((c) reviewed 2026-10-11 with its render census; (f) pending).
+  cadence: the plan's §6. Beside L4: the compile phase split over DataCube's model shape (mine: `model-scale.measure.ts`,
+  `classModel(n)` at 10 and 200 through `//core:compile_latency` or the eager probe, offered 2026-10-10; input to
+  DataCube's normalize-on-first-use design, the user's to schedule) and the Studio line's leg 8 typing changes to
+  review ((c) and (f) reviewed 2026-10-11; the step-2 records diff reviewed; (e) asked about). L4's homework
+  started 2026-10-11 (`runs/homework/phase6/NOTES.md` while it runs; the write-up goes to `evidence/phase6/`).
 - **Ruled 2026-10-10 (the user):** the default world is made by upstream's own compiler at bump time, every body
   followed (F2, F3; the plan's decision 6); the pre-built boot layer is part of Phase 4, sized on the numbers
   (decision 2 as amended); the typer's order is measured before the bump (decision 7). Nothing is pending from the
