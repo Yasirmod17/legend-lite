@@ -8765,3 +8765,63 @@ platforms), green; the only change after them is main's IN_FLIGHT line, rebased 
    - step 5, the model plan's Python `create_*`;
    - the TeaVM unmodifiable-collections fix, the Compiler Rewrite line's, which the user rules on: a 200-class page's
      tab compile goes from 4.2 s to 73 ms with it.
+
+## 2026-10-11 — `#SQL{...}#`: a Postgres SELECT inside any Pure query, judged against Postgres 16 (the seventh line)
+
+Announced in `docs/IN_FLIGHT.md` the same day (2aa74a8). Branch `claude/loving-euler-gjta59`; the study and the plan,
+`docs/LEGEND_SQL_STUDY_2026_10_11.md` (§9 and §9.1 hold the numbers below).
+
+1. **What lands.** A Postgres `SELECT` written as `#SQL{...}#` in a Pure query becomes an ordinary Relation expression.
+   - **The reader and the translator:** a new package, `protocol/sql/`.
+   - **The seam:** `compiler/spec/SqlIslands`, typed once by the Typer's island arm.
+   - **What it reads:**
+     - joins of every kind (ON, USING, NATURAL);
+     - FROM subqueries and WITH; UNION, INTERSECT and EXCEPT;
+     - subqueries in expressions, correlated to any level (IN, EXISTS, ANY/ALL, scalar);
+     - window functions with ROWS and RANGE frames, and named windows;
+     - a catalog of Postgres's scalar functions, the statistical aggregates, and casts.
+   - **Semantics:** Postgres's three-valued logic is spelled out in the Pure itself (register S44). What has no
+     faithful Pure spelling is refused by name, never approximated.
+   - **Registered:** S43 to S47 in `docs/SEMANTICS_REGISTER.md`.
+2. **Four lowering fixes in `lowering/Lowerer.java`.** The island's cases found them in plain Pure; each has a test
+   that fails without its fix (`ConcatenateFlattenCheckerTest`, `CorrelatedRelationCheckerTest`):
+   - A concatenate whose branch sorts or limits rendered `... LIMIT 2 UNION ALL ...`. Such a branch is now a
+     subselect.
+   - `exists` over a sliced relation (limit, offset, qualify) merged its predicate into the slice's WHERE, so it ran
+     before the LIMIT. That was a silent wrong answer: `[1, 2]` for `[2]`. Such a relation is now isolated first.
+   - A join condition read any variable but the left side's as the right side, so an enclosing row's `$p.id` became
+     the right side's own `id`. An enclosing row now resolves through the enclosing scopes.
+   - A relation `map` read as a value (`map->toOne`) did not push the enclosing row's scope, so a correlated one
+     could not resolve. It now pushes it, as the `exists` and `size` arms do.
+3. **The parity corpus.** legend-engine 4.145.0's 1,703 `parity-tests` cases, plus 177 of legend-lite's own
+   (`core/src/test/resources/sql-parity/lite/`), run as islands.
+   - **Two lanes:** `//core:sql_parity_test` (DuckDB) and `//core:sql_parity_postgres_test` (Postgres 16), both in
+     `//gates:core`.
+   - **The judge:** Postgres 16's own answers, snapped. The Postgres lane checks each snapped answer against
+     Postgres itself on every run.
+   - **The ratchet:** each case's status is held by `ledger.tsv`.
+   - **The result, identical in both lanes:**
+
+     | | upstream's 1,703 | own 177 |
+     |---|---|---|
+     | PASS | 951 | 144 |
+     | FAIL (wrong answer) | 0 | 0 |
+     | BUG (answers what Postgres rejects) | 0 | 0 |
+     | ERROR (errs where Postgres answers) | 0 | 0 |
+     | REFUSED by name | 626 | 18 |
+     | BOTH_ERROR | 61 | 15 |
+     | SKIP | 65 | 0 |
+
+   - **Against upstream:** upstream legend-engine passes 1,026 of its 1,703, with 36 wrong answers and 61 accepted
+     invalid queries.
+4. **Judges.**
+   - **The local gate:** `bazel test --lockfile_mode=error //gates:local` on the branch merged with main e56d802: 332 targets, 316 pass. The 16 that fail are this root container's. 13 are browser and timeout targets that fail the same way on main's tree before this work (11283c8): a WebAssembly signature trap in three DataCube and Query harnesses, `//site:verify_test`'s selector wait, six tests that time out even alone, and a download from `extensions.duckdb.org`. The other 3 are the Postgres targets, which `initdb` refuses as root.
+   - **The Postgres targets in a root container:** `//core:sql_parity_postgres_test`, `//core:sql_island_postgres_test`
+     and `//core:postgres_arm_test` pass through the unprivileged wrapper (`tools/postgres/as_unprivileged.sh`,
+     7c21e6d on `claude/great-wright-p6t5s1`).
+   - **The six corpus passes and the full CI run on the branch:** recorded at landing.
+5. **Not done, recorded in the study** (§9.1, "Refused by name" and "Next steps"):
+   - `round(x, n)`: Pure's round is half to even, Postgres's numeric round half away from zero.
+   - `strpos`: Pure's `indexOf` is lowered one too high; PCT pins it.
+   - `parseDecimal` lowers to a fixed `DECIMAL(5, 2)`.
+   - LATERAL, intervals, arrays, JSON operators, regular expressions.
