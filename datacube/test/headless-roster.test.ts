@@ -6,6 +6,7 @@
 // is refused too: it would not run in V8.
 
 import assert from 'node:assert/strict';
+import { posix } from 'node:path';
 import { test } from 'node:test';
 
 import { Sources } from '../../tools/js/runfiles.mts';
@@ -29,7 +30,8 @@ function nodeOnly(file: string, seen = new Set<string>()): string | null {
     if (spec.startsWith('node:') && !NODE_TEST.has(spec)) return `${file} imports ${spec}`;
     if (spec.endsWith('/runfiles.mts')) return `${file} reads files through the runfiles reader`;
     if (spec.startsWith('.')) {
-      const target = new URL(spec, `file:///${file}`).pathname.slice(1);
+      // a package-relative path, '/'-separated on every platform as the scanner names files
+      const target = posix.normalize(posix.join(posix.dirname(file), spec));
       // the test's own helpers are followed; DataCube's sources bundle with --platform=neutral, which refuses Node
       if (target.startsWith('test/')) {
         const why = nodeOnly(target, seen);

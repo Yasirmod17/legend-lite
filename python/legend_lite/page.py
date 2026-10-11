@@ -374,6 +374,42 @@ class Grid(Tile):
         self._page._changed()
         return self
 
+    # -- headless: DataCube's own code, in Python (docs/DATACUBE_HEADLESS_PYTHON_DESIGN_2026_10_11.md §4) ------------
+
+    def _headless(self, function: str) -> Any:
+        """One of the headless bundle's grid functions, over this grid's cube and its frame. Called with the frames held
+        still (``Frames.serving``): the bundle's queries run on their connection meanwhile."""
+        session = self._page._session
+        table = session.frames[self.frame]
+        spec = {'cube': _json.dumps(self._cube), 'model': table.model, 'runtime': table.runtime, 'source': table.accessor}
+        return session.headless().call(function, spec)
+
+    def view(self) -> GridView:
+        """What the grid shows, as DataCube computes it: its columns and rows, their groups and totals, its pivot, and
+        what its row cap cut -- by DataCube's own code, run headless in V8 (the `datacube` extra), as the grid on screen
+        runs it."""
+        import json
+
+        from ._headless import cells
+        with self._page._session.frames.serving():
+            # DataCube's cells are exact as it gives them (an Integer or a Float a number, a Decimal its text): read as
+            # JSON reads them, an integer past 2^53 and a non-finite float from their tags
+            return GridView(cells(json.loads(self._headless('gridView'))))
+
+    @property
+    def relation(self) -> str:
+        """Its rows at their finest level, as Pure: its filters and calculated columns, before any grouping -- the
+        relation DataCube's Create a Class makes a class of."""
+        with self._page._session.frames.serving():
+            return self._headless('gridRelation')
+
+    def to_pandas(self) -> Any:
+        """Every row of ``relation``, as a pandas DataFrame: DataCube says the query, the frames' own database answers
+        it, and the rows come to Python from there (never through DataCube's engine)."""
+        frames = self._page._session.frames
+        with frames.serving():
+            return frames.connection.execute(self._headless('gridSql')).to_arrow_table().to_pandas()
+
     def group(self, *rows: str) -> Grid:
         """Grouped by ``rows``, outermost first (the Rows zone); none, not grouped."""
         return self._set('rows', self._check(rows, 'group'))
@@ -511,6 +547,41 @@ def _spec(grid: Grid, mark: str, x: str | None, y: Sequence[tuple[str, str]] | N
     return {'version': 1, 'mark': mark, 'y': [{'column': c, 'fn': fn} for c, (_, fn) in zip(named, plotted)],
             **({'x': x} if x is not None else {}), **({'split': split} if split is not None else {}),
             **({'frozen': True} if frozen else {})}
+
+
+class GridView:
+    """A grid's view, as DataCube computed it (``Grid.view()``): its ``columns`` (each a dict: ``name``, ``path``, its
+    pivot's values and the measure, ``type``, ``dimension``; a grouped grid's first is ``__tree``, its groups' labels,
+    as on screen), its ``rows`` (each a list, one value per column, numbers exact: a Decimal's ``Decimal``), their
+    ``tree`` (each row's ``path``, ``level``, and whether it is a ``group``, ``expanded`` or a ``total``),
+    the levels the row cap ``truncated``, a flat grid's ``total_rows`` when the cap cut it, and the ``query`` and ``sql``
+    that answered it."""
+
+    def __init__(self, view: Mapping[str, Any]) -> None:
+        self.columns: list[dict[str, Any]] = list(view['columns'])
+        # each value as its column's type says: a Decimal's text (DataCube's exact decimals) a Decimal, a Float a float
+        # even when JSON wrote it as a whole number (10.0 is written 10)
+        def typed(v: Any, type: str) -> Any:
+            if type == 'Decimal' and isinstance(v, str):
+                return Decimal(v)
+            if type == 'Float' and isinstance(v, int) and not isinstance(v, bool):
+                return float(v)
+            return v
+        types = [c['type'] for c in self.columns]
+        self.rows: list[list[Any]] = [[typed(v, t) for v, t in zip(row, types)] for row in view['rows']]
+        self.tree: list[dict[str, Any]] = list(view['tree'])
+        self.truncated: list[dict[str, Any]] = list(view['truncated'])
+        self.total_rows: int | None = view.get('totalRows')
+        self.query: str = view['query']
+        self.sql: str = view['sql']
+
+    def to_pandas(self) -> Any:
+        """The rows as the grid shows them, a DataFrame with one column per column shown."""
+        import pandas as pd
+        return pd.DataFrame(self.rows, columns=[c['name'] for c in self.columns])
+
+    def __repr__(self) -> str:
+        return f'<GridView: {len(self.rows)} rows, {len(self.columns)} columns{", truncated" if self.truncated else ""}>'
 
 
 class Chart(Tile):

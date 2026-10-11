@@ -77,17 +77,21 @@ class Headless:
     """DataCube's non-screen code in one V8 context, with its planner and its database. One per process is the intent
     (one state owner, as on screen); calls are serialized, one at a time. ``close()`` (or a ``with`` block) ends it."""
 
-    def __init__(self, bundle: str, *, folder: str | Path | None = None, memory_limit: int = DEFAULT_MEMORY_LIMIT,
-                 lib: Library | None = None) -> None:
-        """``bundle`` is a headless bundle's script; ``folder`` where the files DataCube registers are written, which the
-        database reads relative names from (a temporary folder of the engine's own when not given)."""
+    def __init__(self, bundle: str, *, connection: Any = None, folder: str | Path | None = None,
+                 memory_limit: int = DEFAULT_MEMORY_LIMIT, lib: Library | None = None) -> None:
+        """``bundle`` is a headless bundle's script. ``connection`` the duckdb connection its queries run on (a Frames'
+        one, whose tables a page's grids read; a new database of the engine's own when not given, closed with it).
+        ``folder`` where the files DataCube registers are written (a temporary folder of the engine's own when not
+        given); a database of the engine's own reads relative names from it."""
         import duckdb  # the database: the datacube extra's, never the compiler's
 
         self._lib = lib or library()
         self._own_folder = tempfile.TemporaryDirectory(prefix='legend-lite-datacube-') if folder is None else None
         self._folder = Path(self._own_folder.name if self._own_folder else folder).resolve()
-        self._db = duckdb.connect()
-        self._db.execute("SET file_search_path = '" + str(self._folder).replace("'", "''") + "'")
+        self._own_db = connection is None
+        self._db = duckdb.connect() if connection is None else connection
+        if self._own_db:
+            self._db.execute("SET file_search_path = '" + str(self._folder).replace("'", "''") + "'")
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._loop.run_forever, name='legend-lite-datacube', daemon=True)
         self._thread.start()
@@ -169,6 +173,11 @@ class Headless:
         """A JavaScript expression's value, awaited when it is a Promise, as JSON gives it to Python."""
         return self._run(self._evaluate(expression))
 
+    def call(self, function: str, *args: Any) -> Any:
+        """One of the bundle's functions (``legendLiteHeadless.<function>``) called with ``args`` as JSON gives them,
+        awaited; its answer as JSON gives it to Python."""
+        return self.evaluate(f'legendLiteHeadless.{function}(...{json.dumps(list(args))})')
+
     def execute(self, code: str) -> None:
         """JavaScript code run in the engine's context, for its effects."""
         async def run() -> None:
@@ -188,7 +197,8 @@ class Headless:
             self._loop.call_soon_threadsafe(self._loop.stop)
             self._thread.join()
         self._loop.close()
-        self._db.close()
+        if self._own_db:
+            self._db.close()
         if self._own_folder is not None:
             self._own_folder.cleanup()
 
@@ -197,3 +207,32 @@ class Headless:
 
     def __exit__(self, *_exc: object) -> None:
         self.close()
+
+
+# the product's bundle: beside this module in the wheel (the `datacube` extra, step 4), or where LEGEND_LITE_DATACUBE says
+_BUNDLE = Path(__file__).with_name('_datacube') / 'legend-lite-headless.js'
+
+
+def bundle() -> str:
+    """DataCube's headless bundle, as legend-lite ships it (or LEGEND_LITE_DATACUBE names it)."""
+    import os
+
+    path = Path(os.environ.get('LEGEND_LITE_DATACUBE') or _BUNDLE)
+    if not path.is_file():
+        raise OSError(f"DataCube's headless bundle is not at {path}: install the datacube extra "
+                      "(pip install 'legend-lite[datacube]'), or set LEGEND_LITE_DATACUBE")
+    return path.read_text(encoding='utf-8')
+
+
+def cells(value: Any) -> Any:
+    """A grid's JSON read back exactly: the bundle tags an integer past 2^53 ({"$int": ...}) and a float JSON cannot
+    write ({"$float": "NaN"}, "Infinity", "-Infinity", "-0.0")."""
+    if isinstance(value, dict):
+        if value.keys() == {'$int'}:
+            return int(value['$int'])
+        if value.keys() == {'$float'}:
+            return float(value['$float'])
+        return {k: cells(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [cells(v) for v in value]
+    return value

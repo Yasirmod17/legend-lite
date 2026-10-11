@@ -203,6 +203,38 @@ py_test(
     ],
 )
 
+# Grids headless (docs/DATACUBE_HEADLESS_PYTHON_DESIGN_2026_10_11.md §4): a page's grid run by DataCube's own code in V8
+# -- grid.view(), grid.relation, grid.to_pandas() -- each checked against pandas computing the same. The bundle is
+# DataCube's (//datacube:headless_bundle), as the wheel's `datacube` extra will carry it (step 4).
+py_test(
+    name = "headless_test",
+    size = "medium",
+    srcs = [
+        "tests/main.py",
+        "tests/test_headless.py",
+    ],
+    args = ["test_headless"],
+    data = [
+        "//datacube:headless_bundle",
+        "//native:compiler",
+    ],
+    env = select({
+        "//tools/platforms:windows_x86_64": _ENV | {
+            "LEGEND_LITE_DATACUBE": "$(rlocationpath //datacube:headless_bundle)",
+            "PROCESSOR_ARCHITECTURE": "AMD64",
+        },
+        "//conditions:default": _ENV | {"LEGEND_LITE_DATACUBE": "$(rlocationpath //datacube:headless_bundle)"},
+    }),
+    main = "tests/main.py",
+    target_compatible_with = _PLATFORMS,
+    deps = [
+        ":headless",
+        ":legend_lite",
+        "@pypi//pandas",
+        "@rules_python//python/runfiles",
+    ],
+)
+
 # The engine: legend-engine's pure/v1 API over frames, as DataCube's remote client calls it -- the compiler's answers
 # through HTTP, execute in upstream's Arrow format with DuckDB's rows over the frame as it is then, the refusals in the
 # engine's error shape, and only its own page answered (its token, a local Host, no cross-origin answer).

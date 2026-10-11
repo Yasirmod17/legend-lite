@@ -162,6 +162,8 @@ test_suite(
         "//python:bindings_test",
         "//python:engine_test",
         "//python:frames_test",
+        # a page's grid run by DataCube's own code in V8: its view, its relation, its rows as pandas
+        "//python:headless_test",
         # a notebook's cube: the widget's calls and version, show() in a kernel (legend_lite/notebook.py)
         "//python:notebook_test",
         "//python:tools_build_test",
