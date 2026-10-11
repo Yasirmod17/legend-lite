@@ -502,7 +502,11 @@ export class WasmPlanner implements Planner, TableModels {
    * is made once, against the model as it is then.
    */
   async promoteRelationToModel(query: Lambda, project: string, request: PromoteRequest): Promise<PromoteAnswer> {
-    const code = project === '' ? this.#options.model : `${project}\n${this.#options.model}`;
+    // the planner's model after the project's files: under a section header of its own, since text before a model's
+    // first header is Pure's, and after the project's files it would be read as the last file's section (the Plan Gen
+    // line's review, 2026-10-10)
+    const own = this.#options.model;
+    const code = project === '' ? own : `${project}\n${own.trimStart().startsWith('###') ? own : `###Pure\n${own}`}`;
     // the lambda's JSON spliced in as toJson wrote it, so its numbers keep their digits
     const fields = JSON.stringify({ model: { _type: 'text', code }, ...request });
     const body = `{"lambda":${toJson(query)},${fields.slice(1)}`;
