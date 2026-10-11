@@ -74,6 +74,9 @@ js_library(
         # Apache ECharts: the chart windows (src/chart-render.ts is its one importer; only
         # the charts and components used are registered, via echarts/core).
         ":node_modules/echarts",
+        # whatwg-url, the URL standard's reference implementation: URL and URLSearchParams where an embedding engine
+        # has none (src/headless/url.ts, its one importer; docs/DATACUBE_HEADLESS_PYTHON_DESIGN_2026_10_11.md §3). MIT.
+        ":node_modules/whatwg-url",
     ],
 )
 
@@ -304,6 +307,7 @@ typescript.tsc_test(
         ":node_modules/@types/jsdom",
         ":node_modules/echarts",
         ":node_modules/fflate",
+        ":node_modules/whatwg-url",
         ":node_modules/@types/node",
         ":node_modules/jsdom",
         ":node_modules/playwright",

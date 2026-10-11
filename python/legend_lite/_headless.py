@@ -1,0 +1,185 @@
+"""DataCube's own code, headless: its non-screen bundle run in V8 (mini-racer), planning through legend-lite's native
+library and querying Python's DuckDB, with no WebAssembly anywhere in the process
+(docs/DATACUBE_HEADLESS_PYTHON_DESIGN_2026_10_11.md §3, §5).
+
+DataCube's planner talks to a worker (datacube/src/planner-protocol.ts); here the host is that worker, and it answers
+each request kind with the native library's function that delegates to the same ``Boundary`` function the tab's
+WebAssembly export does. ``KINDS`` is that table, the one place it is written: the engine answers by it, and checks by
+it, before anything runs, that the bundle sends no kind it lacks and that the library exports every function it names.
+
+The engine runs on an event loop of its own, on its own thread: a caller's thread (a notebook's included, whose own
+loop is running) posts each call to it and waits, so the API is synchronous and never touches the caller's loop.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+import contextlib
+import hashlib
+import io
+import json
+import tempfile
+import threading
+from collections.abc import Callable, Coroutine
+from pathlib import Path
+from typing import Any
+
+from ._library import Library, library
+
+# A request kind -> the native function answering it, and that function's arguments from the request. Each function
+# delegates to the Boundary function the tab's TabExports export of that kind delegates to.
+KINDS: dict[str, tuple[str, Callable[[dict[str, Any]], tuple[str, ...]]]] = {
+    'hold': ('lite_hold_model', lambda m: (m['model'],)),
+    'release': ('lite_release_model', lambda m: (str(m['handle']),)),
+    'plan': ('lite_plan_text_held', lambda m: (str(m['handle']), m['query'], m['runtime'])),
+    'relationType': ('lite_relation_type_text_held', lambda m: (str(m['handle']), m['query'])),
+    'tableModel': ('lite_table_model', lambda m: (m['table'],)),
+    'catalogColumnsSql': ('lite_catalog_columns_sql', lambda m: (m['schema'], m['table'])),
+    'planJson': ('lite_plan_json_held', lambda m: (str(m['handle']), m['lambda'], m['runtime'])),
+    'pureV1': ('lite_pure_v1', lambda m: (m['path'], m['query'], m['body'])),
+    'testData': ('lite_test_data_sql', lambda m: (m['model'], m['database'], m['tables'])),
+}
+
+# WebCrypto's digests, by the names crypto.subtle.digest takes
+_DIGESTS = {'SHA-1': 'sha1', 'SHA-256': 'sha256', 'SHA-384': 'sha384', 'SHA-512': 'sha512'}
+
+# how much of V8's heap the engine may use: past it, the call that needs more fails, not the process
+DEFAULT_MEMORY_LIMIT = 2 * 1024 ** 3
+
+
+class InterfaceMismatch(RuntimeError):
+    """The bundle and the native library do not agree on the planner's requests: both sides named."""
+
+
+def check_interface(bundle_kinds: list[str], lib: Library) -> None:
+    """The bundle's request kinds against ``KINDS``, and each function ``KINDS`` names against the library's exports."""
+    sent, answered = set(bundle_kinds), set(KINDS)
+    missing = sorted(k for k in KINDS if not lib.exports(KINDS[k][0]))
+    if sent != answered or missing:
+        raise InterfaceMismatch(
+            "DataCube's bundle and legend-lite's native library do not agree on the planner's requests: "
+            f'the bundle sends {sorted(sent)}; this host answers {sorted(answered)}'
+            + (f'; the library exports none of {[KINDS[k][0] for k in missing]}' if missing else ''))
+
+
+def answer(lib: Library, request: dict[str, Any]) -> dict[str, Any]:
+    """One planner request answered as planner-worker.ts answers it: the function's tagged answer (a refusal is one too),
+    or, when the call itself fails, the worker's failure."""
+    try:
+        name, args = KINDS[request['kind']]
+        return {'id': request['id'], 'ok': True, 'answer': lib.call(name, *args(request))}
+    except Exception as e:  # noqa: BLE001 -- the worker answers its own failure, as planner-worker.ts's catch does
+        return {'id': request.get('id'), 'ok': False, 'error': f'{type(e).__name__}: {e}'}
+
+
+class Headless:
+    """DataCube's non-screen code in one V8 context, with its planner and its database. One per process is the intent
+    (one state owner, as on screen); calls are serialized, one at a time. ``close()`` (or a ``with`` block) ends it."""
+
+    def __init__(self, bundle: str, *, memory_limit: int = DEFAULT_MEMORY_LIMIT, lib: Library | None = None) -> None:
+        import duckdb  # the database: the datacube extra's, never the compiler's
+
+        self._lib = lib or library()
+        self._files = tempfile.TemporaryDirectory(prefix='legend-lite-datacube-')
+        self._db = duckdb.connect()
+        # a file DataCube registers is written to the engine's own folder, which the database reads relative names from
+        self._db.execute('SET file_search_path = ?', [self._files.name])
+        self._loop = asyncio.new_event_loop()
+        self._thread = threading.Thread(target=self._loop.run_forever, name='legend-lite-datacube', daemon=True)
+        self._thread.start()
+        self._stack = contextlib.AsyncExitStack()
+        self._mr: Any = None
+        try:
+            self._run(self._open(bundle, memory_limit))
+        except BaseException:
+            self.close()
+            raise
+
+    # ---- the calls out of V8, each on the engine's loop
+
+    async def _planner(self, request: str) -> str:
+        return json.dumps(answer(self._lib, json.loads(request)))
+
+    async def _query(self, sql: str) -> str:
+        import pyarrow as pa
+
+        result = self._db.execute(sql)
+        table = result.to_arrow_table() if result.description is not None else pa.table({})
+        sink = io.BytesIO()
+        with pa.ipc.new_stream(sink, table.schema) as writer:
+            writer.write_table(table)
+        return base64.b64encode(sink.getvalue()).decode('ascii')
+
+    async def _register_file(self, name: str, data: str) -> None:
+        root = Path(self._files.name).resolve()
+        target = (root / name).resolve()
+        if root not in target.parents:
+            raise ValueError(f'a registered file stays in the engine\'s folder: {name!r} does not')
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(base64.b64decode(data))
+
+    async def _digest(self, algorithm: str, data: str) -> str:
+        name = _DIGESTS.get(str(algorithm).upper())
+        if name is None:
+            raise ValueError(f'crypto.subtle.digest: {algorithm!r} is not a digest WebCrypto names ({sorted(_DIGESTS)})')
+        return base64.b64encode(hashlib.new(name, base64.b64decode(data)).digest()).decode('ascii')
+
+    # ---- the engine's life
+
+    async def _open(self, bundle: str, memory_limit: int) -> None:
+        from py_mini_racer import MiniRacer
+
+        # made on the engine's loop, so mini-racer runs on it (and never on a caller's)
+        self._mr = MiniRacer()
+        self._mr.set_hard_memory_limit(memory_limit)
+        # no WebAssembly in this process (the user's ruling, 2026-10-11): anything that reached for it fails here, loudly
+        self._mr.eval('delete globalThis.WebAssembly;')
+        self._mr.eval(bundle)
+        check_interface(json.loads(self._mr.eval('JSON.stringify(legendLiteHeadless.REQUEST_KINDS)')), self._lib)
+        calls = [await self._stack.enter_async_context(self._mr.wrap_py_function(f))
+                 for f in (self._planner, self._query, self._register_file, self._digest)]
+        start = self._mr.eval('(planner, query, registerFile, digest) => {'
+                              ' globalThis.legendLite = legendLiteHeadless.start({ planner, query, registerFile, digest }); }')
+        start(*calls)
+
+    def _run(self, coroutine: Coroutine[Any, Any, Any]) -> Any:
+        if threading.current_thread() is self._thread:
+            raise RuntimeError("the engine's own thread cannot wait for the engine")
+        return asyncio.run_coroutine_threadsafe(coroutine, self._loop).result()
+
+    async def _evaluate(self, expression: str) -> Any:
+        promise = self._mr.eval(f'Promise.resolve({expression}).then((v) => JSON.stringify(v === undefined ? null : v))')
+        return json.loads(await promise)
+
+    def evaluate(self, expression: str) -> Any:
+        """A JavaScript expression's value, awaited when it is a Promise, as JSON gives it to Python."""
+        return self._run(self._evaluate(expression))
+
+    def execute(self, code: str) -> None:
+        """JavaScript code run in the engine's context, for its effects."""
+        async def run() -> None:
+            self._mr.eval(code)
+        self._run(run())
+
+    def close(self) -> None:
+        """Ends the engine: its calls let go, V8's context, the loop's thread, the database and its folder."""
+        if self._loop.is_running():
+            async def shut() -> None:
+                await self._stack.aclose()
+                if self._mr is not None:
+                    self._mr.close()
+                    self._mr = None
+            with contextlib.suppress(Exception):
+                asyncio.run_coroutine_threadsafe(shut(), self._loop).result()
+            self._loop.call_soon_threadsafe(self._loop.stop)
+            self._thread.join()
+        self._loop.close()
+        self._db.close()
+        self._files.cleanup()
+
+    def __enter__(self) -> Headless:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()

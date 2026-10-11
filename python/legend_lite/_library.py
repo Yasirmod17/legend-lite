@@ -89,6 +89,14 @@ class Library:
         finally:
             self._lib.lite_free(t, p)
 
+    def exports(self, name: str) -> bool:
+        """Whether the library exports a function of that name: its own symbol table asked, so no list is kept by hand."""
+        try:
+            getattr(self._lib, name)
+        except AttributeError:
+            return False
+        return True
+
     def unfreed(self) -> int:
         """The answers the library has returned that were not yet freed (its own count): 0 between calls."""
         return self._lib.lite_unfreed(self._thread())

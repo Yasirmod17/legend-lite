@@ -1238,6 +1238,10 @@ TEST_IMPORTS = {
         "src/treeview.ts",
     ],
     "guardrails": [],
+    "headless-web": [
+        "src/headless/url.ts",
+        "src/headless/web.ts",
+    ],
     "host": [
         "src/host.ts",
     ],
