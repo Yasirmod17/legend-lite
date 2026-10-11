@@ -78,6 +78,9 @@ public final class Databricks extends AnsiSqlRenderer {
      *  where every projection is such an unnest; any other mix is refused by name. */
     @Override
     protected SqlWriter select(SqlWriter writer, SqlSelect s, int depth) {
+        if (s.from() instanceof SqlSource.Join j && j.kind() == SqlSource.Join.Kind.ASOF_LEFT) {
+            return select(writer, asOf(s, j), depth);
+        }
         long unnests = s.projections().stream().filter(p -> p.expr() instanceof SqlExpr.Call c
                 && c.fn() == SqlFn.UNNEST).count();
         if (unnests < 2) {
@@ -117,7 +120,53 @@ public final class Databricks extends AnsiSqlRenderer {
 
     @Override
     protected String asOfJoinClause() {
-        throw new DialectCapability("an as-of join reached Databricks, which has none");
+        throw new IllegalStateException("an as-of join reached the join clause: Databricks writes its select (asOf)");
+    }
+
+    /**
+     * {@code s}, whose FROM is an as-of join, as Spark runs it: Spark has no as-of join, and refuses the portable
+     * form's correlated MAX in a join condition (measured). A LEFT JOIN on the same condition, each left row keeping
+     * its matches whose right key is the extreme one -- {@code QUALIFY k = MAX(k) OVER (PARTITION BY every left
+     * column) OR MAX(k) OVER (...) IS NULL}, the second arm keeping a left row with no match (its null-extended row).
+     * The portable form's rows, ties included. Only under a select that filters, groups and windows nothing of its
+     * own (the lowering's {@code SELECT *} over the join): those would see the join's rows before the pick.
+     */
+    private static SqlSelect asOf(SqlSelect s, SqlSource.Join j) {
+        CarrierStrategies.AsOfKey key = CarrierStrategies.asOfKey(j);
+        if (key == null) {
+            throw new DialectCapability("an as-of join with no inequality between its sides reached Databricks");
+        }
+        if (s.where() != null || !s.groupBy().isEmpty() || s.having() != null || s.qualify() != null
+                || s.projections().stream().anyMatch(p -> windowed(p.expr()))) {
+            throw new DialectCapability("an as-of join under a select that filters, groups or windows reached"
+                    + " Databricks: its pick is that select's QUALIFY");
+        }
+        String left = j.left().alias();
+        if (left == null || j.left().outputs().isEmpty()) {
+            throw new DialectCapability("an as-of join whose left side has no alias and columns reached Databricks");
+        }
+        List<SqlExpr> partition = new java.util.ArrayList<>();
+        for (com.legend.sql.OutputCol oc : j.left().outputs()) {
+            partition.add(SqlExpr.Column.of(left, oc));
+        }
+        SqlExpr extreme = new SqlExpr.WindowCall(new SqlAgg.Reducer(key.pickMax() ? SqlAgg.Fn.MAX : SqlAgg.Fn.MIN,
+                List.of(key.rightKey()), false, List.of()), partition, List.of(), null);
+        SqlExpr pick = SqlExpr.Call.of(SqlFn.OR, SqlExpr.Call.of(SqlFn.EQUAL, key.rightKey(), extreme),
+                SqlExpr.Call.of(SqlFn.IS_NULL, extreme));
+        return s.withFrom(new SqlSource.Join(j.left(), j.right(), SqlSource.Join.Kind.LEFT, j.on()))
+                .withQualify(pick);
+    }
+
+    private static boolean windowed(SqlExpr e) {
+        if (e instanceof SqlExpr.WindowCall) {
+            return true;
+        }
+        for (SqlExpr k : e.children()) {
+            if (windowed(k)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** An inline table, {@code VALUES (..), (..) AS t(a, b)}: a parenthesized VALUES is a syntax error here
@@ -523,8 +572,34 @@ public final class Databricks extends AnsiSqlRenderer {
             case MIN -> writer.append("array_min(").piece(xs).append(")");
             case MAX -> writer.append("array_max(").piece(xs).append(")");
             case COUNT -> writer.append("array_size(").piece(present).append(")");
+            case STDDEV_SAMP, STDDEV_POP, VAR_SAMP, VAR_POP, VARIANCE, STDDEV ->
+                    writer.piece(moments(present, rc.reducer()));
             default -> writer.piece(overRows(rc.collection(), rc.reducer(), rc.extras()));
         };
+    }
+
+    /**
+     * A list's variance or standard deviation as DuckDB computes it, so the same doubles: its own update, in its order
+     * of operations (count, then {@code mean + (x - mean) / count}, then {@code M2 + (x - new mean) * (x - mean)}), an
+     * aggregate over the present elements whose finish is the result. Spark's own moments are another update, equal
+     * in algebra but not in rounding (3.14's sample standard deviation came back 3.1399999999999997, measured). A
+     * sample's needs two elements (NULL otherwise); a population's one, 0 alone; a NULL list is NULL.
+     */
+    private static SqlWriter.Piece moments(SqlWriter.Piece present, SqlAgg.Fn fn) {
+        String x = "CAST(`__x` AS DOUBLE)";
+        String count = "(`__a`.`n` + 1)";
+        String mean = "(`__a`.`m` + (" + x + " - `__a`.`m`) / " + count + ")";
+        String step = "named_struct('n', " + count + ", 'm', " + mean + ", 'q', `__a`.`q` + (" + x + " - " + mean
+                + ") * (" + x + " - `__a`.`m`))";
+        boolean sample = fn == SqlAgg.Fn.STDDEV_SAMP || fn == SqlAgg.Fn.VAR_SAMP || fn == SqlAgg.Fn.VARIANCE
+                || fn == SqlAgg.Fn.STDDEV;
+        boolean root = fn == SqlAgg.Fn.STDDEV_SAMP || fn == SqlAgg.Fn.STDDEV_POP || fn == SqlAgg.Fn.STDDEV;
+        String variance = sample
+                ? "CASE WHEN `__a`.`n` > 1 THEN `__a`.`q` / (`__a`.`n` - 1) END"
+                : "CASE WHEN `__a`.`n` > 1 THEN `__a`.`q` / `__a`.`n` WHEN `__a`.`n` = 1 THEN CAST(0 AS DOUBLE) END";
+        String finish = root ? "sqrt(" + variance + ")" : variance;
+        return w -> w.append("aggregate(").piece(present).append(", named_struct('n', CAST(0 AS DOUBLE), 'm', CAST(0"
+                + " AS DOUBLE), 'q', CAST(0 AS DOUBLE)), (`__a`, `__x`) -> " + step + ", `__a` -> " + finish + ")");
     }
 
     @Override

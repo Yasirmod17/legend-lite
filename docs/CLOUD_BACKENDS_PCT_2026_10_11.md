@@ -91,7 +91,7 @@ measured on the account before it is trusted (execution beats documentation).
   (`StorelessRuntime.declaring`).
 - **The suites**: `Test_LegendLite_<Cloud>_<Suite>Functions_PCT`, fifteen classes with EMPTY expected-failure lists:
   the first run on each account fills them.
-- **Databricks: done** (2026-10-11, §8): the dialect, all five suites green on the account with 41 pinned rows of
+- **Databricks: done** (2026-10-11, §8): the dialect, all five suites green on the account with 36 pinned rows of
   1,250 tests, the census at 0 divergence (no ceiling raised).
 - **Snowflake: done** (2026-10-11, §9): the dialect, all five suites green on the account with 35 pinned rows of
   1,250 tests, the census at 0 divergence (no ceiling raised).
@@ -225,20 +225,21 @@ runtime fallback between engines) and the bundle budget.
 
 ## 8. Databricks, measured (2026-10-11)
 
-**Result:** all five suites pass on the account, each failure pinned by its message: 1,250 tests, 41 pinned (Grammar
-9 of 137, Essential 26 of 346, Relation 5 of 469, Standard 1 of 205, Unclassified 0 of 93), the census divergence 0
+**Result:** all five suites pass on the account, each failure pinned by its message: 1,249 tests, 36 pinned (Grammar
+9 of 137, Essential 26 of 345, Relation 1 of 469, Standard 0 of 205, Unclassified 0 of 93), the census divergence 0
 in every suite. Burned down in six runs from 185 failing (the first run: Grammar 10, Essential 77, Relation 77,
 Standard 18, Unclassified 3); 44 -> 42 later the same day, when Jaro-Winkler was written exactly (§9; Unclassified
 re-run on the account, 93 green); 42 -> 41 when the system database came to the server (§14; Grammar re-run on the
-account, 137 green). A run of the five is about 10.5 minutes with three suites at a time.
+account, 137 green); 41 -> 36 when the as-of join became a window pick and a list's moments DuckDB's own update
+(below; Relation and Standard re-run on the account, 469 and 205 green). A run of the five is about 10.5 minutes
+with three suites at a time.
 
-What the 41 are: 30 are the platform's own, pinned on the DuckDB lane by the same cause (instance identity, fold name
+What the 36 are: 30 are the platform's own, pinned on the DuckDB lane by the same cause (instance identity, fold name
 resolution, error positions and messages, the 0-based `indexOf`, `testBigFloatAbs`, the class `toString`, the
-variant-array `joinStrings`, the ExtendedInteger type, the harness's lost `$address`); the other 11 are Databricks'
+variant-array `joinStrings`, the ExtendedInteger type, the harness's lost `$address`); the other 6 are Databricks'
 own, each measured: a date-time past Spark's range overflows (4), the driver gives a BC date-time back as the
-Timestamp's text with its sign lost (1), no as-of join and no correlated subquery in a
-join condition to emulate one (4), the lowering's subquery inside a higher-order function (1; Postgres refuses it
-too), and the moments computed in double precision (1).
+Timestamp's text with its sign lost (1), and the lowering's subquery inside a higher-order function (1; Postgres
+refuses it too).
 
 The account: a Databricks SQL warehouse (`dbsql_version` 2026.39); the JDBC driver (databricks-jdbc 3.4.3) reports the
 product `SparkSQL` (`Sessions.jdbcProduct`). Every spelling in `core/.../sql/dialect/Databricks.java` was measured there
@@ -263,7 +264,8 @@ answer:
 | `map_concat` refuses a duplicate key (its dedup policy is not a warehouse setting) | each map less the keys a later one sets (`map_filter`), then concatenated |
 | `CAST(struct AS VARIANT)` is refused; `to_variant_object` converts; a variant takes no `[...]` subscript; object keys come back sorted | variant navigation casts to `MAP<STRING, VARIANT>` / `ARRAY<VARIANT>` (`try_element_at`) |
 | arrays, structs, maps and variants arrive over JDBC as JSON text; `getObject(i, LocalDateTime.class)` answers a String | the executor's JSON carrier parses lists; a struct's text is decoded by the dialect's `normalize`; the timestamp re-fetch keeps the driver's `Timestamp` when the driver answers another class |
-| a correlated scalar subquery in a join condition is refused | the as-of join is a wall (a window-based form is possible later) |
+| no as-of join, and a correlated scalar subquery in a join condition (the portable form's correlated MAX) is refused | an as-of join is a LEFT JOIN on its condition whose select keeps, per left row, the matches with the extreme right key: `QUALIFY k = MAX(k) OVER (PARTITION BY every left column) OR MAX(k) OVER (...) IS NULL` (MIN when bounded below; the portable form's rows, ties included; only under a select that filters, groups and windows nothing of its own) |
+| Spark's variance and standard deviation are another update than DuckDB's, equal in algebra but not in rounding (3.14's came back 3.1399999999999997) | a list's moments are DuckDB's own update in an `aggregate` whose finish is the result (40 values over 10 lists equal to DuckDB's, measured) |
 | `QUALIFY`, `SELECT * EXCEPT`, native `PIVOT` (columns named by the `IN` aliases), `listagg ... WITHIN GROUP`, `median`, `mode`, `percentile_cont/disc ... WITHIN GROUP`, `max_by`, `max(boolean)`, `explode`, correlated `(SELECT agg FROM explode(t.xs))` | used as they are |
 
 ## 9. Snowflake, measured (2026-10-11)

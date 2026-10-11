@@ -28,14 +28,9 @@ public class Test_LegendLite_Databricks_StandardFunctions_PCT extends PCTReportC
     private static final Adapter adapter = LegendLitePCTReportProvider.LegendLiteAdapter;
     private static final String platform = "interpreted";
 
-    // Pinned by a STABLE part of the message (the runner matches by containment): no per-run id.
-    // First measured 2026-10-11 on the account (Databricks SQL warehouse); burned down the same day: every row is
-    // the platform's own (pinned on the DuckDB lane too) or a measured limit of Databricks.
-    private static final MutableList<ExclusionSpecification> expectedFailures = Lists.mutable.with(
-            // DATABRICKS' OWN LIMIT: the moments are computed in double precision (3.14's standard deviation comes
-            // back 3.1399999999999997)
-            one("meta::pure::functions::math::tests::stdDev::testFloatStdDev_Function_1__Boolean_1_", "\"\nexpected: 3.14\nactual:   3.1399999999999997\"")
-    );
+    // First measured 2026-10-11 on the account (Databricks SQL warehouse); burned down the same day. Its last row,
+    // testFloatStdDev, was unpinned 2026-10-11: a list's moments are DuckDB's own update, so DuckDB's bits.
+    private static final MutableList<ExclusionSpecification> expectedFailures = Lists.mutable.empty();
 
     public static Test suite() {
         return PctCensusGate.wrap("Standard", wrapSuite(
