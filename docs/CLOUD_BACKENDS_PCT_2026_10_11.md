@@ -91,9 +91,9 @@ measured on the account before it is trusted (execution beats documentation).
   (`StorelessRuntime.declaring`).
 - **The suites**: `Test_LegendLite_<Cloud>_<Suite>Functions_PCT`, fifteen classes with EMPTY expected-failure lists:
   the first run on each account fills them.
-- **Databricks: done** (2026-10-11, §8): the dialect, all five suites green on the account with 44 pinned rows of
+- **Databricks: done** (2026-10-11, §8): the dialect, all five suites green on the account with 42 pinned rows of
   1,250 tests, the census at 0 divergence (no ceiling raised).
-- **Snowflake: done** (2026-10-11, §9): the dialect, all five suites green on the account with 38 pinned rows of
+- **Snowflake: done** (2026-10-11, §9): the dialect, all five suites green on the account with 36 pinned rows of
   1,250 tests, the census at 0 divergence (no ceiling raised).
 - **BigQuery: done** (2026-10-11, §10): the dialect, all five suites green on the account with 83 pinned rows of
   1,250 tests, the census at 0 divergence (no ceiling raised).
@@ -222,16 +222,17 @@ runtime fallback between engines) and the bundle budget.
 
 ## 8. Databricks, measured (2026-10-11)
 
-**Result:** all five suites pass on the account, each failure pinned by its message: 1,250 tests, 44 pinned (Grammar
-10 of 137, Essential 26 of 346, Relation 5 of 469, Standard 1 of 205, Unclassified 2 of 93), the census divergence 0
+**Result:** all five suites pass on the account, each failure pinned by its message: 1,250 tests, 42 pinned (Grammar
+10 of 137, Essential 26 of 346, Relation 5 of 469, Standard 1 of 205, Unclassified 0 of 93), the census divergence 0
 in every suite. Burned down in six runs from 185 failing (the first run: Grammar 10, Essential 77, Relation 77,
-Standard 18, Unclassified 3). A run of the five is about 10.5 minutes with three suites at a time.
+Standard 18, Unclassified 3); 44 -> 42 later the same day, when Jaro-Winkler was written exactly (§9; Unclassified
+re-run on the account, 93 green). A run of the five is about 10.5 minutes with three suites at a time.
 
-What the 44 are: 30 are the platform's own, pinned on the DuckDB lane by the same cause (instance identity, fold name
+What the 42 are: 30 are the platform's own, pinned on the DuckDB lane by the same cause (instance identity, fold name
 resolution, error positions and messages, the 0-based `indexOf`, `testBigFloatAbs`, the class `toString`, the
 variant-array `joinStrings`, the ExtendedInteger type, the harness's lost `$address`); the other 14 are Databricks'
 own, each measured: a date-time past Spark's range overflows (4), the driver gives a BC date-time back as the
-Timestamp's text with its sign lost (1), no Jaro-Winkler function (2), no as-of join and no correlated subquery in a
+Timestamp's text with its sign lost (1), no as-of join and no correlated subquery in a
 join condition to emulate one (4), the lowering's subquery inside a higher-order function (1; Postgres refuses it
 too), the moments computed in double precision (1), and `Class.all()` over the platform's in-process metamodel (1).
 
@@ -263,17 +264,18 @@ answer:
 
 ## 9. Snowflake, measured (2026-10-11)
 
-**Result:** all five suites pass on the account, each failure pinned by its message: 1,250 tests, 38 pinned (Grammar
-10 of 137, Essential 25 of 345, Relation 1 of 469, Standard 0 of 205, Unclassified 2 of 93), the census divergence 0
+**Result:** all five suites pass on the account, each failure pinned by its message: 1,250 tests, 36 pinned (Grammar
+10 of 137, Essential 25 of 345, Relation 1 of 469, Standard 0 of 205, Unclassified 0 of 93), the census divergence 0
 in every suite. Burned down in seven runs from 144 failing (the first run: Essential 70, Relation 35, Standard 34,
 Unclassified 5; Grammar's 10 pinned from the start); 40 -> 38 later the same day, when the comparator dedup's nested
-lambda was carried (below; Essential re-run on the account, 345 green).
+lambda was carried (below; Essential re-run on the account, 345 green); 38 -> 36 when Jaro-Winkler was written exactly
+(below; Unclassified re-run on the account, 93 green).
 
-What the 38 are: 34 are the platform's own, pinned on the DuckDB lane by the same cause (instance identity, fold name
+What the 36 are: 34 are the platform's own, pinned on the DuckDB lane by the same cause (instance identity, fold name
 resolution, error positions and messages, the 0-based `indexOf`, `testBigFloatAbs`, the class `toString`, the
 variant-array `joinStrings`, the ExtendedInteger type, the harness's lost `$address`, a date-time out of range); the
-other 4 are Snowflake's own, each measured: `JAROWINKLER_SIMILARITY` answers an integer percentage (2), the driver's
-Timestamp drops a BC year's sign (1), and `Class.all()` over the platform's in-process metamodel (1).
+other 2 are Snowflake's own, each measured: the driver's Timestamp drops a BC year's sign (1), and `Class.all()` over
+the platform's in-process metamodel (1).
 
 The account: warehouse `INTEGRATION_WH1`, database `INTEGRATION_DB1`, key-pair login; the JDBC driver
 (snowflake-jdbc 4.4.0) reports the product `Snowflake` (`Sessions.jdbcProduct`), version 10.36. Every spelling in
@@ -298,6 +300,21 @@ and the dialect's answer:
 | a VARIANT column is a JSON carrier; DuckDB's JSON travels as VARCHAR, which the plan labels; `ARRAY_MIN(NULL)` and `GET(NULL, 0)` are VARIANT columns | a JSON root column under a VARCHAR label is `TO_JSON(..)`; an exploded NULL list's column takes its label's type, and a min, max or element of the NULL list is its label's NULL (the root's labels as planned, before the dialect's passes) |
 | the session: `TIMEZONE = 'UTC'`, `WEEK_START = 1`, `TIMESTAMP_TYPE_MAPPING = 'TIMESTAMP_NTZ'`, `QUOTED_IDENTIFIERS_IGNORE_CASE = FALSE`, `JSON_INDENT = 0`, `STRICT_JSON_OUTPUT = TRUE` | set at session start (`sessionSetup`) |
 | `QUALIFY`, `EXCLUDE`, `MAX_BY`/`MIN_BY`, `BOOLAND_AGG`, `REDUCE`/`TRANSFORM`/`FILTER`, `ARRAY_*`, `OBJECT_*`, `CONVERT_TIMEZONE`, `DATEADD`/`DATEDIFF` | used as they are (with DuckDB's boundary-count `date_diff` per unit) |
+
+**Jaro-Winkler, written exactly (2026-10-11, the user's ruling: exact SQL where the backend has lambdas).** Snowflake's
+`JAROWINKLER_SIMILARITY` is another function: an integer percentage, case-insensitive (96 for MARTHA/MARHTA, 100 for
+abc/ABC, 0 for two empty strings), so dividing by 100 does not give DuckDB's fraction; Databricks has none. Both now
+write DuckDB's own algorithm (rapidfuzz's) in SQL: the match window `max(|p|, |t|) / 2 - 1`, at least 0; each
+character of `t` in turn takes the first unmatched equal character of `p` in its window; half the matches out of
+order, ROUNDED DOWN, are the transpositions (rapidfuzz's integer division: 181 of 1,585 pairs differ with the
+textbook's half); a Jaro score above 0.7 gains a tenth of its distance to 1 per character of a common prefix of up to
+four; an empty string scores 0. The score is computed in DOUBLE in DuckDB's order of operations, so the bits agree:
+measured on 1,585 pairs (alphabets of 2 to 8 letters, lengths 0 to 140, past the 64-character block of rapidfuzz's
+bit-parallel matcher), every result equal to DuckDB's on both accounts. Snowflake's is three `REDUCE`s over `OBJECT`
+states, each start carrying what the next lambda reads (a lambda reads no enclosing lambda's parameter); Databricks' is
+`aggregate`s whose finish lambdas chain the passes. One difference remains, DuckDB's own: it compares UTF-8 bytes,
+these compare characters, so a non-ASCII pair can differ (no test has one). SQLite, MariaDB, MySQL, Postgres and
+BigQuery have no lambdas and keep their wall.
 
 ## 10. BigQuery, measured (2026-10-11)
 
