@@ -748,6 +748,13 @@ same), `MODULE.bazel` (their `use_repo`), `pct/BUILD.bazel` (the cloud lanes, al
 (`Databricks`, `Snowflake`, `BigQuery`, siblings of `Postgres`; new `Lexicon`, `TypeNames` and `Spellings` rows) and
 their arms in the `DatabaseType` switches (`database/Databases.java`, `exec/Sessions.java`), in that order: core files
 the database-owner line also reads, so each lands with its own announcement line here.
+**2026-10-11, Databricks landed on the branch** (all five suites green on the account, 44 pinned of 1,250): new
+`sql/dialect/Databricks.java`; rows in `Lexicon`, `TypeNames`, `Spellings`, `CarrierStrategies.Caps`; the base
+renderer's composite type names as hooks (`AnsiSqlRenderer.arrayTypeName`/`mapTypeName`/`structTypeName`,
+byte-identical for every other dialect); arms in `database/Databases.java` and `exec/Sessions.java`; two exec edits:
+`exec/Executor.java` (the timestamp re-fetch keeps the driver's Timestamp when the driver answers another class) and
+`exec/SqlTypeCensus.java` (Spark's type names are spellings); `tools/census/RenderCensus.java` renders Databricks.
+**Next:** `Snowflake`, then `BigQuery`, the same files.
 
 ## Rules between sessions
 

@@ -29,8 +29,12 @@ public class Test_LegendLite_Databricks_UnclassifiedFunctions_PCT extends PCTRep
     private static final String platform = "interpreted";
 
     // Pinned by a STABLE part of the message (the runner matches by containment): no per-run id.
+    // First measured 2026-10-11 on the account (Databricks SQL warehouse); burned down the same day: every row is
+    // the platform's own (pinned on the DuckDB lane too) or a measured limit of Databricks.
     private static final MutableList<ExclusionSpecification> expectedFailures = Lists.mutable.with(
-            // first measured on the account: every row is pinned from the first run's report
+            // DATABRICKS' OWN LIMIT: no Jaro-Winkler similarity function
+            one("meta::pure::functions::string::tests::jaroWinklerSimilarity::testJaroWinklerSimilarityEqual_Function_1__Boolean_1_", "\"JARO_WINKLER reached Databricks: Databricks has no Jaro-Winkler similarity\""),
+            one("meta::pure::functions::string::tests::jaroWinklerSimilarity::testJaroWinklerSimilarityNotEqual_Function_1__Boolean_1_", "\"JARO_WINKLER reached Databricks: Databricks has no Jaro-Winkler similarity\"")
     );
 
     public static Test suite() {

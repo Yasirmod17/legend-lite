@@ -251,14 +251,50 @@ public final class Databricks extends AnsiSqlRenderer {
      *  it, measured). */
     @Override
     protected SqlWriter projection(SqlWriter writer, SqlSelect.Projection p) {
-        // (never a generator: Spark refuses explode inside an expression, measured)
-        if (p.out() != null && p.expr().type() instanceof com.legend.sql.TypeFact.Bottom
+        // a list of unknown element type exploded (the empty collection, compacted) is an array of VOID to Spark: its
+        // elements are typed by the column's declared type
+        if (p.out() != null && p.expr() instanceof SqlExpr.Call u && u.fn() == SqlFn.UNNEST && u.args().size() == 1
+                && listElement(u.args().get(0)) == null) {
+            writer.append("explode(CAST(").piece(list(u.args().get(0))).append(" AS ")
+                    .append(arrayTypeName(castTypeName(p.out().type()))).append("))");
+            String label = p.alias() != null ? aliasIdent(p.alias()) : implicitLabel(p);
+            return label == null ? writer : writer.append(" AS ").append(label);
+        }
+        // (never a generator: Spark refuses explode inside an expression, measured); a raise is VOID too
+        if (p.out() != null && (p.expr().type() instanceof com.legend.sql.TypeFact.Bottom || isRaise(p.expr()))
                 && !(p.expr() instanceof SqlExpr.Call call && call.fn() == SqlFn.UNNEST)) {
             writer.append("CAST(").expr(p.expr(), 0).append(" AS ").append(castTypeName(p.out().type())).append(")");
             String label = p.alias() != null ? aliasIdent(p.alias()) : implicitLabel(p);
             return label == null ? writer : writer.append(" AS ").append(label);
         }
         return super.projection(writer, p);
+    }
+
+    private static boolean isRaise(SqlExpr e) {
+        return e instanceof SqlExpr.Call c && c.fn() == SqlFn.ERROR;
+    }
+
+    /** A branch that IS the raise is cast to the CASE's own type: raise_error is VOID, which a CASE of nothing else
+     *  leaves VOID (as Postgres's raise is cast to its slot). */
+    @Override
+    protected SqlWriter caseExpr(SqlWriter writer, SqlExpr.Case c) {
+        SqlType slot = typeOf(c);
+        writer.append("CASE");
+        for (SqlExpr.Case.When w : c.whens()) {
+            writer.append(" WHEN ").expr(w.condition(), 0).append(" THEN ").piece(branch(w.then(), slot));
+        }
+        if (c.otherwise() != null) {
+            writer.append(" ELSE ").piece(branch(c.otherwise(), slot));
+        }
+        return writer.append(" END");
+    }
+
+    private SqlWriter.Piece branch(SqlExpr e, @com.legend.base.Nullable SqlType slot) {
+        if (isRaise(e) && slot != null) {
+            String type = castTypeName(slot);
+            return w -> w.append("CAST(").expr(e, 0).append(" AS " + type + ")");
+        }
+        return w -> w.expr(e, 0);
     }
 
     @Override
@@ -621,7 +657,8 @@ public final class Databricks extends AnsiSqlRenderer {
                     : writer.piece(toVariant(c.value()));
         }
         // a Float's text: Spark spells the exponent E (1.3421E-8), DuckDB e, which the lowering reads
-        if (c.target() == SqlType.Scalar.VARCHAR && typeOf(c.value()) == SqlType.Scalar.DOUBLE) {
+        if (c.target() == SqlType.Scalar.VARCHAR && (typeOf(c.value()) == SqlType.Scalar.DOUBLE
+                || c.value() instanceof SqlExpr.FloatLit)) {
             return writer.append("lower(CAST(").expr(c.value(), 0).append(" AS STRING))");
         }
         if (isJson(c.value())) {
@@ -644,7 +681,7 @@ public final class Databricks extends AnsiSqlRenderer {
     // ==================================================================
 
     /** The list functions whose answer over the empty collection (a NULL list) is NULL, as DuckDB's are. */
-    private static final java.util.Set<SqlFn> NULL_OVER_EMPTY = java.util.EnumSet.of(SqlFn.LIST_FILTER,
+    private static final java.util.Set<SqlFn> NULL_OVER_EMPTY = java.util.Set.of(SqlFn.LIST_FILTER,
             SqlFn.LIST_TRANSFORM, SqlFn.LIST_GET, SqlFn.LIST_POSITION, SqlFn.LIST_DISTINCT, SqlFn.LIST_SUM, SqlFn.LIST_MIN,
             SqlFn.LIST_MAX, SqlFn.LIST_AVG, SqlFn.LIST_MEDIAN, SqlFn.LIST_MODE, SqlFn.LIST_SORT, SqlFn.LIST_SORT_DESC,
             SqlFn.LIST_REVERSE, SqlFn.LIST_TAIL, SqlFn.LIST_INIT, SqlFn.LIST_SLICE, SqlFn.LIST_PRODUCT, SqlFn.LIST_LENGTH,
@@ -758,10 +795,10 @@ public final class Databricks extends AnsiSqlRenderer {
                     .append(", ").expr(a.get(2), 0).append(")");
             case DATE_DIFF -> writer.piece(dateDiff(a));
             case TIME_BUCKET -> writer.piece(timeBucket(a));
-            // DuckDB's timezone(zone, t): a naive t read in the zone (to its instant); an instant to the zone's time
-            case TIMEZONE -> typeOf(a.get(1)) == SqlType.Scalar.TIMESTAMPTZ
-                    ? writer.append("from_utc_timestamp(").expr(a.get(1), 0).append(", ").expr(a.get(0), 0).append(")")
-                    : writer.append("to_utc_timestamp(").expr(a.get(1), 0).append(", ").expr(a.get(0), 0).append(")");
+            // the zone's wall time of the instant t (the platform's timestamps are UTC instants): measured by the
+            // PCT's format with a zone (13:07:44 UTC is 08:07:44 in EST)
+            case TIMEZONE -> writer.append("from_utc_timestamp(").expr(a.get(1), 0).append(", ").expr(a.get(0), 0)
+                    .append(")");
             // DuckDB's epoch(ts) is DOUBLE seconds; epoch_ms truncates toward zero
             case EPOCH_SECONDS -> writer.append("(CAST(unix_micros(").expr(a.get(0), 0).append(") AS DOUBLE) / 1000000)");
             case EPOCH_MS -> writer.append("(unix_micros(").expr(a.get(0), 0).append(") div 1000)");

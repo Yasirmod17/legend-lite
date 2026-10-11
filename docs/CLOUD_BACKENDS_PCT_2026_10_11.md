@@ -63,9 +63,10 @@ measured on the account before it is trusted (execution beats documentation).
   (`StorelessRuntime.declaring`).
 - **The suites**: `Test_LegendLite_<Cloud>_<Suite>Functions_PCT`, fifteen classes with EMPTY expected-failure lists:
   the first run on each account fills them.
-- **Not yet**: the three dialects (every test fails today with "SQL dialect for database type ... is not implemented
-  yet", after a successful login), the credential fetch step, the CI workflow, the census ceilings
-  (`PctCensusGate` is 0 for these lanes until measured).
+- **Databricks: done** (2026-10-11, §8): the dialect, all five suites green on the account with 44 pinned rows of
+  1,250 tests, the census at 0 divergence (no ceiling raised).
+- **Not yet**: the Snowflake and BigQuery dialects (drafts measured against their accounts, not yet in the tree), the
+  CI workflow.
 
 ## 4. The properties file
 
@@ -187,6 +188,19 @@ per cloud behind `QueryEngine` once its dialect plans. A JSON result is decoded 
 runtime fallback between engines) and the bundle budget.
 
 ## 8. Databricks, measured (2026-10-11)
+
+**Result:** all five suites pass on the account, each failure pinned by its message: 1,250 tests, 44 pinned (Grammar
+10 of 137, Essential 26 of 346, Relation 5 of 469, Standard 1 of 205, Unclassified 2 of 93), the census divergence 0
+in every suite. Burned down in six runs from 185 failing (the first run: Grammar 10, Essential 77, Relation 77,
+Standard 18, Unclassified 3). A run of the five is about 10.5 minutes with three suites at a time.
+
+What the 44 are: 30 are the platform's own, pinned on the DuckDB lane by the same cause (instance identity, fold name
+resolution, error positions and messages, the 0-based `indexOf`, `testBigFloatAbs`, the class `toString`, the
+variant-array `joinStrings`, the ExtendedInteger type, the harness's lost `$address`); the other 14 are Databricks'
+own, each measured: a date-time past Spark's range overflows (4), the driver gives a BC date-time back as the
+Timestamp's text with its sign lost (1), no Jaro-Winkler function (2), no as-of join and no correlated subquery in a
+join condition to emulate one (4), the lowering's subquery inside a higher-order function (1; Postgres refuses it
+too), the moments computed in double precision (1), and `Class.all()` over the platform's in-process metamodel (1).
 
 The account: a Databricks SQL warehouse (`dbsql_version` 2026.39); the JDBC driver (databricks-jdbc 3.4.3) reports the
 product `SparkSQL` (`Sessions.jdbcProduct`). Every spelling in `core/.../sql/dialect/Databricks.java` was measured there

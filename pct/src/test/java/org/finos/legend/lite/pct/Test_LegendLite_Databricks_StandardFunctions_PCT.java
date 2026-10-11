@@ -29,8 +29,12 @@ public class Test_LegendLite_Databricks_StandardFunctions_PCT extends PCTReportC
     private static final String platform = "interpreted";
 
     // Pinned by a STABLE part of the message (the runner matches by containment): no per-run id.
+    // First measured 2026-10-11 on the account (Databricks SQL warehouse); burned down the same day: every row is
+    // the platform's own (pinned on the DuckDB lane too) or a measured limit of Databricks.
     private static final MutableList<ExclusionSpecification> expectedFailures = Lists.mutable.with(
-            // first measured on the account: every row is pinned from the first run's report
+            // DATABRICKS' OWN LIMIT: the moments are computed in double precision (3.14's standard deviation comes
+            // back 3.1399999999999997)
+            one("meta::pure::functions::math::tests::stdDev::testFloatStdDev_Function_1__Boolean_1_", "\"\nexpected: 3.14\nactual:   3.1399999999999997\"")
     );
 
     public static Test suite() {
