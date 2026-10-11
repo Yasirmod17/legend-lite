@@ -27,6 +27,7 @@ import { SheetTabs } from '../ui/sheet-tabs.ts';
 import type { MenuGroup, MenuItem } from '../ui/menu.ts';
 import { tiles } from '../layout/bands.ts';
 import { pageToJson, writePageOf, type PageDocument, type PageViews } from '../page-document.ts';
+import type { PageModelRef } from '../page-model.ts';
 import type { CubeDocument } from '../cube-document.ts';
 import type { CubeSnapshot } from '../snapshot.ts';
 import type { CubeConfiguration } from '../config.ts';
@@ -517,14 +518,15 @@ export class PageApp {
   }
 
   /**
-   * THE PAGE AS IT IS SAVED (page-document.ts, version 3): one cube per grid -- on the board, then kept off it for a
-   * detached chart -- each the grid's own cube document, under the grid's id; the views and the sheets. `unknown`:
-   * fields a newer writer put in the page and in each cube, written back as they were. Undefined when a grid cannot
-   * say its source, or there is nothing on the page.
+   * THE PAGE AS IT IS SAVED (page-document.ts, version 4): one cube per grid -- on the board, then kept off it for a
+   * detached chart -- each the grid's own cube document, under the grid's id; the views and the sheets; the page's
+   * model (where its classes are), when it has one. `unknown`: fields a newer writer put in the page and in each cube,
+   * written back as they were. Undefined when a grid cannot say its source, or there is nothing on the page.
    */
   document(name: string, unknown?: {
     readonly page?: Readonly<Record<string, unknown>>;
     readonly cubes?: ReadonlyMap<string, Readonly<Record<string, unknown>>>;
+    readonly model?: PageModelRef;
   }): PageDocument | undefined {
     const ids = this.cubes;
     if (ids.length === 0) return undefined;
@@ -534,7 +536,11 @@ export class PageApp {
       if (!cube) return undefined;
       cubes.push({ id, cube });
     }
-    return writePageOf({ name, cubes, views: this.views(), ...(unknown?.page ? { unknown: unknown.page } : {}) });
+    return writePageOf({
+      name, cubes, views: this.views(),
+      ...(unknown?.model ? { model: unknown.model } : {}),
+      ...(unknown?.page ? { unknown: unknown.page } : {}),
+    });
   }
 
   /** Why the page cannot be saved now, if it cannot: nothing on it, or a grid's own reason, named. */

@@ -63,7 +63,8 @@ MAX_COLUMNS = 4
 SCREEN_BANDS = 3
 
 PAGE_KIND = 'datacube.page'
-PAGE_VERSION = 3
+# 4: the page's model, where its classes are (DataCube's Create a Class…); a page of Python's has none yet
+PAGE_VERSION = 4
 CUBE_KIND = 'datacube.cube'
 CUBE_VERSION = 1
 # the operators that take no value, those that take a list of them, and those that compare to another column

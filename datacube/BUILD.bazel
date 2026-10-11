@@ -61,6 +61,9 @@ js_library(
         "//pure-protocol:pure_protocol",
         # saved queries: the one client, and the store answered in the page (query-store/README.md)
         "//query-store:query_store",
+        # the page's model (src/page-model.ts, Create a Class…: docs/DATACUBE_MODEL_DESIGN_2026_10_10.md §15.3): the
+        # SDLC's client, over the page's own SDLC (Studio's) or a server's
+        "//sdlc-client:sdlc_client",
         # where a query runs: the engine interface, results, the type reader, DuckDB, the warehouse,
         # pure/v1 (engine-client/README.md; moved out of here 2026-10-04)
         "//engine-client:engine_client",

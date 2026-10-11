@@ -3933,6 +3933,8 @@ export class CubeApp {
         { id: 'chart.plot', label: 'Visualization', ...cubeOnly },
         { id: 'grid.new', label: 'Copy of Grid', ...cubeOnly },
       ] }] },
+      // a host's entries on this grid's rows (Create a Class…): none, and the group is not shown
+      { label: '', items: this.#hostItems('data') },
       { label: '', items: this.#undoItems() },
       { label: '', items: this.#outputItems() },
       { label: '', items: this.#viewItems() },
