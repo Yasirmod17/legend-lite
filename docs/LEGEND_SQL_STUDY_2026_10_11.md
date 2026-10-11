@@ -953,6 +953,14 @@ answers, is refused by name, or is an invalid query both reject.
   legend-lite refuses, most need arrays, JSON operators, regular expressions (Postgres's dialect, not DuckDB's),
   intervals, LATERAL, `generate_series` and other functions in FROM, and queries without FROM.
 
+**The Postgres lanes inside `bazel test`, in this root container.** Another session's wrapper
+(`tools/postgres/as_unprivileged.sh`, commit 7c21e6d on `claude/great-wright-p6t5s1`, not yet on `main`) runs a test
+as an unprivileged user. It needs `chmod o+x /root` once, then
+`--strategy=TestRunner=standalone --run_under="tools/postgres/as_unprivileged.sh ubuntu"`. Through it,
+`//core:sql_parity_postgres_test` (1,880 cases, the ledger held), `//core:sql_island_postgres_test` (90 of 90) and
+`//core:postgres_arm_test` pass. The full local gate on this branch's head otherwise fails only the same 13
+container-bound browser and timeout targets as on the base commit.
+
 **Next steps, by size:**
 1. LATERAL (Pure has `lateral`), queries without FROM, `func(...)` sources (`generate_series`).
 2. Intervals and date arithmetic.
