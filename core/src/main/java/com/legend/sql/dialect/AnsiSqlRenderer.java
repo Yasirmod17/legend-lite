@@ -153,7 +153,7 @@ public class AnsiSqlRenderer implements SqlDialect {
     protected SqlWriter query(SqlWriter writer, SqlQuery q, int depth) {
         return switch (q) {
             case com.legend.sql.SqlWith w -> {
-                writer.append("WITH ");
+                writer.append(w.recursive() ? "WITH RECURSIVE " : "WITH ");
                 for (int i = 0; i < w.ctes().size(); i++) {
                     if (i > 0) {
                         writer.append(", ");

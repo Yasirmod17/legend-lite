@@ -33,6 +33,7 @@ public class Test_LegendLite_SQLite_GrammarFunctions_PCT extends PCTReportConfig
     private static final MutableList<ExclusionSpecification> expectedFailures = Lists.mutable.with(
             // INSTANCE IDENTITY (as on DuckDB): the asserts want the interpreter's ORIGINAL instances back, or eq/==
             // by reference; the harness inlines captured instances BY VALUE, so identity is erased before the wire
+            one("meta::pure::functions::collection::tests::filter::testFilterInstance_Function_1__Boolean_1_", "instanceOf meta::pure::functions::collection::tests::model::CO_Person"),
             one("meta::pure::functions::collection::tests::first::testFirstComplex_Function_1__Boolean_1_", "instanceOf meta::pure::functions::collection::tests::model::CO_Person"),
             one("meta::pure::functions::collection::tests::map::testMapRelationshipFromManyToMany_Function_1__Boolean_1_", "instanceOf meta::pure::functions::collection::tests::map::model::M_Location"),
             one("meta::pure::functions::collection::tests::map::testMapRelationshipFromManyToOne_Function_1__Boolean_1_", "instanceOf meta::pure::functions::collection::tests::map::model::M_Address"),
@@ -42,7 +43,6 @@ public class Test_LegendLite_SQLite_GrammarFunctions_PCT extends PCTReportConfig
             one("meta::pure::functions::boolean::tests::equality::eq::testEqPrimitiveExtension_Function_1__Boolean_1_", "\"unknown type 'meta::pure::functions::boolean::tests::equalitymodel::ExtendedInteger' in @meta::pure::functions::boolean::tests::equalitymodel::ExtendedInteger\""),
             one("meta::pure::functions::boolean::tests::equality::equal::testEqualNonPrimitive_Function_1__Boolean_1_", "\"Assert failed\""),
             one("meta::pure::functions::boolean::tests::equality::equal::testEqualPrimitiveExtension_Function_1__Boolean_1_", "\"unknown type 'meta::pure::functions::boolean::tests::equalitymodel::ExtendedInteger' in @meta::pure::functions::boolean::tests::equalitymodel::ExtendedInteger\""),
-            one("meta::pure::functions::collection::tests::filter::testFilterInstance_Function_1__Boolean_1_", "\"[SQLITE_ERROR] SQL error or missing database (no such column: p.lastName)\""),
             one("meta::pure::functions::collection::tests::map::testMapRelationshipFromOneToOne_Function_1__Boolean_1_", "\"unbound variable '$address'\""),
             // SQLITE'S OWN LIMIT: its dates are texts of the years 0000-9999 (a date function answers NULL past them,
             // raised here; a five-digit year compares as text)

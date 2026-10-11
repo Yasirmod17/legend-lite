@@ -623,9 +623,16 @@ public final class SqlTypeCensus {
 
     /** BigQuery's exact decimal carrier (2026-10-11): every decimal is a BIGNUMERIC (a parameterized type cannot be
      *  cast to; its 38 digits each side hold every DECIMAL(p,s) and HUGEINT value), and a Float-declared column may
-     *  arrive as it (the numeric charter's Rule 2, as a DECIMAL does). */
+     *  arrive as it (the numeric charter's Rule 2, as a DECIMAL does). Its map carrier (2026-10-11): a map is its
+     *  entries, an ARRAY of (key, value) structs -- BigQuery has no MAP type (the dialect's mapTypeName). */
     private static boolean bigQueryOwn(String dialect, SqlType label, String meta) {
-        if (!"BigQuery".equals(dialect) || !meta.equals("BIGNUMERIC")) {
+        if (!"BigQuery".equals(dialect)) {
+            return false;
+        }
+        if (meta.equals("ARRAY")) {
+            return label instanceof SqlType.Map;
+        }
+        if (!meta.equals("BIGNUMERIC")) {
             return false;
         }
         return label == SqlType.Scalar.HUGEINT || label == SqlType.Scalar.DOUBLE

@@ -58,10 +58,6 @@ public class Test_LegendLite_MariaDB_EssentialFunctions_PCT extends PCTReportCon
             one("meta::pure::functions::string::tests::indexOf::testFromIndex_Function_1__Boolean_1_", "\"\nexpected: 1\nactual:   2\""),
             one("meta::pure::functions::string::tests::indexOf::testSimple_Function_1__Boolean_1_", "\"\nexpected: 4\nactual:   5\""),
             one("meta::pure::functions::string::tests::toString::testComplexClassToString_Function_1__Boolean_1_", "\"\nexpected: '// Warning: Good for gin -- Sad times no tonic'\nactual:   '@_'\""),
-            // THE PORTABLE CARRIER STRATEGIES' OWN (pinned on Postgres, BigQuery and SQLite too): a lambda's
-            // parameter read as a table's column where a literal list was folded
-            one("meta::pure::functions::collection::tests::exists::testExistsInSelect_Function_1__Boolean_1_", "Unknown column 'f.employees' in 'JSON_TABLE'\""),
-            one("meta::pure::functions::string::tests::toString::testPairCollectionToString_Function_1__Boolean_1_", "Unknown table 'p' in SELECT\""),
             // MARIADB'S OWN LIMIT: a DATE or DATETIME is of the years 1000-9999 (a five-digit year has no value;
             // raised where an interval is added, a wrong comparison where a literal is one)
             one("meta::pure::functions::date::tests::testAdjustByMinutesBigNumber_Function_1__Boolean_1_", "\"a date past the year 9999 has no MariaDB value\""),

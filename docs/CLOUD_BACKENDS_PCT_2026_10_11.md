@@ -326,20 +326,34 @@ BigQuery have no lambdas and keep their wall.
 
 ## 10. BigQuery, measured (2026-10-11)
 
-**Result:** all five suites pass on the account, each failure pinned by its message: 1,250 tests, 82 pinned (Grammar
-11 of 137, Essential 49 of 345, Relation 13 of 469, Standard 7 of 206, Unclassified 2 of 93), the census divergence 0
+**Result:** all five suites pass on the account, each failure pinned by its message: 1,250 tests, 42 pinned (Grammar
+10 of 137, Essential 28 of 346, Relation 2 of 469, Standard 0 of 205, Unclassified 2 of 93), the census divergence 0
 in every suite. Burned down in six runs from 347 failing (the first run: Essential 107, Grammar 31, Relation 112,
 Standard 75, Unclassified 22); 83 -> 82 when the system database came to the server (§14; Grammar re-run on the
-account, 137 green).
+account, 137 green); 82 -> 42 the same day (below, "Burned down beyond the first pass").
 
-What the 82 are: 34 are the platform's own, pinned on the DuckDB lane by the same cause (as on Snowflake); 2 are the
-portable carrier strategies' own, pinned on Postgres too (a filter's lambda parameter left unbound on a lambda-less
-dialect); 1 is the dialect's own gap, named (a lambda parameter over a JSON array carries no type, so its cast is a
-scalar CAST, refused on JSON); the other 45 are BigQuery's own limits, each measured: no MAP type (11), no lambdas
-and no correlated recursion to fold with (10), no correlated derived table -- only an UNNEST correlates (8), no mode
-(6), an empty list of no element type (a bare NULL is an INT64, and UNNEST refuses it: 3), a date-time past years
-1 to 9999 (2), no Jaro-Winkler function (2), PERCENTILE_CONT over a window ascending only (1), a statement past the
-maximum query length (1), and no minimal-fraction date format code (1).
+What the 42 are: 34 are the platform's own, pinned on the DuckDB lane by the same cause (as on Snowflake); the other
+8 are BigQuery's own limits, each measured: no list of lists, so removeDuplicates' reduction has no accumulator (3:
+"nested arrays are not supported"); a date-time past years 1 to 9999 (2); no Jaro-Winkler function (2); and a fold
+that reads its row (1: WITH RECURSIVE is top-level only, and there are no lambdas).
+
+**Burned down beyond the first pass (82 -> 42, 2026-10-11).** Each row was a lambda-less or BigQuery-shaped gap, closed
+as a SQL author would on BigQuery, each shape measured on the account first (40 rows; the last line is the second fix the
+date format's row needed):
+
+| Pins | Was | Now |
+|---|---|---|
+| 8 | no lateral derived table ("LATERAL join is not supported"; a correlated derived table: "Unrecognized name") | a lateral join is `[LEFT] JOIN UNNEST(ARRAY(SELECT AS STRUCT * FROM (q)))`: an UNNEST correlates, through nested derived tables too (`BigQuery.lateral`) |
+| 6 | no mode | the group's (or partition's) counts per value in a wrapping select, `COUNT(v) OVER (PARTITION BY keys, v)` (a FLOAT64 key partitions by its JSON text: no PARTITION BY on FLOAT64), then `ARRAY_AGG(v ORDER BY count DESC, v LIMIT 1)` or `FIRST_VALUE` over the same order; a tie takes the least value (DuckDB's takes the first row scanned, which SQL cannot name) |
+| 11 | no MAP type | a map is its entries in order, `ARRAY<STRUCT<key K, value V>>` (BigQuery's own way to load one); DuckDB's semantics measured and kept: a NULL or repeated key raises DuckDB's message, a concatenation keeps each key at its first place with the last map's value, an extraction is a list; a Variant object's keys come in BigQuery's order, sorted (its JSON keeps no document order, measured), where DuckDB keeps the document's; the executor decodes the entries to the map, the census reads ARRAY as delivering MAP |
+| 6 | no lambdas and no correlated recursion to fold with | a fold that reads nothing of its row is a top-level `WITH RECURSIVE` expression, read as its last accumulator (`FoldsAsRecursiveCtes`, MIR's `SqlWith.recursive`); a fold over the NULL list is its init; list_reduce the same from its first element (removeDuplicates' three now stop at the nested-array limit; the fold that reads its row stays) |
+| 2 | a filter's or map's lambda parameter left unbound (the portable carrier strategies', on Postgres, SQLite and MariaDB too) | a read qualified by the parameter (`p.first`) is a field of the substituted element (`CarrierStrategies.substParam`); the third such row, `testFilterInstance`, now fails as on DuckDB (instance identity, the platform's own) |
+| 3 | an empty list of no element type | `[]` is a list of Nil's carrier, VARCHAR (the column its element fills is labelled so); a lambda body over it, which never runs, is a NULL of the body's own type |
+| 1 | a statement past the maximum query length (a float's text canon, 2.9M characters) | a large repeated subexpression written once (`CommonSubexpressions`, SQLite's pass; its one-row derived table under a scalar subquery correlates here, measured): 24K |
+| 1 | PERCENTILE_CONT over a window ascending only | a descending one is DuckDB's own interpolation over the ascending order of the negated values, at an exact BIGNUMERIC position (`BigQuery.descendingOver`) |
+| 1 | no minimal-fraction date format | `%E3S`'s milliseconds after the second |
+| 1 | a cast of a JSON lambda parameter | the parameter of a JSON array's lambda is typed JSON, so its cast reads JSON (`INT64(j)`) |
+| (the same) | behind the date format, the format's time-zone shift inverted (`18:07+0500` for `08:07-0500`) | timezone() decides instant or naive by its operand's shape, as Snowflake does (`BigQuery.isInstant`): format's shift is timezone(zone, timezone('UTC', t)), whose inner call is typed naive but renders an instant |
 
 The account: project `legend-integration-testing`, a service-account key; the JDBC driver (Google's
 google-cloud-bigquery-jdbc 1.6.0, the shaded jar) reports the product `Google BigQuery` (`Sessions.jdbcProduct`).
@@ -406,15 +420,16 @@ holds: the store executes, and what it cannot express is a `DialectCapability` w
 
 The first of the open ones (§2, item 4). No account: the product's own driver, in-process and in memory.
 
-**Result:** all five suites pass on SQLite, each failure pinned by its message: 1,249 tests, 52 pinned (Grammar 13 of
-137, Essential 29 of 345, Relation 2 of 469, Standard 2 of 205, Unclassified 6 of 93), the census divergence 0 in
+**Result:** all five suites pass on SQLite, each failure pinned by its message: 1,249 tests, 50 pinned (Grammar 13 of
+137, Essential 27 of 345, Relation 2 of 469, Standard 2 of 205, Unclassified 6 of 93), the census divergence 0 in
 every suite (no ceiling raised). SQLite was a lexicon row over `AnsiSqlRenderer` until now; that row failed 985 tests
 on its first lane run. The dialect class's first run failed 144 (Essential 42, Grammar 15, Relation 26, Standard 24,
-Unclassified 37), and it was burned down from there to the 52 in fifteen runs.
+Unclassified 37), and it was burned down from there to the 52 in fifteen runs; 52 -> 50 when the portable carrier
+strategies read a lambda parameter's field as the folded element's (§10's burn-down; `testFilterInstance` now fails
+on instance identity, as on DuckDB).
 
-What the 52 are: 34 are the platform's own, pinned on the DuckDB lane by the same cause; 2 are the portable carrier
-strategies' own, pinned on Postgres and BigQuery too (a lambda's parameter read as a table's column where a literal
-list was folded). The other 16 are SQLite's own limits, each measured:
+What the 50 are: 34 are the platform's own, pinned on the DuckDB lane by the same cause. The other 16 are SQLite's own
+limits, each measured:
 
 - no digest function, so no MD5, SHA-1 or SHA-256 (3);
 - an integer past 64 bits (3), raised rather than delivered as a REAL;
@@ -472,14 +487,14 @@ from MariaDB's own Linux tarball (`@embedded_mariadb`, `tools/mariadb/`, the ser
 started once per test JVM on a free loopback port with its data in the test's temporary directory
 (`testing/.../EmbeddedMariaDb.java`). The driver is MariaDB Connector/J 3.5.10 (`@mariadb_jdbc`, LGPL, test-only).
 
-**Result:** all five suites pass on MariaDB, each failure pinned by its message: 1,249 tests, 61 pinned (Essential 33
+**Result:** all five suites pass on MariaDB, each failure pinned by its message: 1,249 tests, 59 pinned (Essential 31
 of 345, Grammar 10 of 137, Relation 13 of 469, Standard 3 of 205, Unclassified 2 of 93), the census divergence 0 in
 every suite (no ceiling raised); 62 -> 61 when the system database came to the server (§14; Grammar re-run, 137
-green).
+green); 61 -> 59 when the portable carrier strategies read a lambda parameter's field as the folded element's (§10's
+burn-down; `testFilterInstance` now fails on instance identity, as on DuckDB).
 
-What the 61 are: 34 are the platform's own, pinned on the DuckDB lane by the same cause (6 of them instance
-identity); 2 are the portable carrier strategies' own (pinned on Postgres, BigQuery and SQLite too). The other 25
-are MariaDB's own limits, each measured:
+What the 59 are: 34 are the platform's own, pinned on the DuckDB lane by the same cause (7 of them instance
+identity). The other 25 are MariaDB's own limits, each measured:
 
 - GROUP_CONCAT, JSON_ARRAYAGG and a mode are no window functions (14): a windowed string aggregate (11) or mode (3);
 - a statement's memory (5): a Float's text canon written out in each of `format`'s arguments, or in each comparison

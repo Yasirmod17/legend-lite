@@ -32,15 +32,6 @@ public class Test_LegendLite_BigQuery_StandardFunctions_PCT extends PCTReportCon
     // First measured 2026-10-11 on the account (BigQuery, 206 tests); burned down the same day: every
     // row is the platform's own (pinned on the DuckDB lane too) or a measured limit of BigQuery.
     private static final MutableList<ExclusionSpecification> expectedFailures = Lists.mutable.with(
-            // BIGQUERY'S OWN LIMIT: no mode aggregate or window function
-            one("meta::pure::functions::math::tests::mode::testMode_Floats_Relation_Aggregate_Function_1__Boolean_1_", "\"a grouped MODE reached BigQuery, which has no mode aggregate and cannot unnest an aggregate in a subquery (measured)\""),
-            one("meta::pure::functions::math::tests::mode::testMode_Floats_Relation_Window_Function_1__Boolean_1_", "\"a MODE over a window reached BigQuery, which has no mode function\""),
-            one("meta::pure::functions::math::tests::mode::testMode_Integer_Relation_Aggregate_Function_1__Boolean_1_", "\"a grouped MODE reached BigQuery, which has no mode aggregate and cannot unnest an aggregate in a subquery (measured)\""),
-            one("meta::pure::functions::math::tests::mode::testMode_Integer_Relation_Window_Function_1__Boolean_1_", "\"a MODE over a window reached BigQuery, which has no mode function\""),
-            one("meta::pure::functions::math::tests::mode::testMode_Number_Relation_Aggregate_Function_1__Boolean_1_", "\"a grouped MODE reached BigQuery, which has no mode aggregate and cannot unnest an aggregate in a subquery (measured)\""),
-            one("meta::pure::functions::math::tests::mode::testMode_Number_Relation_Window_Function_1__Boolean_1_", "\"a MODE over a window reached BigQuery, which has no mode function\""),
-            // BIGQUERY'S OWN LIMIT: PERCENTILE_CONT over a window orders ascending only
-            one("meta::pure::functions::math::tests::percentile::testPercentile_Relation_Window_Function_1__Boolean_1_", "\"a descending QUANTILE_CONT over a window reached BigQuery\"")
     );
 
     public static Test suite() {

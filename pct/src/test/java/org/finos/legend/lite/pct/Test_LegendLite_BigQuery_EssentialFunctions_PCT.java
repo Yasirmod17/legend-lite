@@ -60,41 +60,13 @@ public class Test_LegendLite_BigQuery_EssentialFunctions_PCT extends PCTReportCo
             one("meta::pure::functions::string::tests::indexOf::testFromIndex_Function_1__Boolean_1_", "\"\nexpected: 1\nactual:   2\""),
             one("meta::pure::functions::string::tests::indexOf::testSimple_Function_1__Boolean_1_", "\"\nexpected: 4\nactual:   5\""),
             one("meta::pure::functions::string::tests::toString::testComplexClassToString_Function_1__Boolean_1_", "\"BigQueryException during runQuery\nField name __id does not exist in STRUCT<errorMessage STRING, errorType STRING>"),
-            // BIGQUERY'S OWN LIMIT: no MAP type (a map has no representation here)
-            one("meta::pure::functions::collection::tests::get::testGet_Function_1__Boolean_1_", "\"MAP_EXTRACT reached BigQuery: BigQuery has no MAP type\""),
-            one("meta::pure::functions::collection::tests::keys::testKeys_Function_1__Boolean_1_", "\"MAP_KEYS reached BigQuery: BigQuery has no MAP type\""),
-            one("meta::pure::functions::collection::tests::put::testPut_addsEntry_Function_1__Boolean_1_", "\"MAP_CONCAT reached BigQuery: BigQuery has no MAP type\""),
-            one("meta::pure::functions::collection::tests::put::testPut_emptyMap_Function_1__Boolean_1_", "\"MAP_CONCAT reached BigQuery: BigQuery has no MAP type\""),
-            one("meta::pure::functions::collection::tests::put::testPut_overridesEntry_Function_1__Boolean_1_", "\"MAP_CONCAT reached BigQuery: BigQuery has no MAP type\""),
-            one("meta::pure::functions::collection::tests::putAll::testPutAll_emptyInputMap_Function_1__Boolean_1_", "\"MAP_CONCAT reached BigQuery: BigQuery has no MAP type\""),
-            one("meta::pure::functions::collection::tests::putAll::testPutAll_emptyPutEntries_Function_1__Boolean_1_", "\"MAP_CONCAT reached BigQuery: BigQuery has no MAP type\""),
-            one("meta::pure::functions::collection::tests::putAll::testPutAll_overridesExistingAndAddNew_Function_1__Boolean_1_", "\"MAP_CONCAT reached BigQuery: BigQuery has no MAP type\""),
-            one("meta::pure::functions::collection::tests::values::testValues_Function_1__Boolean_1_", "\"MAP_VALUES reached BigQuery: BigQuery has no MAP type\""),
-            // BIGQUERY'S OWN LIMIT: no lambdas, and no correlated recursion to fold with (WITH RECURSIVE is top-level
-            // only, measured)
-            one("meta::pure::functions::collection::tests::fold::testFoldCollectionAccumulator_Function_1__Boolean_1_", "\"a fold reached BigQuery, which has no lambdas and no correlated recursion (WITH RECURSIVE is top-level only, measured)\""),
-            one("meta::pure::functions::collection::tests::fold::testFoldEmptyListAndNonEmptyIdentity_Function_1__Boolean_1_", "\"a fold reached BigQuery, which has no lambdas and no correlated recursion (WITH RECURSIVE is top-level only, measured)\""),
-            one("meta::pure::functions::collection::tests::fold::testFoldMixedAccumulatorTypes_Function_1__Boolean_1_", "\"a fold reached BigQuery, which has no lambdas and no correlated recursion (WITH RECURSIVE is top-level only, measured)\""),
-            one("meta::pure::functions::collection::tests::fold::testIntegerSum_Function_1__Boolean_1_", "\"a fold reached BigQuery, which has no lambdas and no correlated recursion (WITH RECURSIVE is top-level only, measured)\""),
-            one("meta::pure::functions::collection::tests::fold::testStringSum_Function_1__Boolean_1_", "\"a fold reached BigQuery, which has no lambdas and no correlated recursion (WITH RECURSIVE is top-level only, measured)\""),
-            one("meta::pure::functions::collection::tests::removeDuplicates::testRemoveDuplicatesEmptyListExplicit_Function_1__Boolean_1_", "\"LIST_REDUCE reached BigQuery: a reduce is a fold: BigQuery has no lambdas\""),
-            one("meta::pure::functions::collection::tests::removeDuplicates::testRemoveDuplicatesPrimitiveNonStandardFunction_Function_1__Boolean_1_", "\"LIST_REDUCE reached BigQuery: a reduce is a fold: BigQuery has no lambdas\""),
-            one("meta::pure::functions::collection::tests::removeDuplicates::testRemoveDuplicatesPrimitiveStandardFunctionExplicit_Function_1__Boolean_1_", "\"LIST_REDUCE reached BigQuery: a reduce is a fold: BigQuery has no lambdas\""),
+            // BIGQUERY'S OWN LIMIT: no list of lists (measured: "nested arrays are not supported"): removeDuplicates
+            // reduces into one (its closed fold is hoisted, its accumulator is not representable)
+            one("meta::pure::functions::collection::tests::removeDuplicates::testRemoveDuplicatesEmptyListExplicit_Function_1__Boolean_1_", "a list of lists reached BigQuery"),
+            one("meta::pure::functions::collection::tests::removeDuplicates::testRemoveDuplicatesPrimitiveNonStandardFunction_Function_1__Boolean_1_", "a list of lists reached BigQuery"),
+            one("meta::pure::functions::collection::tests::removeDuplicates::testRemoveDuplicatesPrimitiveStandardFunctionExplicit_Function_1__Boolean_1_", "a list of lists reached BigQuery"),
             // BIGQUERY'S OWN LIMIT: a date-time past BigQuery's range (years 1 to 9999) is refused
-            one("meta::pure::functions::date::tests::testAdjustByMinutesBigNumber_Function_1__Boolean_1_", "\"BigQueryException during runQuery\nInterval field nanoseconds '740740734720000000000' is out of range -316224000000000000000 to 316224000000000000000; error in INTERVAL expression\""),
-            // BIGQUERY'S OWN LIMIT: an empty list of no element type -- a bare NULL is an INT64 here, and UNNEST
-            // refuses it
-            one("meta::pure::functions::collection::tests::drop::testDropNegativeOnEmptyList_Function_1__Boolean_1_", "\"BigQueryException during runQuery\nValues referenced in UNNEST must be arrays. UNNEST contains expression of type INT64"),
-            one("meta::pure::functions::collection::tests::forall::testforAllOnEmptySet_Function_1__Boolean_1_", "\"BigQueryException during runQuery\nValues referenced in UNNEST must be arrays. UNNEST contains expression of type INT64"),
-            one("meta::pure::functions::collection::tests::take::testTakeNegativeOnEmptyList_Function_1__Boolean_1_", "\"BigQueryException during runQuery\nValues referenced in UNNEST must be arrays. UNNEST contains expression of type INT64"),
-            // BIGQUERY'S OWN LIMIT: the statement is longer than BigQuery's maximum query length
-            one("meta::pure::functions::string::tests::format::testFormatFloat_Function_1__Boolean_1_", "\"BigQueryException during runQuery\nThe query is too large (2839.89K characters, 1859473 characters over the limit). The maximum standard SQL query length is 1024.00K characters, including comments and white space characters.\""),
-            // BIGQUERY'S OWN LIMIT: no minimal-fraction date-time format code
-            one("meta::pure::functions::string::tests::format::testFormatDate_Function_1__Boolean_1_", "\"a minimal-fraction date format reached BigQuery\""),
-            // THE PORTABLE CARRIER STRATEGIES' OWN (pinned on Postgres too, the other lambda-less dialect): a
-            // filter's lambda parameter is left unbound
-            one("meta::pure::functions::collection::tests::exists::testExistsInSelect_Function_1__Boolean_1_", "\"BigQueryException during runQuery\nUnrecognized name: f"),
-            one("meta::pure::functions::string::tests::toString::testPairCollectionToString_Function_1__Boolean_1_", "\"BigQueryException during runQuery\nUnrecognized name: p")
+            one("meta::pure::functions::date::tests::testAdjustByMinutesBigNumber_Function_1__Boolean_1_", "\"BigQueryException during runQuery\nInterval field nanoseconds '740740734720000000000' is out of range -316224000000000000000 to 316224000000000000000; error in INTERVAL expression\"")
     );
 
     public static Test suite() {

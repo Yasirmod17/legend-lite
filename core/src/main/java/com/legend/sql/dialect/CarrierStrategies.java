@@ -1594,12 +1594,21 @@ public final class CarrierStrategies extends SqlRewriter {
         return null;
     }
 
-    /** Replace bare reads of the lambda parameter with {@code value}. */
+    /** Replace reads of the lambda parameter with {@code value}: a bare read
+     * is the value; a read qualified by the parameter ({@code p.first}, a
+     * property of a struct element, as the lowering resolves it in the
+     * lambda's scope) is that field of the value -- folded when the value
+     * is a literal struct. Left as it was, the qualified read named a table
+     * no FROM declares ("Unrecognized name: p" on BigQuery, "missing
+     * FROM-clause entry" on Postgres, measured 2026-10-11). */
     private static SqlExpr substParam(SqlExpr body, String param,
             SqlExpr value) {
         if (body instanceof SqlExpr.Column c && c.table() == null
                 && param.equals(c.name())) {
             return value;
+        }
+        if (body instanceof SqlExpr.Column c && param.equals(c.table())) {
+            return SqlExpr.StructGet.of(value, c.name());
         }
         List<SqlExpr> kids = body.children();
         if (kids.isEmpty()) {

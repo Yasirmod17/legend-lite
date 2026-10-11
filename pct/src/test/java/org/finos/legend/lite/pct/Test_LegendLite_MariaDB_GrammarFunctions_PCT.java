@@ -32,6 +32,7 @@ public class Test_LegendLite_MariaDB_GrammarFunctions_PCT extends PCTReportConfi
     private static final MutableList<ExclusionSpecification> expectedFailures = Lists.mutable.with(
             // INSTANCE IDENTITY (as on DuckDB): the asserts want the interpreter's ORIGINAL instances back, or eq/==
             // by reference; the harness inlines captured instances BY VALUE, so identity is erased before the wire
+            one("meta::pure::functions::collection::tests::filter::testFilterInstance_Function_1__Boolean_1_", "instanceOf meta::pure::functions::collection::tests::model::CO_Person"),
             one("meta::pure::functions::collection::tests::first::testFirstComplex_Function_1__Boolean_1_", "instanceOf meta::pure::functions::collection::tests::model::CO_Person"),
             one("meta::pure::functions::collection::tests::map::testMapRelationshipFromManyToMany_Function_1__Boolean_1_", "instanceOf meta::pure::functions::collection::tests::map::model::M_Location"),
             one("meta::pure::functions::collection::tests::map::testMapRelationshipFromManyToOne_Function_1__Boolean_1_", "instanceOf meta::pure::functions::collection::tests::map::model::M_Address"),
@@ -41,7 +42,6 @@ public class Test_LegendLite_MariaDB_GrammarFunctions_PCT extends PCTReportConfi
             one("meta::pure::functions::boolean::tests::equality::eq::testEqPrimitiveExtension_Function_1__Boolean_1_", "\"unknown type 'meta::pure::functions::boolean::tests::equalitymodel::ExtendedInteger' in @meta::pure::functions::boolean::tests::equalitymodel::ExtendedInteger\""),
             one("meta::pure::functions::boolean::tests::equality::equal::testEqualNonPrimitive_Function_1__Boolean_1_", "\"Assert failed\""),
             one("meta::pure::functions::boolean::tests::equality::equal::testEqualPrimitiveExtension_Function_1__Boolean_1_", "\"unknown type 'meta::pure::functions::boolean::tests::equalitymodel::ExtendedInteger' in @meta::pure::functions::boolean::tests::equalitymodel::ExtendedInteger\""),
-            one("meta::pure::functions::collection::tests::filter::testFilterInstance_Function_1__Boolean_1_", "Unknown table 'p' in WHERE\""),
             one("meta::pure::functions::collection::tests::map::testMapRelationshipFromOneToOne_Function_1__Boolean_1_", "\"unbound variable '$address'\""),
             // MARIADB'S OWN LIMIT: a DATE or DATETIME is of the years 1000-9999 (a five-digit year has no value;
             // raised where an interval is added, a wrong comparison where a literal is one)

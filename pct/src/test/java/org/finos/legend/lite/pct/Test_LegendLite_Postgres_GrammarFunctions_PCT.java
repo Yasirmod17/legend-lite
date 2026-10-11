@@ -40,7 +40,7 @@ public class Test_LegendLite_Postgres_GrammarFunctions_PCT extends PCTReportConf
             one("meta::pure::functions::boolean::tests::equality::eq::testEqNonPrimitive_Function_1__Boolean_1_", "Assert failed"),
             one("meta::pure::functions::boolean::tests::equality::equal::testEqualNonPrimitive_Function_1__Boolean_1_", "Assert failed"),
             // Postgres raises differently (its own error, or a different position or wording)
-            one("meta::pure::functions::collection::tests::filter::testFilterInstance_Function_1__Boolean_1_", "ERROR: missing FROM-clause entry for table \"p"),
+            one("meta::pure::functions::collection::tests::filter::testFilterInstance_Function_1__Boolean_1_", "no typed conversion for org.postgresql.util.PGobject"),
             // refused by name: a construct the Postgres dialect does not spell yet
             one("meta::pure::functions::boolean::tests::equality::eq::testEqPrimitiveExtension_Function_1__Boolean_1_", "unknown type 'meta::pure::functions::boolean::tests::equalitymodel::ExtendedInteger' in @meta::pure::functions::boolean::tests::equalitymodel::ExtendedInteger"),
             one("meta::pure::functions::boolean::tests::equality::equal::testEqualPrimitiveExtension_Function_1__Boolean_1_", "unknown type 'meta::pure::functions::boolean::tests::equalitymodel::ExtendedInteger' in @meta::pure::functions::boolean::tests::equalitymodel::ExtendedInteger"),

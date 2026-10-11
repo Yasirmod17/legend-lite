@@ -765,13 +765,22 @@ public final class Executor {
                 return Json.parse(text);
             }
         }
-        if (type instanceof com.legend.sql.SqlType.Array at && v instanceof java.sql.Array a) {
+        // a map carried as its entries, a list of (key, value) structs (BigQuery's, which has no MAP type: a
+        // repeated key_value record), decodes as that list, each entry by the struct arm, then to the map in entry
+        // order, key and value by their declared types
+        if ((type instanceof com.legend.sql.SqlType.Array || type instanceof com.legend.sql.SqlType.Map)
+                && v instanceof java.sql.Array a) {
+            com.legend.sql.SqlType element = type instanceof com.legend.sql.SqlType.Map mt
+                    ? new com.legend.sql.SqlType.Struct(List.of(
+                            new com.legend.sql.SqlType.Struct.Field("key", mt.key()),
+                            new com.legend.sql.SqlType.Struct.Field("value", mt.value())))
+                    : ((com.legend.sql.SqlType.Array) type).element();
             Object[] elements = (Object[]) a.getArray();
             List<Object> out = new ArrayList<>(elements.length);
             for (Object e : elements) {
-                out.add(unwrap(e, at.element(), dialect));
+                out.add(unwrap(e, element, dialect));
             }
-            return out;
+            return type instanceof com.legend.sql.SqlType.Map ? mapOfEntries(out) : out;
         }
         // the ONE-CARRIER rule at every LEAF (documented-debts
         // 2018-08-18, HARDENED 2026-08-21 user directive): the wire's
@@ -824,6 +833,18 @@ public final class Executor {
                                     ? s.substring(0, s.length() - 1) : s);
             case null, default -> v;
         };
+    }
+
+    /** A map's decoded entries, each the struct arm's {@code {key, value}}, as the map. */
+    private static java.util.Map<Object, Object> mapOfEntries(List<Object> entries) {
+        java.util.LinkedHashMap<Object, Object> m = new java.util.LinkedHashMap<>();
+        for (Object e : entries) {
+            if (!(e instanceof java.util.Map<?, ?> kv) || kv.size() != 2) {
+                throw new IllegalStateException("a map cell's entry is not a (key, value) struct: " + e);
+            }
+            m.put(kv.get("key"), kv.get("value"));
+        }
+        return m;
     }
 
     private static boolean isTemporalType(com.legend.sql.@com.legend.base.Nullable SqlType type) {

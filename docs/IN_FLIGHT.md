@@ -802,6 +802,21 @@ Edits: `exec/SystemDatabase.java` (`routeFor`, `Route`), `exec/Sessions.java` (`
 (`CREATE TEMP TABLE`); the PCT harness (`PctBackend.systemConnections`, `CloudLane.openSystem`, the
 `c.system.property.*` keys). `testBasic` unpinned on Snowflake (35), Databricks (41), BigQuery (82), MariaDB (61) and
 Postgres (verified by CI only: the embedded Postgres refuses root); it passes on MySQL.
+**2026-10-11, BigQuery burned down 82 -> 42** (all five suites green on the account; the plan's §10): its 42 are the
+DuckDB lane's 34 and 8 measured limits of BigQuery (no nested arrays 3, the date-time range 2, no Jaro-Winkler 2, a
+fold that reads its row 1). Edits: `sql/dialect/BigQuery.java` (lateral joins as `UNNEST(ARRAY(SELECT AS STRUCT ..))`,
+mode by counts, the descending window percentile, maps as `ARRAY<STRUCT<key, value>>`, the empty list, the time
+zone's operand, `%E3S`, the JSON lambda parameter); new `sql/dialect/FoldsAsRecursiveCtes.java` (a fold that reads
+nothing of its row as a top-level recursive expression) with a `recursive` flag on `sql/SqlWith.java`, carried by
+every rebuild (`SqlRewriter`, `StableScanOrder`, `RootNumericTypes`, `lowering/SqlPostProcessors`,
+`lowering/SubselectPrune`) and rendered by `AnsiSqlRenderer`; `CommonSubexpressions` on BigQuery;
+`sql/SqlTyping.java` (`MAP_FROM_LISTS` typed); `sql/dialect/CarrierStrategies.java` (`substParam`: a parameter's
+field), measured on the other lambda-less lanes: SQLite 52 -> 50 and MariaDB 61 -> 59 (two pass, `testFilterInstance`
+now fails on instance identity as on DuckDB); on Postgres `testExistsInSelect` passes and two pins moved to later
+errors, its census ceilings 12 -> 13 (Essential) and 4 -> 5 (Grammar), each one more struct as jsonb, the by-design
+class (`PctCensusGate`, dated); `exec/Executor.java` (a map cell carried as its entries, through the array and struct
+arms: no new JDBC accessor); `exec/SqlTypeCensus.java` (BigQuery's ARRAY delivers MAP); `ParkedWorkLedgerTest` and
+`docs/PARKED_WORK_LEDGER.md` (PARK-2's construction anchor re-pointed, dated: `SqlWith.with` keeps the flag).
 **Next** (the user's order): MySQL, Trino, ClickHouse, MongoDB, Elasticsearch, SingleStore (the plan's §2).
 
 ## Rules between sessions

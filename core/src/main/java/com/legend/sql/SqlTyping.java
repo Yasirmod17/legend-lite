@@ -419,6 +419,15 @@ public final class SqlTyping {
             // values yield the VALUE list, keys the KEY list
             case MAP_CONCAT -> uniform(a, BOTTOM);
             case MAP_FROM_ENTRIES -> mapFromEntriesType(a);
+            // map(ks, vs) builds MAP(K, V) from the two lists' element
+            // types (probed, DuckDB 1.5: map(['a'], [1]) is
+            // MAP(VARCHAR, INTEGER)); UNKNOWN when either is unknown
+            case MAP_FROM_LISTS -> a.size() == 2
+                    && a.get(0).type() instanceof TypeFact.Typed kt
+                    && kt.type() instanceof SqlType.Array ka
+                    && a.get(1).type() instanceof TypeFact.Typed vt
+                    && vt.type() instanceof SqlType.Array va
+                    ? typed(new SqlType.Map(ka.element(), va.element())) : UNKNOWN;
             case MAP_EXTRACT, MAP_VALUES -> a.isEmpty() ? UNKNOWN
                     : a.get(0).type() instanceof TypeFact.Typed t
                             && t.type() instanceof SqlType.Map m

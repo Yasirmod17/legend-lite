@@ -41,7 +41,7 @@ final class RootNumericTypes extends SqlRewriter {
                 u.branches().forEach(b -> bs.add(rewriteRoot(b)));
                 yield new SqlUnion(bs, u.all(), u.outputs());
             }
-            case SqlWith w -> SqlWith.prepend(w.ctes(), rewriteRoot(w.body()));
+            case SqlWith w -> SqlWith.prepend(w.ctes(), rewriteRoot(w.body()), w.recursive());
         };
     }
 

@@ -60,10 +60,6 @@ public class Test_LegendLite_SQLite_EssentialFunctions_PCT extends PCTReportConf
             one("meta::pure::functions::string::tests::indexOf::testFromIndex_Function_1__Boolean_1_", "\"\nexpected: 1\nactual:   2\""),
             one("meta::pure::functions::string::tests::indexOf::testSimple_Function_1__Boolean_1_", "\"\nexpected: 4\nactual:   5\""),
             one("meta::pure::functions::string::tests::toString::testComplexClassToString_Function_1__Boolean_1_", "\"\nexpected: '// Warning: Good for gin -- Sad times no tonic'\nactual:   '@_'\""),
-            // THE PORTABLE CARRIER STRATEGIES' OWN (pinned on Postgres and BigQuery too): a lambda's parameter read
-            // as a table's column where a literal list was folded
-            one("meta::pure::functions::collection::tests::exists::testExistsInSelect_Function_1__Boolean_1_", "\"[SQLITE_ERROR] SQL error or missing database (no such column: f.employees)\""),
-            one("meta::pure::functions::string::tests::toString::testPairCollectionToString_Function_1__Boolean_1_", "\"[SQLITE_ERROR] SQL error or missing database (no such column: p.first)\""),
             // SQLITE'S OWN LIMIT: its dates are texts of the years 0000-9999 (a date function answers NULL past them,
             // raised here; a five-digit year compares as text)
             one("meta::pure::functions::date::tests::testAdjustByMinutesBigNumber_Function_1__Boolean_1_", "\"a date past the years 0000-9999 has no SQLite value\""),

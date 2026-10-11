@@ -48,7 +48,10 @@ import java.util.Set;
  *       FLOAT64 overload; {@code ROUND(x, n, 'ROUND_HALF_EVEN')} exists over NUMERIC/BIGNUMERIC only;</li>
  *   <li>{@code CONCAT}, {@code GREATEST} and {@code LEAST} answer NULL for any NULL argument (DuckDB skips them);</li>
  *   <li>there is no VALUES clause ({@code UNNEST(ARRAY<STRUCT<...>>[STRUCT(...), ...])}), no bare {@code UNION}
- *       ({@code UNION DISTINCT}), no OFFSET without LIMIT, no lambdas, no lateral derived table, no MAP type;</li>
+ *       ({@code UNION DISTINCT}), no OFFSET without LIMIT, no lambdas, no lateral derived table (a lateral join
+ *       unnests its rows as an array of structs, {@link #lateral}), no MAP type (a map is its entries,
+ *       {@code ARRAY<STRUCT<key, value>>}), and WITH RECURSIVE only at the top (a closed fold is hoisted there,
+ *       {@link FoldsAsRecursiveCtes});</li>
  *   <li>an array holds no array, and a query RESULT holds no array with a NULL element (inside a query it may), and a
  *       NULL array arrives as an empty one; lists are ARRAY&lt;T&gt; and every list operation is a correlated subquery
  *       over {@code UNNEST(xs) AS e WITH OFFSET AS o} (Postgres's {@code WITH ORDINALITY} recipe);</li>
@@ -57,7 +60,7 @@ import java.util.Set;
  *   <li>column names fold case-insensitively ({@code SELECT 1 AS a, 2 AS A} labels the second {@code A_1}): every
  *       identifier is backticked, labels keep their case;</li>
  *   <li>{@code PERCENTILE_CONT}/{@code PERCENTILE_DISC} are analytic only; grouped quantiles index the group's
- *       sorted {@code ARRAY_AGG}; there is no grouped MODE;</li>
+ *       sorted {@code ARRAY_AGG}; there is no MODE (a mode is its most counted value, {@link #modesCounted});</li>
  *   <li>the session zone is UTC by default ({@code @@time_zone}); Pure's naive DateTime is DATETIME, TIMESTAMPTZ is
  *       TIMESTAMP; JSON objects keep their keys SORTED (DuckDB keeps insertion order).</li>
  * </ul>
@@ -91,16 +94,22 @@ public final class BigQuery extends AnsiSqlRenderer {
         return true;
     }
 
-    /** The portable carrier strategies, the substring start clamp (BigQuery reads a start of 0 as 1), averages
+    /** The portable carrier strategies, a fold that reads nothing of its row as a top-level recursive expression (WITH
+     *  RECURSIVE is top-level only, measured), the substring start clamp (BigQuery reads a start of 0 as 1), averages
      *  delivered as DOUBLE (an average of a NUMERIC or BIGNUMERIC is one), and a constant GROUP BY or ORDER BY key as a
-     *  typed expression (BigQuery reads an integer one as a position). QUALIFY and PERCENTILE_* OVER are native; no
-     *  root numeric cast: a parameterized type cannot be cast to, and the driver reports no NUMERIC scale. */
+     *  typed expression (BigQuery reads an integer one as a position), and a large repeated subexpression written once
+     *  (a statement is capped at 1,024K characters: a float's text canon read a dozen times, nested, wrote 2.9M, measured;
+     *  the binding's one-row derived table under a scalar subquery correlates here, measured). QUALIFY and
+     *  PERCENTILE_* OVER are native; no root numeric cast: a parameterized type cannot be cast to, and the driver
+     *  reports no NUMERIC scale. */
     @Override
     protected List<com.legend.sql.SqlRewriter> passes() {
-        return List.of(new CarrierStrategies(CarrierStrategies.Caps.BIGQUERY), new SubstringClamp(),
+        return List.of(new CarrierStrategies(CarrierStrategies.Caps.BIGQUERY), new FoldsAsRecursiveCtes(),
+                new SubstringClamp(),
                 new ExplosionMarkers.LateralUnnestAsMarker(), new ExplosionMarkers.SelectListUnnestAsLateral(),
                 new ExplosionMarkers.StarOverExplosionUnwrapped(),
-                new AggregatesDeliverDouble(Set.of(SqlAgg.Fn.AVG)), new ConstantKeysAsExpressions());
+                new AggregatesDeliverDouble(Set.of(SqlAgg.Fn.AVG)), new ConstantKeysAsExpressions(),
+                new CommonSubexpressions());
     }
 
     @Override
@@ -220,16 +229,134 @@ public final class BigQuery extends AnsiSqlRenderer {
                     null), s.where(), s.groupBy(), s.having(), s.qualify(), s.orderBy(), s.limit(), s.offset(),
                     s.outputs()), depth);
         }
+        Map<SqlExpr, SqlExpr> counts = new LinkedHashMap<>();
+        s = modesCounted(s, counts);
         Map<String, Map<String, SqlExpr>> scope = new LinkedHashMap<>();
         lateralsOf(s.from(), scope);
         SqlSelect spelled = rootNulls(scope.isEmpty() ? s : starsSpelled(s), depth);
         laterals.push(scope);
+        modeCounts.push(counts);
         try {
             return super.select(writer, spelled.offset() != null && spelled.limit() == null
                     ? spelled.withLimit(Long.MAX_VALUE) : spelled, depth);
         } finally {
+            modeCounts.pop();
             laterals.pop();
         }
+    }
+
+    /** Per select being written, each MODE in it (a grouped reducer, or a window call) and the column counting its
+     *  value's rows ({@link #modesCounted}). */
+    private final java.util.Deque<Map<SqlExpr, SqlExpr>> modeCounts = new java.util.ArrayDeque<>();
+
+    /**
+     * {@code s}, its FROM given a count per MODE: BigQuery has no mode aggregate or window function, and unnests no
+     * aggregate inside its own select (measured). A mode is the most frequent non-NULL value; each one's value is
+     * counted over the rows of its group (a grouped mode: the select's GROUP BY keys) or its partition (a window mode),
+     * {@code COUNT(v) OVER (PARTITION BY keys, v)}, in a select over the FROM under the FROM's own alias, so every
+     * reference of {@code s} still reads it. Then the mode is the value of the most counted row, written where it is
+     * ({@link #modeArm}). A FLOAT64 key is partitioned by its {@code TO_JSON_STRING} (BigQuery partitions by no
+     * FLOAT64, measured; that text is the double's shortest round trip, so equal values share it and distinct ones do
+     * not). On a tie, the least value: DuckDB's own tie is the earliest row scanned, an order SQL rows do not have.
+     */
+    private SqlSelect modesCounted(SqlSelect s, Map<SqlExpr, SqlExpr> counts) {
+        Map<SqlExpr, List<SqlExpr>> modes = new LinkedHashMap<>();
+        List<SqlExpr> roots = new ArrayList<>();
+        s.projections().forEach(p -> roots.add(p.expr()));
+        if (s.having() != null) {
+            roots.add(s.having());
+        }
+        if (s.qualify() != null) {
+            roots.add(s.qualify());
+        }
+        for (SqlExpr e : roots) {
+            collectModes(e, s.groupBy(), modes);
+        }
+        if (modes.isEmpty()) {
+            return s;
+        }
+        SqlSource from = s.from();
+        String alias = from.alias();
+        if (from instanceof SqlSource.Join || alias == null || from.outputs().isEmpty()) {
+            throw new DialectCapability("a MODE over a " + from.getClass().getSimpleName() + " reached BigQuery: its"
+                    + " counts are a select over one aliased source");
+        }
+        List<SqlSelect.Projection> ps = new ArrayList<>();
+        for (com.legend.sql.OutputCol oc : from.outputs()) {
+            ps.add(new SqlSelect.Projection(SqlExpr.Column.of(alias, oc), oc.name(), oc));
+        }
+        int k = 0;
+        for (var m : modes.entrySet()) {
+            String name = "__mc" + k++;
+            SqlExpr v = modeValue(m.getKey());
+            List<SqlExpr> partition = new ArrayList<>();
+            for (SqlExpr key : m.getValue()) {
+                partition.add(partitionKey(key));
+            }
+            partition.add(partitionKey(v));
+            ps.add(new SqlSelect.Projection(new SqlExpr.WindowCall(new SqlAgg.Reducer(SqlAgg.Fn.COUNT, List.of(v),
+                    false, List.of()), partition, List.of(), null), name, null));
+            counts.put(m.getKey(), SqlExpr.Column.derived(alias, name));
+        }
+        SqlSelect counted = new SqlSelect(ps, false, from, null, List.of(), null, null, List.of(), null, null,
+                List.of());
+        return s.withFrom(new SqlSource.Subselect(counted, alias, null));
+    }
+
+    /** Each MODE under {@code e}: a grouped reducer with the select's keys, a window call with its partition. */
+    private static void collectModes(SqlExpr e, List<SqlExpr> groupBy, Map<SqlExpr, List<SqlExpr>> out) {
+        if (e instanceof SqlAgg.Reducer r && r.fn() == SqlAgg.Fn.MODE) {
+            out.put(r, groupBy);
+            return;
+        }
+        if (e instanceof SqlExpr.WindowCall w && w.fn() instanceof SqlAgg.Reducer r && r.fn() == SqlAgg.Fn.MODE) {
+            if (!w.orderBy().isEmpty() || w.frame() != null) {
+                throw new DialectCapability("a MODE over an ordered or framed window reached BigQuery");
+            }
+            out.put(w, w.partitionBy());
+            return;
+        }
+        for (SqlExpr c : e.children()) {
+            collectModes(c, groupBy, out);
+        }
+    }
+
+    /** The value a mode counts. */
+    private static SqlExpr modeValue(SqlExpr mode) {
+        SqlAgg.Reducer r = mode instanceof SqlExpr.WindowCall w ? (SqlAgg.Reducer) w.fn() : (SqlAgg.Reducer) mode;
+        if (r.args().size() != 1 || r.distinct()) {
+            throw new DialectCapability("a mode of " + r.args().size() + " arguments reached BigQuery");
+        }
+        return r.args().get(0);
+    }
+
+    /** {@code key} as a window partitions by it: a FLOAT64 by its JSON text (see {@link #modesCounted}), spelled as the
+     *  casts to JSON and to text this dialect writes {@code TO_JSON_STRING(TO_JSON(key))}. */
+    private static SqlExpr partitionKey(SqlExpr key) {
+        return typeOf(key) == SqlType.Scalar.DOUBLE
+                ? new SqlExpr.Cast(new SqlExpr.Cast(key, SqlType.Scalar.JSON), SqlType.Scalar.VARCHAR) : key;
+    }
+
+    /** A mode where it is written: the value of its most counted row, the least value on a tie, NULLs ignored --
+     *  grouped, {@code ARRAY_AGG(v IGNORE NULLS ORDER BY count DESC, v LIMIT 1)[SAFE_OFFSET(0)]} (NULL for a group of
+     *  NULLs); over a window, {@code FIRST_VALUE(v IGNORE NULLS) OVER (PARTITION BY .. ORDER BY count DESC, v)} over
+     *  the whole partition (measured on the PCT's own rows). */
+    private SqlWriter modeArm(SqlWriter writer, SqlExpr mode) {
+        SqlExpr count = modeCounts.isEmpty() ? null : modeCounts.peek().get(mode);
+        if (count == null) {
+            throw new IllegalStateException("a MODE reached BigQuery's writer uncounted: modesCounted did not run");
+        }
+        SqlExpr v = modeValue(mode);
+        if (mode instanceof SqlExpr.WindowCall w) {
+            writer.append("FIRST_VALUE(").expr(v, 0).append(" IGNORE NULLS) OVER (");
+            if (!w.partitionBy().isEmpty()) {
+                writer.append("PARTITION BY ").list(w.partitionBy()).append(" ");
+            }
+            return writer.append("ORDER BY ").expr(count, 0).append(" DESC, ").expr(v, 0)
+                    .append(" ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)");
+        }
+        return writer.append("ARRAY_AGG(").expr(v, 0).append(" IGNORE NULLS ORDER BY ").expr(count, 0).append(" DESC, ")
+                .expr(v, 0).append(" LIMIT 1)[SAFE_OFFSET(0)]");
     }
 
     /** At the root, a value NULL by its shape ({@link #nullValued}) is its label's NULL (a bare NULL is an INT64 here,
@@ -337,8 +464,7 @@ public final class BigQuery extends AnsiSqlRenderer {
 
     /** A marker's positions: {@code UNNEST(GENERATE_ARRAY(0, n - 1))} over its longest list (DuckDB's parallel UNNEST
      *  pads the shorter with NULL; a NULL list is none); a lateral one joins its left side correlated (CROSS JOIN
-     *  UNNEST, or LEFT JOIN UNNEST keeping an empty list's row). Any other lateral derived table is refused (BigQuery
-     *  correlates only an UNNEST: a correlated subquery in FROM is "Unrecognized name", measured). */
+     *  UNNEST, or LEFT JOIN UNNEST keeping an empty list's row). Any other lateral derived table is {@link #lateral}. */
     @Override
     protected SqlWriter source(SqlWriter writer, SqlSource src, int depth) {
         if (src instanceof SqlSource.Join j && j.right() instanceof SqlSource.Subselect sub && isMarker(sub.inner())
@@ -356,9 +482,42 @@ public final class BigQuery extends AnsiSqlRenderer {
         }
         if (src instanceof SqlSource.Join j && (j.kind() == SqlSource.Join.Kind.CROSS_LATERAL
                 || j.kind() == SqlSource.Join.Kind.LEFT_LATERAL)) {
-            throw new DialectCapability("a lateral join reached BigQuery, which correlates no derived table");
+            return lateral(writer, j, depth);
         }
         return super.source(writer, src, depth);
+    }
+
+    /**
+     * A lateral derived table. BigQuery has none -- {@code LATERAL} is "not supported", a correlated subquery in FROM
+     * is "Unrecognized name", {@code CROSS APPLY} a syntax error (all measured) -- but an UNNEST correlates, and an
+     * ARRAY subquery may read the outer row anywhere inside it, nested derived tables included (measured). So the
+     * derived table's rows become an array of structs, each row one struct, unnested where the row is: {@code CROSS
+     * JOIN UNNEST(ARRAY(SELECT AS STRUCT * FROM (q))) AS r}, its columns {@code r}'s fields (a {@code SELECT *} over
+     * it expands them, measured). A LEFT lateral is {@code LEFT JOIN ... ON <its condition>}, keeping a row with no
+     * match as the NULL-extended row (measured); a condition on a CROSS one makes it an inner {@code JOIN}.
+     */
+    private SqlWriter lateral(SqlWriter writer, SqlSource.Join j, int depth) {
+        if (!(j.right() instanceof SqlSource.Subselect sub)) {
+            throw new DialectCapability("a lateral join over a " + j.right().getClass().getSimpleName()
+                    + " reached BigQuery");
+        }
+        boolean trivial = j.on() == null || (j.on() instanceof SqlExpr.BoolLit b && b.value());
+        boolean left = j.kind() == SqlSource.Join.Kind.LEFT_LATERAL;
+        source(writer, j.left(), depth);
+        nl(writer, depth).append(left ? "LEFT JOIN " : trivial ? "CROSS JOIN " : "JOIN ")
+                .append("UNNEST(ARRAY(SELECT AS STRUCT * FROM (");
+        nl(writer, depth + 1);
+        query(writer, sub.inner(), depth + 1);
+        nl(writer, depth).append("))) AS ").append(aliasIdent(sub.alias()));
+        if (left || !trivial) {
+            writer.append(" ON ");
+            if (trivial) {
+                writer.append("TRUE");
+            } else {
+                writer.expr(java.util.Objects.requireNonNull(j.on(), "on"), 0);
+            }
+        }
+        return writer;
     }
 
     private static SqlWriter.Piece positions(SqlSelect m) {
@@ -534,7 +693,7 @@ public final class BigQuery extends AnsiSqlRenderer {
                 }
                 yield "ARRAY<" + bqType(a.element()) + ">";
             }
-            case SqlType.Map m -> throw new DialectCapability("a map type reached BigQuery, which has no MAP type");
+            case SqlType.Map m -> mapTypeName(bqType(m.key()), bqType(m.value()));
             case SqlType.Struct st -> {
                 StringBuilder sb = new StringBuilder("STRUCT<");
                 for (int i = 0; i < st.fields().size(); i++) {
@@ -559,9 +718,11 @@ public final class BigQuery extends AnsiSqlRenderer {
         return "ARRAY<" + element + ">";
     }
 
+    /** A map is its entries in order, {@code ARRAY<STRUCT<key K, value V>>}: BigQuery has no MAP type, and this is how
+     *  it loads one (a repeated key_value record). */
     @Override
     protected String mapTypeName(String key, String value) {
-        throw new DialectCapability("a map type reached BigQuery, which has no MAP type");
+        return "ARRAY<STRUCT<" + ident("key") + " " + key + ", " + ident("value") + " " + value + ">>";
     }
 
     @Override
@@ -684,17 +845,31 @@ public final class BigQuery extends AnsiSqlRenderer {
         return typeOf(e) instanceof SqlType.Array a ? a.element() : null;
     }
 
+    /** Whether a NULL list is the bottom-typed empty list {@code []}. */
+    private static boolean bottom(SqlExpr xs) {
+        return xs instanceof SqlExpr.CompactList cl ? bottom(cl.list())
+                : xs.type() instanceof com.legend.sql.TypeFact.Bottom;
+    }
+
     /** A lambda parameter (or an unnest's element or offset) as its references spell it. */
     private String param(String name) {
         return columnRef(SqlExpr.Column.derived(null, name));
     }
 
     /** {@code UNNEST(xs) AS e WITH OFFSET AS o}: each element bound to {@code e}, its 0-based offset to {@code o}
-     *  (an unnest of a NULL list is no rows, measured). */
+     *  (an unnest of a NULL list is no rows, measured). A NULL list is typed, since a bare NULL is an INT64 here and
+     *  UNNEST refuses it ("Values referenced in UNNEST must be arrays", measured): as a list of its element type, or
+     *  -- the empty list {@code []}, bottom-typed -- of Nil's carrier, VARCHAR (the platform's own, PureSql: the
+     *  column its element would fill is labelled so). Any other NULL list of no known element type is walled. */
     private SqlWriter.Piece elements(SqlExpr xs, String e, String o) {
-        SqlType element = listElement(xs);
-        SqlWriter.Piece list = nullList(xs) && element != null
-                ? w -> w.append("CAST(NULL AS " + castTypeName(new SqlType.Array(element)) + ")") : w -> w.expr(xs, 0);
+        SqlType known = listElement(xs);
+        if (nullList(xs) && known == null && !bottom(xs)) {
+            throw new DialectCapability("a NULL list of unknown element type reached BigQuery");
+        }
+        SqlType element = known != null ? known : SqlType.Scalar.VARCHAR;
+        SqlWriter.Piece list = nullList(xs)
+                ? w -> w.append("CAST(NULL AS " + castTypeName(new SqlType.Array(element)) + ")")
+                : w -> w.expr(xs, 0);
         return w -> w.append("UNNEST(").piece(list).append(") AS ").append(param(e)).append(" WITH OFFSET AS ")
                 .append(param(o));
     }
@@ -724,13 +899,30 @@ public final class BigQuery extends AnsiSqlRenderer {
         return l.params().get(0) + "__o";
     }
 
-    /** A lambda's body over its element (the first parameter, the unnest's alias); DuckDB's index parameter, 1-based,
-     *  read from the 0-based offset. */
-    private static SqlExpr lambdaBody(SqlExpr.Lambda l) {
-        if (l.params().size() < 2) {
-            return l.body();
+    /** A lambda's body over the elements of {@code xs} (the first parameter, the unnest's alias); DuckDB's index
+     *  parameter, 1-based, read from the 0-based offset. An element of a JSON array is a JSON value, and the lowering
+     *  leaves a lambda's parameter untyped: so it is typed here, and a cast of it reads JSON as JSON is read
+     *  ({@code INT64(j)}, not {@code CAST(j AS INT64)}, which GoogleSQL refuses: "Invalid cast from JSON to INT64",
+     *  measured). */
+    private static SqlExpr lambdaBody(SqlExpr xs, SqlExpr.Lambda l) {
+        SqlExpr body = l.body();
+        // the empty list [] has no element to apply the body to: the body is a NULL of its own type (its parameter
+        // would be Nil's VARCHAR carrier, which no comparison with a number type-checks; a bare NULL operand of = is
+        // refused, measured)
+        if (nullList(xs) && listElement(xs) == null && bottom(xs)) {
+            if (typeOf(body) == null) {
+                throw new DialectCapability("a lambda of no known type over the empty list reached BigQuery");
+            }
+            return new SqlExpr.Cast(new SqlExpr.NullLit(), java.util.Objects.requireNonNull(typeOf(body)));
         }
-        return substitute(l.body(), l.params().get(1), SqlExpr.Call.of(SqlFn.PLUS,
+        if (listElement(xs) == SqlType.Scalar.JSON) {
+            body = substitute(body, l.params().get(0), SqlExpr.Column.of(null, l.params().get(0),
+                    SqlType.Scalar.JSON, true, com.legend.sql.OutputCol.Origin.DERIVED));
+        }
+        if (l.params().size() < 2) {
+            return body;
+        }
+        return substitute(body, l.params().get(1), SqlExpr.Call.of(SqlFn.PLUS,
                 SqlExpr.Column.derived(null, offsetOf(l)), new SqlExpr.IntLit(1)));
     }
 
@@ -869,7 +1061,7 @@ public final class BigQuery extends AnsiSqlRenderer {
 
     private SqlWriter listPredicate(SqlWriter writer, List<SqlExpr> args, String agg, String empty, SqlFn fn) {
         SqlExpr.Lambda l = lambdaOf(args.get(1), fn);
-        return writer.append("COALESCE((SELECT " + agg + "(").expr(lambdaBody(l), 0).append(") FROM ")
+        return writer.append("COALESCE((SELECT " + agg + "(").expr(lambdaBody(args.get(0), l), 0).append(") FROM ")
                 .piece(elements(args.get(0), l.params().get(0), offsetOf(l))).append("), " + empty + ")");
     }
 
@@ -905,8 +1097,8 @@ public final class BigQuery extends AnsiSqlRenderer {
 
     @Override
     protected SqlWriter foldCall(SqlWriter writer, SqlExpr.FoldCall f) {
-        throw new DialectCapability("a fold reached BigQuery, which has no lambdas and no correlated recursion"
-                + " (WITH RECURSIVE is top-level only, measured)");
+        throw new DialectCapability("a fold that reads its row reached BigQuery, which has no lambdas and no correlated"
+                + " recursion (WITH RECURSIVE is top-level only, measured; a closed fold is hoisted there)");
     }
 
     /** Pure's splitPart: the non-empty tokens, 1-based, NULL past the end. */
@@ -1009,10 +1201,16 @@ public final class BigQuery extends AnsiSqlRenderer {
                         .append(param("__j")).append(" WITH OFFSET AS ").append(param("__jo")).append(" ORDER BY ")
                         .append(param("__jo")).append(") END)");
             }
-            if (target instanceof SqlType.Map || target instanceof SqlType.Struct) {
+            if (target instanceof SqlType.Map m) {
+                return writer.piece(variantAsMap(v, m));
+            }
+            if (target instanceof SqlType.Struct) {
                 throw new DialectCapability("a cast of a Variant to " + target + " reached BigQuery");
             }
             return writer.piece(castFromText(w -> w.append("JSON_VALUE(").expr(v, 0).append(")"), target));
+        }
+        if (target instanceof SqlType.Map m) {
+            return writer.piece(mapAs(v, m));
         }
         if (target instanceof SqlType.Decimal d) {
             // DuckDB's decimal cast rounds to the scale (half away from zero, as ROUND does here)
@@ -1219,7 +1417,9 @@ public final class BigQuery extends AnsiSqlRenderer {
             case DATE_DIFF -> writer.piece(dateDiff(a));
             case TIME_BUCKET -> writer.piece(timeBucket(a));
             // DuckDB's timezone(zone, t): a naive t read in the zone (its instant); an instant to the zone's time
-            case TIMEZONE -> typeOf(a.get(1)) == SqlType.Scalar.TIMESTAMPTZ
+            // (an operand is an instant by its type, or as a timezone() of a naive one: format's zone shift is
+            // timezone(zone, timezone('UTC', t)), whose inner call is typed naive but renders a TIMESTAMP)
+            case TIMEZONE -> isInstant(a.get(1))
                     ? writer.append("DATETIME(").expr(a.get(1), 0).append(", ").expr(a.get(0), 0).append(")")
                     : writer.append("TIMESTAMP(CAST(").expr(a.get(1), 0).append(" AS DATETIME), ").expr(a.get(0), 0)
                             .append(")");
@@ -1246,7 +1446,7 @@ public final class BigQuery extends AnsiSqlRenderer {
                 SqlExpr.Lambda l = lambdaOf(a.get(1), c.fn());
                 String x = l.params().get(0);
                 yield writer.piece(overElements(a.get(0), x, offsetOf(l), w -> w.append(param(x)),
-                        w -> w.expr(lambdaBody(l), 0)));
+                        w -> w.expr(lambdaBody(a.get(0), l), 0)));
             }
             case LIST_TRANSFORM -> {
                 if (listElement(c) instanceof SqlType.Array) {
@@ -1254,7 +1454,7 @@ public final class BigQuery extends AnsiSqlRenderer {
                 }
                 SqlExpr.Lambda l = lambdaOf(a.get(1), c.fn());
                 yield writer.piece(overElements(a.get(0), l.params().get(0), offsetOf(l),
-                        w -> w.expr(lambdaBody(l), 0), null));
+                        w -> w.expr(lambdaBody(a.get(0), l), 0), null));
             }
             // NULL ++ xs is xs, as DuckDB's list_concat (measured)
             case LIST_CONCAT -> writer.append("ARRAY_CONCAT(").join(a, ", ", (w, x) -> w.append("IFNULL(").expr(x, 0)
@@ -1317,12 +1517,13 @@ public final class BigQuery extends AnsiSqlRenderer {
             case LIST_FLATTEN -> throw nestedList();
             case LIST_ZIP -> throw wall(c.fn(), "list_zip names its struct fields by position, unmeasured");
             case LIST_PRODUCT -> throw wall(c.fn(), "BigQuery has no product aggregate and no fold");
-            case LIST_REDUCE -> throw wall(c.fn(), "a reduce is a fold: BigQuery has no lambdas");
+            case LIST_REDUCE -> throw wall(c.fn(), "a reduce that reads its row is a fold: BigQuery has no lambdas"
+                    + " (a closed one is hoisted to a top-level recursive expression)");
             case TYPEOF -> throw wall(c.fn(), "its type names are BigQuery's");
 
-            // ---- maps: BigQuery has no MAP type
+            // ---- maps: entries in order, ARRAY<STRUCT<key, value>> (mapTypeName)
             case MAP_FROM_LISTS, MAP_FROM_ENTRIES, MAP_EMPTY, MAP_EXTRACT, MAP_KEYS, MAP_VALUES, MAP_CONCAT ->
-                    throw wall(c.fn(), "BigQuery has no MAP type");
+                    maps(writer, c);
 
             // ---- variant
             // in DuckDB's json_type vocabulary, which the lowering compares against: a whole number is a BIGINT,
@@ -1671,7 +1872,136 @@ public final class BigQuery extends AnsiSqlRenderer {
         return out.toString();
     }
 
+    // ---- maps: a map is its entries in order, ARRAY<STRUCT<key, value>> (mapTypeName). DuckDB's semantics, measured
+    // (1.5): entries keep their order; a NULL key raises "Map keys can not be NULL.", a repeated one "Map keys must be
+    // unique."; map(ks, vs) of unequal lengths raises; a concatenation keeps each key at its first place with the
+    // value of the last map holding it, a NULL map adding nothing; an extraction is the key's value as a list, empty
+    // when it is absent; a NULL map's keys, values or extraction are NULL.
+
+    private SqlWriter maps(SqlWriter writer, SqlExpr.Call c) {
+        List<SqlExpr> a = c.args();
+        String e = param("__me");
+        String o = param("__mo");
+        String key = ident("key");
+        String value = ident("value");
+        return switch (c.fn()) {
+            case MAP_EMPTY -> {
+                if (!(typeOf(c) instanceof SqlType.Map m)) {
+                    throw wall(c.fn(), "an empty map of no known key and value types");
+                }
+                yield writer.append(bqType(m) + "[]");
+            }
+            // each entry a struct of (key, value), by position whatever their names
+            case MAP_FROM_ENTRIES -> {
+                SqlExpr xs = a.get(0);
+                if (!(listElement(xs) instanceof SqlType.Struct entry) || entry.fields().size() != 2) {
+                    throw wall(c.fn(), "entries of " + listElement(xs));
+                }
+                String k = e + "." + ident(entry.fields().get(0).name());
+                String v = e + "." + ident(entry.fields().get(1).name());
+                yield writer.piece(unlessNull(xs, keysChecked(xs, e, k, w -> w.append("ARRAY(SELECT AS STRUCT " + k
+                        + " AS " + key + ", " + v + " AS " + value + " FROM UNNEST(").expr(xs, 0).append(") AS " + e
+                        + " WITH OFFSET AS " + o + " ORDER BY " + o + ")"))));
+            }
+            // DuckDB's map(ks, vs): the keys zipped with the values by position
+            case MAP_FROM_LISTS -> {
+                SqlExpr ks = a.get(0);
+                SqlExpr vs = a.get(1);
+                SqlWriter.Piece zipped = w -> w.append("ARRAY(SELECT AS STRUCT " + e + " AS " + key + ", ").expr(vs, 0)
+                        .append("[OFFSET(" + o + ")] AS " + value + " FROM UNNEST(").expr(ks, 0).append(") AS " + e
+                                + " WITH OFFSET AS " + o + " ORDER BY " + o + ")");
+                yield writer.append("(CASE WHEN ").expr(ks, 4).append(" IS NULL OR ").expr(vs, 4)
+                        .append(" IS NULL THEN NULL WHEN ARRAY_LENGTH(").expr(ks, 0).append(") <> ARRAY_LENGTH(")
+                        .expr(vs, 0).append(") THEN ERROR('The map key list does not align with the map value list.')"
+                                + " ELSE ").piece(keysChecked(ks, e, e, zipped)).append(" END)");
+            }
+            // the entries of every map, each key at its first place (map, then offset) with the last map's value
+            // (wrapped in a struct: a NULL value is an entry, and an array holds no NULL)
+            case MAP_CONCAT -> {
+                String u = param("__mu");
+                String src = param("__ms");
+                yield writer.append("ARRAY(SELECT AS STRUCT " + u + "." + key + " AS " + key + ", ARRAY_AGG(STRUCT("
+                        + u + "." + value + " AS v) ORDER BY " + u + "." + src + " DESC LIMIT 1)[OFFSET(0)].v AS "
+                        + value + " FROM (").piece(w -> {
+                            for (int i = 0; i < a.size(); i++) {
+                                w.append(i > 0 ? " UNION ALL " : "").append("SELECT " + i + " AS " + src + ", " + e
+                                        + "." + key + " AS " + key + ", " + e + "." + value + " AS " + value + ", " + o
+                                        + " AS " + o + " FROM UNNEST(").expr(a.get(i), 0).append(") AS " + e
+                                        + " WITH OFFSET AS " + o);
+                            }
+                        }).append(") AS " + u + " GROUP BY " + u + "." + key + " ORDER BY MIN(" + u + "." + src
+                                + "), ARRAY_AGG(" + u + "." + o + " ORDER BY " + u + "." + src
+                                + " LIMIT 1)[OFFSET(0)])");
+            }
+            case MAP_KEYS, MAP_VALUES -> writer.piece(unlessNull(a.get(0), w -> w.append("ARRAY(SELECT " + e + "."
+                    + (c.fn() == SqlFn.MAP_KEYS ? key : value) + " FROM UNNEST(").expr(a.get(0), 0).append(") AS " + e
+                    + " WITH OFFSET AS " + o + " ORDER BY " + o + ")")));
+            case MAP_EXTRACT -> writer.piece(unlessNull(a.get(0), w -> w.append("ARRAY(SELECT " + e + "." + value
+                    + " FROM UNNEST(").expr(a.get(0), 0).append(") AS " + e + " WITH OFFSET AS " + o + " WHERE " + e
+                    + "." + key + " = ").expr(a.get(1), 5).append(" ORDER BY " + o + ")")));
+            default -> throw new IllegalStateException("not a map call: " + c.fn());
+        };
+    }
+
+    /** {@code then} when the keys {@code k} (read off each element {@code e} of {@code xs}) are each non-NULL and
+     *  distinct; DuckDB's error otherwise. */
+    private static SqlWriter.Piece keysChecked(SqlExpr xs, String e, String k, SqlWriter.Piece then) {
+        return w -> w.append("(CASE WHEN (SELECT COUNTIF(" + k + " IS NULL) FROM UNNEST(").expr(xs, 0)
+                .append(") AS " + e + ") > 0 THEN ERROR('Map keys can not be NULL.') WHEN (SELECT COUNT(DISTINCT " + k
+                        + ") FROM UNNEST(").expr(xs, 0).append(") AS " + e + ") < ARRAY_LENGTH(").expr(xs, 0)
+                .append(") THEN ERROR('Map keys must be unique.') ELSE ").piece(then).append(" END)");
+    }
+
+    /** A map cast to another map's key and value types, entry by entry; the empty map {@code MAP_EMPTY} typed. */
+    private SqlWriter.Piece mapAs(SqlExpr m, SqlType.Map to) {
+        if (m instanceof SqlExpr.Call c && c.fn() == SqlFn.MAP_EMPTY) {
+            return w -> w.append(bqType(to) + "[]");
+        }
+        if (m instanceof SqlExpr.NullLit) {
+            return w -> w.append("CAST(NULL AS " + bqType(to) + ")");
+        }
+        if (!(typeOf(m) instanceof SqlType.Map from)) {
+            throw new DialectCapability("a cast of " + typeOf(m) + " to a map reached BigQuery");
+        }
+        if (from.equals(to)) {
+            return w -> w.expr(m, 0);
+        }
+        String e = param("__me");
+        String o = param("__mo");
+        String key = ident("key");
+        String value = ident("value");
+        return unlessNull(m, w -> w.append("ARRAY(SELECT AS STRUCT ")
+                .piece(castTo(x -> x.append(e + "." + key), from.key(), to.key())).append(" AS " + key + ", ")
+                .piece(castTo(x -> x.append(e + "." + value), from.value(), to.value())).append(" AS " + value
+                        + " FROM UNNEST(").expr(m, 0).append(") AS " + e + " WITH OFFSET AS " + o + " ORDER BY " + o
+                        + ")"));
+    }
+
+    /** A Variant object as a map: its members, each value read as the map's value type, NULL when it is not an
+     *  object. In BigQuery's member order, which is the keys' (a JSON value keeps no document order here: '{"b":1,
+     *  "a":2}' reads back {"a":2,"b":1}, measured), where DuckDB keeps the document's. */
+    private SqlWriter.Piece variantAsMap(SqlExpr v, SqlType.Map to) {
+        String k = param("__mk");
+        String o = param("__mo");
+        SqlWriter.Piece member = w -> w.expr(v, 0).append("[" + k + "]");
+        SqlWriter.Piece read = to.value() == SqlType.Scalar.JSON ? member
+                : castFromText(w -> w.append("JSON_VALUE(").piece(member).append(")"), to.value());
+        return w -> w.append("(CASE WHEN JSON_TYPE(").expr(v, 0).append(") = 'object' THEN ARRAY(SELECT AS STRUCT ")
+                .piece(castTo(x -> x.append(k), SqlType.Scalar.VARCHAR, to.key())).append(" AS " + ident("key")
+                        + ", ").piece(read).append(" AS " + ident("value") + " FROM UNNEST(JSON_KEYS(").expr(v, 0)
+                .append(", 1)) AS " + k + " WITH OFFSET AS " + o + " ORDER BY " + o + ") END)");
+    }
+
     // ---- temporal helpers
+
+    /** Whether a timestamp is an instant: TIMESTAMPTZ-typed, or a timezone() of a naive one (each timezone() turns
+     *  one into the other), as Snowflake decides. */
+    private static boolean isInstant(SqlExpr e) {
+        if (e instanceof SqlExpr.Call c && c.fn() == SqlFn.TIMEZONE && c.args().size() == 2) {
+            return !isInstant(c.args().get(1));
+        }
+        return typeOf(e) == SqlType.Scalar.TIMESTAMPTZ;
+    }
 
     /** A temporal operand as its UTC instant: a TIMESTAMP is one; a DATETIME (or a DATE) is read in UTC. */
     private static SqlWriter.Piece instant(SqlExpr e) {
@@ -1806,18 +2136,22 @@ public final class BigQuery extends AnsiSqlRenderer {
                 case WEEKDAY_NAME -> "%A";
                 case HOUR12 -> "%I";
                 case AMPM -> "%p";
-                case SUBSEC_MICRO, SUBSEC_NANO, HOUR12_NOPAD -> null;
-                case SUBSEC_MIN -> throw new DialectCapability("a minimal-fraction date format reached BigQuery");
+                // DuckDB's %g: the milliseconds, three digits (the part's engine convention, as Snowflake's FF3)
+                case SUBSEC_MICRO, SUBSEC_NANO, SUBSEC_MIN, HOUR12_NOPAD -> null;
             };
         };
     }
 
-    /** Seconds, a point and six (nine) fraction digits as one {@code %E6S} (seconds with six digits, measured). */
+    /** Seconds, a point and three (six, nine) fraction digits as one {@code %E3S} ({@code %E6S}): seconds with that many
+     *  digits, measured. */
     private static @com.legend.base.Nullable String secondsWithFraction(List<DateFmt> parts, int i) {
         if (parts.get(i) == DateFmt.Part.SEC2 && i + 2 < parts.size() && parts.get(i + 1) instanceof DateFmt.Text t
                 && ".".equals(t.s())) {
             if (parts.get(i + 2) == DateFmt.Part.SUBSEC_MICRO) {
                 return "%E6S";
+            }
+            if (parts.get(i + 2) == DateFmt.Part.SUBSEC_MIN) {
+                return "%E3S";
             }
             if (parts.get(i + 2) == DateFmt.Part.SUBSEC_NANO) {
                 return "%E6S000";
@@ -1874,7 +2208,9 @@ public final class BigQuery extends AnsiSqlRenderer {
                 run.setLength(0);
             }
             SqlWriter.Piece micro = w -> w.append("SUBSTR(").piece(formatted("%E6S", t)).append(", 4)");
+            SqlWriter.Piece milli = w -> w.append("SUBSTR(").piece(formatted("%E3S", t)).append(", 4)");
             pieces.add(p == DateFmt.Part.SUBSEC_MICRO ? micro
+                    : p == DateFmt.Part.SUBSEC_MIN ? milli
                     : p == DateFmt.Part.SUBSEC_NANO ? w -> w.append("CONCAT(").piece(micro).append(", '000')")
                     : w -> w.append("LTRIM(").piece(formatted("%l", t)).append(")"));
         }
@@ -2010,8 +2346,7 @@ public final class BigQuery extends AnsiSqlRenderer {
                 }
                 yield writer.piece(quantile(r.fn(), r.args().get(0), w -> w.expr(r.args().get(1), 0), r));
             }
-            case MODE -> throw new DialectCapability("a grouped MODE reached BigQuery, which has no mode aggregate and"
-                    + " cannot unnest an aggregate in a subquery (measured)");
+            case MODE -> modeArm(writer, r);
             // the value at the key's greatest (least) row, rows of a NULL key ignored
             case ARG_MAX, ARG_MIN -> {
                 if (r.args().size() != 2 || r.distinct() || !r.orderBy().isEmpty()) {
@@ -2074,14 +2409,14 @@ public final class BigQuery extends AnsiSqlRenderer {
 
     private SqlWriter orderedSetOver(SqlWriter writer, SqlAgg.Reducer r, SqlExpr.WindowCall w) {
         if (r.fn() == SqlAgg.Fn.MODE) {
-            throw new DialectCapability("a MODE over a window reached BigQuery, which has no mode function");
+            return modeArm(writer, w);
         }
         if (!w.orderBy().isEmpty() || w.frame() != null || r.distinct()) {
             throw new DialectCapability(r.fn() + " over an ordered or framed window reached BigQuery, whose"
                     + " PERCENTILE_* take a partition only");
         }
         if (!r.orderBy().isEmpty() && !r.orderBy().get(0).ascending()) {
-            throw new DialectCapability("a descending " + r.fn() + " over a window reached BigQuery");
+            return descendingOver(writer, r, w);
         }
         if (r.fn() == SqlAgg.Fn.MEDIAN) {
             writer.append("PERCENTILE_CONT(").expr(r.args().get(0), 0).append(", 0.5)");
@@ -2090,6 +2425,52 @@ public final class BigQuery extends AnsiSqlRenderer {
                     .expr(r.args().get(0), 0).append(", ").expr(r.args().get(1), 0).append(")");
         }
         return bqOver(writer, w);
+    }
+
+    /**
+     * A descending continuous quantile over a window: PERCENTILE_CONT orders ascending only, and its fraction must be a
+     * literal (measured). Written as the DuckDB lane writes it, so its values are that lane's: over the values negated,
+     * sorted ascending, the value at {@code q * (n - 1)} interpolated linearly, negated back --
+     * {@code -(lo + (pos - FLOOR(pos)) * (hi - lo))}. The position is exact, as DuckDB's (its {@code 0.6} is a DECIMAL):
+     * a literal fraction is a BIGNUMERIC of its spelling, so {@code 0.6 * 2} is 1.2 and the fraction 0.2 (a FLOAT64
+     * {@code 0.6} would give 0.19999999999999996, and 1.4000000000000001 for 1.4, measured). The sorted values are an
+     * analytic {@code ARRAY_AGG} in the window's order (measured), each a one-field struct: an analytic ARRAY_AGG takes
+     * no IGNORE NULLS, and an array holds no NULL element, but a struct with a NULL field is one; NULLs sort last and no
+     * position reaches them. A discrete one, or one of a value that is no number, is refused.
+     */
+    private SqlWriter descendingOver(SqlWriter writer, SqlAgg.Reducer r, SqlExpr.WindowCall w) {
+        SqlExpr x = r.args().get(0);
+        SqlType t = typeOf(x);
+        boolean numeric = t == SqlType.Scalar.INTEGER || t == SqlType.Scalar.BIGINT || t == SqlType.Scalar.DOUBLE
+                || t instanceof SqlType.Decimal;
+        if (!numeric || r.fn() != SqlAgg.Fn.QUANTILE_CONT) {
+            throw new DialectCapability("a descending " + r.fn() + " over a window of " + t + " reached BigQuery");
+        }
+        SqlExpr q = r.args().get(1);
+        SqlWriter.Piece exactQ = q instanceof SqlExpr.FloatLit f
+                ? wr -> wr.append("BIGNUMERIC '" + new java.math.BigDecimal(Double.toString(f.value())).toPlainString()
+                        + "'")
+                : q instanceof SqlExpr.DecimalLit d
+                        ? wr -> wr.append("BIGNUMERIC '" + d.value().toPlainString() + "'")
+                        : wr -> wr.expr(q, 0);
+        SqlWriter.Piece partition = wr -> {
+            if (!w.partitionBy().isEmpty()) {
+                wr.append("PARTITION BY ").list(w.partitionBy());
+            }
+        };
+        SqlWriter.Piece sorted = wr -> wr.append("ARRAY_AGG(STRUCT(-(").expr(x, 0).append(") AS v)) OVER (")
+                .piece(partition).append(w.partitionBy().isEmpty() ? "" : " ").append("ORDER BY -(").expr(x, 0)
+                .append(") ASC NULLS LAST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)");
+        SqlWriter.Piece pos = wr -> wr.append("(").piece(exactQ).append(" * (COUNT(").expr(x, 0).append(") OVER (")
+                .piece(partition).append(") - 1))");
+        SqlWriter.Piece lo = wr -> wr.piece(sorted).append("[SAFE_OFFSET(CAST(FLOOR(").piece(pos)
+                .append(") AS INT64))].v");
+        SqlWriter.Piece hi = wr -> wr.piece(sorted).append("[SAFE_OFFSET(CAST(CEIL(").piece(pos)
+                .append(") AS INT64))].v");
+        boolean dbl = typeOf(w) == SqlType.Scalar.DOUBLE;
+        writer.append(dbl ? "CAST(-(" : "(-(").piece(lo).append(" + (").piece(pos).append(" - FLOOR(").piece(pos)
+                .append(")) * (").piece(hi).append(" - ").piece(lo).append("))");
+        return writer.append(dbl ? " AS FLOAT64)" : ")");
     }
 
     /** A window's {@code OVER (...)}. Its order keys place NULLs by a leading IS NULL key; a RANGE frame with an
