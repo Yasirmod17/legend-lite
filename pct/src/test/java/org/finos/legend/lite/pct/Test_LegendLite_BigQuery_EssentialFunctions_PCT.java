@@ -29,8 +29,72 @@ public class Test_LegendLite_BigQuery_EssentialFunctions_PCT extends PCTReportCo
     private static final String platform = "interpreted";
 
     // Pinned by a STABLE part of the message (the runner matches by containment): no per-run id.
+    // First measured 2026-10-11 on the account (BigQuery, 345 tests); burned down the same day: every
+    // row is the platform's own (pinned on the DuckDB lane too) or a measured limit of BigQuery.
     private static final MutableList<ExclusionSpecification> expectedFailures = Lists.mutable.with(
-            // first measured on the account: every row is pinned from the first run's report
+            // INSTANCE IDENTITY (as on DuckDB): the asserts want the interpreter's ORIGINAL instances back, or eq/==
+            // by reference; the harness inlines captured instances BY VALUE, so identity is erased before the wire
+            one("meta::pure::functions::collection::tests::find::testFindInstance_Function_1__Boolean_1_", "instanceOf meta::pure::functions::collection::tests::model::CO_Person"),
+            one("meta::pure::functions::collection::tests::find::testFindUsingVarForFunction_Function_1__Boolean_1_", "instanceOf meta::pure::functions::collection::tests::model::CO_Person"),
+            one("meta::pure::functions::collection::tests::head::testHeadComplex_Function_1__Boolean_1_", "instanceOf meta::pure::functions::collection::tests::model::CO_Person"),
+            // THE PLATFORM'S OWN (each pinned on the DuckDB lane too, by the same cause): name resolution, lowering
+            // and harness limits, the 0-based indexOf, error positions and messages
+            one("meta::pure::functions::collection::tests::at::testAtError_Function_1__Boolean_1_", "\"Execution error column mismatch. Actual: 23 where expected: 37\""),
+            one("meta::pure::functions::collection::tests::fold::testFoldFiltering_Function_1__Boolean_1_", "\"'otherNames' is not a known class, mapping, runtime, connection, or database — user elements in a query need a fully qualified name\""),
+            one("meta::pure::functions::collection::tests::fold::testFoldToMany_Function_1__Boolean_1_", "\"'otherNames' is not a known class, mapping, runtime, connection, or database — user elements in a query need a fully qualified name\""),
+            one("meta::pure::functions::collection::tests::fold::testFold_Function_1__Boolean_1_", "\"'lastName' is not a known class, mapping, runtime, connection, or database — user elements in a query need a fully qualified name\""),
+            one("meta::pure::functions::collection::tests::indexof::testIndexOfOneElement_Function_1__Boolean_1_", "\"\nexpected: 0\nactual:   1\""),
+            one("meta::pure::functions::date::tests::testAdjustByDaysBigNumber_Function_1__Boolean_1_", "\"BigQueryException during runQuery\nInterval field days '12345678912' is out of range -3660000 to 3660000; error in INTERVAL expression\""),
+            one("meta::pure::functions::date::tests::testAdjustByHoursBigNumber_Function_1__Boolean_1_", "\"BigQueryException during runQuery\nInterval field nanoseconds '44444444083200000000000' is out of range -316224000000000000000 to 316224000000000000000; error in INTERVAL expression\""),
+            one("meta::pure::functions::date::tests::testAdjustByMonthsBigNumber_Function_1__Boolean_1_", "\"BigQueryException during runQuery\nInterval field months '9600000000' is out of range -120000 to 120000; error in INTERVAL expression\""),
+            one("meta::pure::functions::date::tests::testAdjustByWeeksBigNumber_Function_1__Boolean_1_", "\"BigQueryException during runQuery\nInterval field days '86419752384' is out of range -3660000 to 3660000; error in INTERVAL expression\""),
+            one("meta::pure::functions::date::tests::testDayOfMonthError_Function_1__Boolean_1_", "\"Execution error column mismatch. Actual: 23 where expected: 36\""),
+            one("meta::pure::functions::date::tests::testHourError_Function_1__Boolean_1_", "\"Execution error column mismatch. Actual: 23 where expected: 36\""),
+            one("meta::pure::functions::date::tests::testMinuteError_Function_1__Boolean_1_", "\"Execution error column mismatch. Actual: 23 where expected: 36\""),
+            one("meta::pure::functions::date::tests::testNewDateError_Function_1__Boolean_1_", "\"Execution error column mismatch. Actual: 23 where expected: 29\""),
+            one("meta::pure::functions::date::tests::testSecondError_Function_1__Boolean_1_", "\"Execution error column mismatch. Actual: 23 where expected: 36\""),
+            one("meta::pure::functions::lang::tests::match::testMatchWithMixedReturnType_Function_1__Boolean_1_", "scalar lowering not yet implemented for TypedDeactivate"),
+            one("meta::pure::functions::math::tests::abs::testBigFloatAbs_Function_1__Boolean_1_", "\"\nexpected: 123456789123456789.99\nactual:   123456789123456780.0\""),
+            one("meta::pure::functions::math::tests::trigonometry::testArcCosineError_Function_1__Boolean_1_", "\"Execution error message mismatch.\nThe actual message was \"BigQueryException during runQuery\nFloating point error in function: ACOS(2)\"\nwhere the expected message was:\"Unable to compute acos of 2.0\"\""),
+            one("meta::pure::functions::math::tests::trigonometry::testArcSineError_Function_1__Boolean_1_", "\"Execution error message mismatch.\nThe actual message was \"BigQueryException during runQuery\nFloating point error in function: ASIN(2)\"\nwhere the expected message was:\"Unable to compute asin of 2.0\"\""),
+            one("meta::pure::functions::string::tests::indexOf::testFromIndex_Function_1__Boolean_1_", "\"\nexpected: 1\nactual:   2\""),
+            one("meta::pure::functions::string::tests::indexOf::testSimple_Function_1__Boolean_1_", "\"\nexpected: 4\nactual:   5\""),
+            one("meta::pure::functions::string::tests::toString::testComplexClassToString_Function_1__Boolean_1_", "\"BigQueryException during runQuery\nField name __id does not exist in STRUCT<errorMessage STRING, errorType STRING>"),
+            // BIGQUERY'S OWN LIMIT: no MAP type (a map has no representation here)
+            one("meta::pure::functions::collection::tests::get::testGet_Function_1__Boolean_1_", "\"MAP_EXTRACT reached BigQuery: BigQuery has no MAP type\""),
+            one("meta::pure::functions::collection::tests::keys::testKeys_Function_1__Boolean_1_", "\"MAP_KEYS reached BigQuery: BigQuery has no MAP type\""),
+            one("meta::pure::functions::collection::tests::put::testPut_addsEntry_Function_1__Boolean_1_", "\"MAP_CONCAT reached BigQuery: BigQuery has no MAP type\""),
+            one("meta::pure::functions::collection::tests::put::testPut_emptyMap_Function_1__Boolean_1_", "\"MAP_CONCAT reached BigQuery: BigQuery has no MAP type\""),
+            one("meta::pure::functions::collection::tests::put::testPut_overridesEntry_Function_1__Boolean_1_", "\"MAP_CONCAT reached BigQuery: BigQuery has no MAP type\""),
+            one("meta::pure::functions::collection::tests::putAll::testPutAll_emptyInputMap_Function_1__Boolean_1_", "\"MAP_CONCAT reached BigQuery: BigQuery has no MAP type\""),
+            one("meta::pure::functions::collection::tests::putAll::testPutAll_emptyPutEntries_Function_1__Boolean_1_", "\"MAP_CONCAT reached BigQuery: BigQuery has no MAP type\""),
+            one("meta::pure::functions::collection::tests::putAll::testPutAll_overridesExistingAndAddNew_Function_1__Boolean_1_", "\"MAP_CONCAT reached BigQuery: BigQuery has no MAP type\""),
+            one("meta::pure::functions::collection::tests::values::testValues_Function_1__Boolean_1_", "\"MAP_VALUES reached BigQuery: BigQuery has no MAP type\""),
+            // BIGQUERY'S OWN LIMIT: no lambdas, and no correlated recursion to fold with (WITH RECURSIVE is top-level
+            // only, measured)
+            one("meta::pure::functions::collection::tests::fold::testFoldCollectionAccumulator_Function_1__Boolean_1_", "\"a fold reached BigQuery, which has no lambdas and no correlated recursion (WITH RECURSIVE is top-level only, measured)\""),
+            one("meta::pure::functions::collection::tests::fold::testFoldEmptyListAndNonEmptyIdentity_Function_1__Boolean_1_", "\"a fold reached BigQuery, which has no lambdas and no correlated recursion (WITH RECURSIVE is top-level only, measured)\""),
+            one("meta::pure::functions::collection::tests::fold::testFoldMixedAccumulatorTypes_Function_1__Boolean_1_", "\"a fold reached BigQuery, which has no lambdas and no correlated recursion (WITH RECURSIVE is top-level only, measured)\""),
+            one("meta::pure::functions::collection::tests::fold::testIntegerSum_Function_1__Boolean_1_", "\"a fold reached BigQuery, which has no lambdas and no correlated recursion (WITH RECURSIVE is top-level only, measured)\""),
+            one("meta::pure::functions::collection::tests::fold::testStringSum_Function_1__Boolean_1_", "\"a fold reached BigQuery, which has no lambdas and no correlated recursion (WITH RECURSIVE is top-level only, measured)\""),
+            one("meta::pure::functions::collection::tests::removeDuplicates::testRemoveDuplicatesEmptyListExplicit_Function_1__Boolean_1_", "\"LIST_REDUCE reached BigQuery: a reduce is a fold: BigQuery has no lambdas\""),
+            one("meta::pure::functions::collection::tests::removeDuplicates::testRemoveDuplicatesPrimitiveNonStandardFunction_Function_1__Boolean_1_", "\"LIST_REDUCE reached BigQuery: a reduce is a fold: BigQuery has no lambdas\""),
+            one("meta::pure::functions::collection::tests::removeDuplicates::testRemoveDuplicatesPrimitiveStandardFunctionExplicit_Function_1__Boolean_1_", "\"LIST_REDUCE reached BigQuery: a reduce is a fold: BigQuery has no lambdas\""),
+            // BIGQUERY'S OWN LIMIT: a date-time past BigQuery's range (years 1 to 9999) is refused
+            one("meta::pure::functions::date::tests::testAdjustByMinutesBigNumber_Function_1__Boolean_1_", "\"BigQueryException during runQuery\nInterval field nanoseconds '740740734720000000000' is out of range -316224000000000000000 to 316224000000000000000; error in INTERVAL expression\""),
+            // BIGQUERY'S OWN LIMIT: an empty list of no element type -- a bare NULL is an INT64 here, and UNNEST
+            // refuses it
+            one("meta::pure::functions::collection::tests::drop::testDropNegativeOnEmptyList_Function_1__Boolean_1_", "\"BigQueryException during runQuery\nValues referenced in UNNEST must be arrays. UNNEST contains expression of type INT64"),
+            one("meta::pure::functions::collection::tests::forall::testforAllOnEmptySet_Function_1__Boolean_1_", "\"BigQueryException during runQuery\nValues referenced in UNNEST must be arrays. UNNEST contains expression of type INT64"),
+            one("meta::pure::functions::collection::tests::take::testTakeNegativeOnEmptyList_Function_1__Boolean_1_", "\"BigQueryException during runQuery\nValues referenced in UNNEST must be arrays. UNNEST contains expression of type INT64"),
+            // BIGQUERY'S OWN LIMIT: the statement is longer than BigQuery's maximum query length
+            one("meta::pure::functions::string::tests::format::testFormatFloat_Function_1__Boolean_1_", "\"BigQueryException during runQuery\nThe query is too large (2839.89K characters, 1859473 characters over the limit). The maximum standard SQL query length is 1024.00K characters, including comments and white space characters.\""),
+            // BIGQUERY'S OWN LIMIT: no minimal-fraction date-time format code
+            one("meta::pure::functions::string::tests::format::testFormatDate_Function_1__Boolean_1_", "\"a minimal-fraction date format reached BigQuery\""),
+            // THE PORTABLE CARRIER STRATEGIES' OWN (pinned on Postgres too, the other lambda-less dialect): a
+            // filter's lambda parameter is left unbound
+            one("meta::pure::functions::collection::tests::exists::testExistsInSelect_Function_1__Boolean_1_", "\"BigQueryException during runQuery\nUnrecognized name: f"),
+            one("meta::pure::functions::string::tests::toString::testPairCollectionToString_Function_1__Boolean_1_", "\"BigQueryException during runQuery\nUnrecognized name: p")
     );
 
     public static Test suite() {

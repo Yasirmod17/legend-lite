@@ -29,8 +29,30 @@ public class Test_LegendLite_BigQuery_GrammarFunctions_PCT extends PCTReportConf
     private static final String platform = "interpreted";
 
     // Pinned by a STABLE part of the message (the runner matches by containment): no per-run id.
+    // First measured 2026-10-11 on the account (BigQuery, 137 tests); burned down the same day: every
+    // row is the platform's own (pinned on the DuckDB lane too) or a measured limit of BigQuery.
     private static final MutableList<ExclusionSpecification> expectedFailures = Lists.mutable.with(
-            // first measured on the account: every row is pinned from the first run's report
+            // INSTANCE IDENTITY (as on DuckDB): the asserts want the interpreter's ORIGINAL instances back, or eq/==
+            // by reference; the harness inlines captured instances BY VALUE, so identity is erased before the wire
+            one("meta::pure::functions::collection::tests::first::testFirstComplex_Function_1__Boolean_1_", "instanceOf meta::pure::functions::collection::tests::model::CO_Person"),
+            one("meta::pure::functions::collection::tests::map::testMapRelationshipFromManyToMany_Function_1__Boolean_1_", "instanceOf meta::pure::functions::collection::tests::map::model::M_Location"),
+            one("meta::pure::functions::collection::tests::map::testMapRelationshipFromManyToOne_Function_1__Boolean_1_", "instanceOf meta::pure::functions::collection::tests::map::model::M_Address"),
+            // THE PLATFORM'S OWN (each pinned on the DuckDB lane too, by the same cause): name resolution, lowering
+            // and harness limits, the 0-based indexOf, error positions and messages
+            one("meta::pure::functions::boolean::tests::equality::eq::testEqNonPrimitive_Function_1__Boolean_1_", "\"Assert failed\""),
+            one("meta::pure::functions::boolean::tests::equality::eq::testEqPrimitiveExtension_Function_1__Boolean_1_", "\"unknown type 'meta::pure::functions::boolean::tests::equalitymodel::ExtendedInteger' in @meta::pure::functions::boolean::tests::equalitymodel::ExtendedInteger\""),
+            one("meta::pure::functions::boolean::tests::equality::equal::testEqualNonPrimitive_Function_1__Boolean_1_", "\"Assert failed\""),
+            one("meta::pure::functions::boolean::tests::equality::equal::testEqualPrimitiveExtension_Function_1__Boolean_1_", "\"unknown type 'meta::pure::functions::boolean::tests::equalitymodel::ExtendedInteger' in @meta::pure::functions::boolean::tests::equalitymodel::ExtendedInteger\""),
+            one("meta::pure::functions::collection::tests::filter::testFilterInstance_Function_1__Boolean_1_", "\"BigQueryException during runQuery\nUnrecognized name: p"),
+            one("meta::pure::functions::collection::tests::map::testMapRelationshipFromOneToOne_Function_1__Boolean_1_", "\"unbound variable '$address'\""),
+            // BIGQUERY'S OWN LIMIT: no lambdas, and no correlated recursion to fold with (WITH RECURSIVE is top-level
+            // only, measured)
+            one("meta::pure::functions::string::tests::plus::testPlusInIterate_Function_1__Boolean_1_", "\"a fold reached BigQuery, which has no lambdas and no correlated recursion (WITH RECURSIVE is top-level only, measured)\""),
+            // BIGQUERY'S OWN LIMIT: a date-time past BigQuery's range (years 1 to 9999) is refused
+            one("meta::pure::functions::lang::tests::compare::testDateCompare_Function_1__Boolean_1_", "\"BigQueryException during runQuery\nInput calculates to invalid datetime: 10999-01-01 0000:00:00\""),
+            // Class.all() reads the platform's metamodel tables, which live in its in-process database (as on
+            // Postgres): a warehouse has no private in-memory instance
+            one("meta::pure::functions::collection::tests::getAll::testBasic_Function_1__Boolean_1_", "\"no in-memory instance of database type 'BigQuery'\"")
     );
 
     public static Test suite() {

@@ -64,7 +64,7 @@ measured on the account before it is trusted (execution beats documentation).
      `arrayFilter`, `arrayFold`), maps and tuples, so it builds on the Trino and Databricks work. Not in
      legend-engine, so no reference dialect to compare against; its own quirks first (a column is non-NULL unless
      `Nullable(T)`, `join_use_nulls` for SQL's outer-join NULLs, case-sensitive function names).
-   - **MongoDB** and **Elasticsearch**: stores that are not SQL, translated from the same `SqlQuery` IR (§10).
+   - **MongoDB** and **Elasticsearch**: stores that are not SQL, translated from the same `SqlQuery` IR (§11).
    - **SingleStore**: its Dev Image (`ghcr.io/singlestore-labs/singlestoredb-dev`) runs one aggregator and one leaf
      with no licence key, for development and functional testing only, under SingleStore's Free Tier licence (not
      open source); it follows the MySQL dialect.
@@ -95,7 +95,9 @@ measured on the account before it is trusted (execution beats documentation).
   1,250 tests, the census at 0 divergence (no ceiling raised).
 - **Snowflake: done** (2026-10-11, §9): the dialect, all five suites green on the account with 40 pinned rows of
   1,250 tests, the census at 0 divergence (no ceiling raised).
-- **Not yet**: the BigQuery dialect (a draft measured against its account, not yet in the tree), the CI workflow.
+- **BigQuery: done** (2026-10-11, §10): the dialect, all five suites green on the account with 84 pinned rows of
+  1,250 tests, the census at 0 divergence (no ceiling raised).
+- **Not yet**: the CI workflow (step 4 of the ask; not requested in this pass).
 
 ## 4. The properties file
 
@@ -295,7 +297,45 @@ and the dialect's answer:
 | the session: `TIMEZONE = 'UTC'`, `WEEK_START = 1`, `TIMESTAMP_TYPE_MAPPING = 'TIMESTAMP_NTZ'`, `QUOTED_IDENTIFIERS_IGNORE_CASE = FALSE`, `JSON_INDENT = 0`, `STRICT_JSON_OUTPUT = TRUE` | set at session start (`sessionSetup`) |
 | `QUALIFY`, `EXCLUDE`, `MAX_BY`/`MIN_BY`, `BOOLAND_AGG`, `REDUCE`/`TRANSFORM`/`FILTER`, `ARRAY_*`, `OBJECT_*`, `CONVERT_TIMEZONE`, `DATEADD`/`DATEDIFF` | used as they are (with DuckDB's boundary-count `date_diff` per unit) |
 
-## 10. Further backends: candidates
+## 10. BigQuery, measured (2026-10-11)
+
+**Result:** all five suites pass on the account, each failure pinned by its message: 1,250 tests, 84 pinned (Grammar
+12 of 137, Essential 49 of 345, Relation 13 of 469, Standard 8 of 206, Unclassified 2 of 93), the census divergence 0
+in every suite. Burned down in five runs from 347 failing (the first run: Essential 107, Grammar 31, Relation 112,
+Standard 75, Unclassified 22).
+
+What the 84 are: 34 are the platform's own, pinned on the DuckDB lane by the same cause (as on Snowflake); 2 are the
+portable carrier strategies' own, pinned on Postgres too (a filter's lambda parameter left unbound on a lambda-less
+dialect); 1 is the dialect's own gap, named (a lambda parameter over a JSON array carries no type, so its cast is a
+scalar CAST, refused on JSON); the other 47 are BigQuery's own limits, each measured: no MAP type (11), no lambdas
+and no correlated recursion to fold with (10), no correlated derived table -- only an UNNEST correlates (8), no mode
+(6), an empty list of no element type (a bare NULL is an INT64, and UNNEST refuses it: 3), a date-time past years
+1 to 9999 (2), no Jaro-Winkler function (2), PERCENTILE_CONT over a window ascending only (1), a statement past the
+maximum query length (1), no minimal-fraction date format code (1), FARM_FINGERPRINT(NULL) is NULL (1), and
+`Class.all()` over the platform's in-process metamodel (1).
+
+The account: project `legend-integration-testing`, a service-account key; the JDBC driver (Google's
+google-cloud-bigquery-jdbc 1.6.0, the shaded jar) reports the product `Google BigQuery` (`Sessions.jdbcProduct`).
+`core/.../sql/dialect/BigQuery.java` was drafted against the account (its own probes, kept in the dialect's javadoc)
+and burned down on the lanes. What differs from DuckDB, and the dialect's answer:
+
+| Measured | Consequence |
+|---|---|
+| a string literal reads backslash escapes and refuses `''`; the driver counts every `?` as a parameter, inside a literal too | a quote is `\'`, a `?` is `\x3f` |
+| `1.5` is a FLOAT64 (DuckDB's is a DECIMAL); a parameterized type cannot be cast to; a BIGNUMERIC drops a trailing zero's scale (`'3.0'` reads 3) | a decimal literal is `BIGNUMERIC '1.5'`; a decimal cast a rounded BIGNUMERIC; its text has its scale's digits (`FORMAT('%.Nf')`); a decimal read back is padded to its declared scale (`normalize`); the census reads BIGNUMERIC as delivering decimal, HUGEINT and Float labels |
+| no VALUES clause, no bare UNION, no OFFSET without LIMIT, no lambdas, no lateral derived table, no MAP type | rows are `UNNEST(ARRAY<STRUCT<..>>[..])`; `UNION ALL`/`UNION DISTINCT`; every list operation a correlated subquery over `UNNEST(xs) WITH OFFSET` |
+| no set-returning projection | an explosion is a marker (`ExplosionMarkers`, shared with Snowflake) written as `UNNEST(GENERATE_ARRAY(0, n - 1))` over its longest list, a lateral one `CROSS`/`LEFT JOIN UNNEST`, each exploded column `list[SAFE_OFFSET(position)]`, a root one ordered by its position |
+| a FROM-less select takes no WHERE | it runs over one row |
+| no quantified comparison, and no derived-column alias list | `x op ANY/ALL (q)` is its three-valued count over `UNNEST(ARRAY(q))` |
+| no `=` on STRUCT or ARRAY | compared through `TO_JSON_STRING` (DuckDB's nested NULLs compare equal, as the texts do); a NULL operand is NULL |
+| a CASE's branches need a common type (INT64 and STRING have none); a column's text label may not be its value's (a pivot's) | a text cast is always written, but on a string literal |
+| `ROUND` of a FLOAT64 is exact (31.41499... is 31.41) | DuckDB's own algorithm: `ROUND(x * 10^n) / 10^n` (31.42) |
+| `FORMAT`'s `%s` takes a STRING only | a `%s` argument is cast to text |
+| a bare NULL is an INT64 (`COALESCE(NULL, NULL)`, `UNNEST(NULL)`) | at the root, a value NULL by its shape is its label's NULL; a NULL list of known element type is `CAST(NULL AS ARRAY<T>)` |
+| the driver's type names: INT64, FLOAT64, DATETIME (naive), TIMESTAMP (an instant) | the census reads them (`SqlTypeCensus.dialectSpelling`) |
+| `QUALIFY`, `SELECT * EXCEPT`, `PERCENTILE_CONT/DISC` (analytic), `ARRAY_AGG ... ORDER BY`, `STRING_AGG ... ORDER BY`, `IEEE_DIVIDE`, `SAFE_OFFSET` | used as they are |
+
+## 11. Further backends: candidates
 
 The order for the open ones is decided (§2, item 4); the rest of this list is not. legend-lite replaces
 legend-engine, so the first list is the relational databases the engine supports (`DynaFn` names several: MemSQL,
