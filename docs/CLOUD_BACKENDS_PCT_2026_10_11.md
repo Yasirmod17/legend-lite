@@ -53,10 +53,11 @@ measured on the account before it is trusted (execution beats documentation).
    - **SQLite: done** (§12): a sibling dialect like the others, the five PCT suites as a lane over the embedded
      driver (`@sqlite_jdbc`, already a dependency), pinned and burned down. Until then it was no dialect class, only
      `Lexicon.SQLITE` handed to `AnsiSqlRenderer`.
-   - **MariaDB / MySQL**: one dialect family over `AnsiSqlRenderer`. MariaDB embedded through MariaDB4j, as
-     `docs/MARIADB_BACKEND.md` designs it (a feasibility design measured on MariaDB 11.4, not built); MySQL 8 as
-     a sibling where the two differ (JSON functions, their regex engines). Lists have to be JSON arrays (neither has
-     an array type), and neither has `FULL OUTER JOIN` or `QUALIFY`.
+   - **MariaDB: done** (§13): a sibling dialect, the five PCT suites as a lane over a real MariaDB 11.4 server that
+     Bazel unpacks (not MariaDB4j, as `docs/MARIADB_BACKEND.md` designed it), pinned and burned down.
+   - **MySQL**: a sibling of the MariaDB dialect where the two differ (JSON functions, their regex engines), over
+     MySQL 8.4's server tarball. Lists have to be JSON arrays (neither has an array type), and neither has
+     `FULL OUTER JOIN` or `QUALIFY`.
    - **Trino**: the `trinodb/trino` image with the memory connector; typed arrays, lambdas and maps, so much of
      `Databricks` carries over. One dialect covers Presto, Starburst and Athena.
    - **ClickHouse** (Apache-2.0): the `clickhouse/clickhouse-server` image; typed arrays, lambdas (`arrayMap`,
@@ -437,3 +438,62 @@ The lanes: `//pct:pct_sqlite_<suite>` and `//pct:pct_sqlite`, run from a desk wi
 They are tagged `manual`, in no per-push lane: they sit in `//gates:heavy`, beside the three cloud lanes, which were
 in no lane of `gates/BUILD.bazel` until now (CI's lane guard would have refused them). A per-push lane for SQLite is
 the user's call.
+
+
+## 13. MariaDB, measured (2026-10-11)
+
+The second of the open ones (§2, item 4). No account and no Docker: a real MariaDB 11.4.13 server that Bazel unpacks
+from MariaDB's own Linux tarball (`@embedded_mariadb`, `tools/mariadb/`, the server and its bootstrap scripts only),
+started once per test JVM on a free loopback port with its data in the test's temporary directory
+(`testing/.../EmbeddedMariaDb.java`). The driver is MariaDB Connector/J 3.5.10 (`@mariadb_jdbc`, LGPL, test-only).
+
+**Result:** all five suites pass on MariaDB, each failure pinned by its message: 1,249 tests, 62 pinned (Essential 33
+of 345, Grammar 11 of 137, Relation 13 of 469, Standard 3 of 205, Unclassified 2 of 93), the census divergence 0 in
+every suite (no ceiling raised).
+
+What the 62 are: 34 are the platform's own, pinned on the DuckDB lane by the same cause (6 of them instance
+identity); 2 are the portable carrier strategies' own (pinned on Postgres, BigQuery and SQLite too); 1 is a server
+database's (`getAll`'s in-memory metamodel instance, as on Postgres and the clouds). The other 25 are MariaDB's own
+limits, each measured:
+
+- GROUP_CONCAT, JSON_ARRAYAGG and a mode are no window functions (14): a windowed string aggregate (11) or mode (3);
+- a statement's memory (5): a Float's text canon written out in each of `format`'s arguments, or in each comparison
+  of a mixed list's sort, passes the server's 2 GB session cap or its 16 MB statement text;
+- no Jaro-Winkler function (2, as on SQLite, Postgres and the clouds);
+- a date past the years 1000-9999 (2);
+- no named time zone without the server's zone tables (1);
+- a recursive CTE takes no outer reference (1): a fold over a row's list.
+
+The work:
+- `core/.../sql/dialect/MariaDb.java`, a sibling of `SQLite` and `BigQuery`, with an exhaustive decision per `SqlFn`
+  and `SqlAgg.Fn`;
+- MariaDB rows in `Lexicon`, `TypeNames`, `Spellings` and `CarrierStrategies.Caps`;
+- `MariaDB` and `MySQL` in `ConnectionDefinition.DatabaseType`, accepted by the grammar as lite extensions beside
+  SQLite (`docs/SEMANTICS_REGISTER.md` S43); MySQL is declared, not built (its connections and dialect refuse by name);
+- `Databases.dialect` constructs it, `Sessions` opens `jdbc:mariadb://` for a static datasource;
+- the raise path: `Sessions.raisedMessage` and `RaisedErrors.unwrapped(e, session)` (below);
+- the wire census reads MariaDB's type names (`SqlTypeCensus.mariaDbOwn`, `dialectSpelling`);
+- the lanes `//pct:pct_mariadb_<suite>` and `//pct:pct_mariadb`, tagged `manual`, in `//gates:heavy`.
+
+What differs from DuckDB, and the dialect's answer:
+
+| Measured | Consequence |
+|---|---|
+| the session decides the dialect | the dialect's session setup: `ANSI_QUOTES,PIPES_AS_CONCAT,NO_BACKSLASH_ESCAPES` and strict mode, the zone UTC, utf8mb4 with its binary collation (case- and accent-sensitive comparison and LIKE), `group_concat_max_len` at 1 GB, `max_recursive_iterations` raised, 30 decimal digits for a division, and `condition_pushdown_for_derived` off (on, a JSON filter pushed into a UNION derived table returned no rows) |
+| the binary collation still pads (`' ' = ''` is true); the JSON functions answer in that collation, so a NO PAD one mixes with theirs ("Illegal mix of collations") | an empty text is tested by its length (`CHAR_LENGTH`) |
+| no array, struct or map type | JSON text: a list operation is a correlated subquery over `JSON_TABLE(xs, '$[*]' ...)` (a table function's argument correlates, measured) |
+| an outer reference inside a derived table or a recursive CTE fails ("Unknown column") | a LATERAL subquery's rows are inlined as `JSON_TABLE` over those rows aggregated as JSON objects; the explosions are markers joined to `JSON_TABLE` over the list; a fold, a `list_reduce` and an edit distance are a recursive CTE only over values that read no row, with a typed anchor (a CTE's column takes its first row's type, and a literal's is too narrow to grow: `''` is CHAR(0), `0` an INT) |
+| no LATERAL, FULL OUTER JOIN, QUALIFY, NULLS FIRST/LAST, FILTER, VALUES alias list | FULL OUTER is emulated (`Caps.MARIADB`), QUALIFY a wrapping subselect, a sort key's NULL order an `IS NULL` key, VALUES a UNION ALL of selects; `<=>` is the null-safe comparison |
+| a boolean is 1 or 0; `1.5` is a DECIMAL and `1.5E0` a DOUBLE; a JSON boolean's `JSON_VALUE` is `'1'` or `'0'` | a Float literal carries an exponent; a root Float column is cast to DOUBLE; a JSON boolean is read as 1/0 |
+| a SELECT raises no error of its own text: SIGNAL runs only in a stored program, a conversion is a warning, and an XPath error is raised when the statement is PREPARED, whether or not its branch runs | a raise sets the session variable `@legend_raise` and fails at run time on a fixed error (a scalar subquery of two rows); after a failure, `Sessions.raisedMessage` reads the variable and clears it (one read, registered in the SQL-text and accessor ratchets with their reasons) |
+| the driver parses a backslash before a quote as an escape, whatever the session's mode ("unknown escape sequence", or a socket error) | a string literal with a backslash before a quote spells it `CHAR(92 USING utf8mb4)` |
+| a DATE or DATETIME is of the years 1000-9999 | adding an interval raises past them |
+| a double's ROUND is half to even; CAST of a double to an integer rounds half to even | DuckDB's half away from zero is written out |
+| a JSON_TABLE column of an empty or NULL list, and `JSON_VALUE` or `REPEAT` of a NULL, are text or binary | an element read of a list that claims no type, and a root value that claims none, are cast to their label |
+| a deeply nested correlated JSON_TABLE was planned past 11 GB (the OOM killer ended the server; a common-subexpression pass made it so) | no such pass; the server caps a session at 2 GB (`--max-session-mem-used`), so a statement that big is an error; the 16 MB statement text is kept (at 1 GB a 24 MB statement's parse went past 4 GB, and a grouped `JSON_ARRAYAGG ... LIMIT` answered NULL) |
+| a windowed variance or standard deviation is a running recurrence over the partition's rows in the order the window's sort leaves them, which varies (the same statement's z-scores 1.5 in one run, 1.5000000000000002 in another) | an integer's is computed from its exact DECIMAL sums over the window, the same in any order |
+| a test compares the database's user with the JVM's (`currentUserId()`), and a container runs as root | the server's own account is `legend`, made by the server's init file, never `root` |
+
+The lanes run from a desk with `bazel test //pct:pct_mariadb`. Linux x86_64 only (the tarball's platform): on another
+platform the lanes are incompatible, not failing (`EMBEDDED_MARIADB_COMPATIBLE`). **MySQL** is next: its 8.4 server
+tarball, a sibling dialect where the two differ (its JSON functions and regular expressions).

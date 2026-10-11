@@ -79,11 +79,32 @@ public final class Sessions {
             case Snowflake -> "Snowflake";
             // Google's BigQuery JDBC driver (measured, google-cloud-bigquery-jdbc 1.6.0)
             case BigQuery -> "Google BigQuery";
+            // MariaDB Connector/J names the server it reached (measured, 3.5.10 on MariaDB 11.4)
+            case MariaDB -> "MariaDB";
             case DB2, MemSQL, Sybase, SybaseIQ, Composite, SqlServer, Hive, Presto, Trino,
-                 Redshift, Spanner, Athena, Oracle, ClickHouse, Aurora ->
+                 Redshift, Spanner, Athena, Oracle, ClickHouse, Aurora, MySQL ->
                     throw new com.legend.error.NotImplementedException(
                             "sessions on database type '" + type + "' are not implemented");
         };
+    }
+
+    /** The raise a MariaDB session holds after a statement failed (docs/CLOUD_BACKENDS_PCT_2026_10_11.md §13): its
+     *  dialect keeps a raised message in the session variable {@code @legend_raise} before it fails, since a MariaDB
+     *  error cannot carry a raise's text. Read and cleared; null for any other session, or none held. */
+    public static @com.legend.base.Nullable String raisedMessage(Connection session) {
+        try {
+            if (!jdbcProduct(DatabaseType.MariaDB).equals(session.getMetaData().getDatabaseProductName())) {
+                return null;
+            }
+            try (java.sql.Statement st = session.createStatement();
+                    java.sql.ResultSet rs = st.executeQuery("SELECT @legend_raise")) {
+                String held = rs.next() ? rs.getString(1) : null;
+                st.execute("SET @legend_raise = NULL");
+                return held;
+            }
+        } catch (SQLException unreadable) {
+            return null;
+        }
     }
 
     /** {@code session} is a session on {@code declared}: a session on another database is refused, never reinterpreted. */
@@ -185,8 +206,20 @@ public final class Sessions {
                 case ConnectionSpecification.Databricks x -> refused(def);
                 case ConnectionSpecification.BigQuery x -> refused(def);
             };
+            case MariaDB -> switch (spec) {
+                case ConnectionSpecification.StaticDatasource(String host, int port, String database) ->
+                        new Opening.Url("jdbc:mariadb://" + host + ":" + port + "/" + database);
+                case ConnectionSpecification.InMemory x -> refused(def);
+                case ConnectionSpecification.LocalFile x -> refused(def);
+                case ConnectionSpecification.LocalH2 x -> refused(def);
+                case ConnectionSpecification.EmbeddedH2 x -> refused(def);
+                case ConnectionSpecification.Snowflake x -> refused(def);
+                case ConnectionSpecification.Spanner x -> refused(def);
+                case ConnectionSpecification.Databricks x -> refused(def);
+                case ConnectionSpecification.BigQuery x -> refused(def);
+            };
             case DB2, MemSQL, Sybase, SybaseIQ, Composite, SqlServer, Hive, Snowflake, Presto, Trino, BigQuery,
-                 Redshift, Databricks, Spanner, Athena, Oracle, ClickHouse, Aurora ->
+                 Redshift, Databricks, Spanner, Athena, Oracle, ClickHouse, Aurora, MySQL ->
                     throw new com.legend.error.NotImplementedException("connections to database type '"
                             + def.databaseType() + "' are not implemented (connection '" + def.qualifiedName() + "')");
         };
@@ -264,7 +297,7 @@ public final class Sessions {
             case DuckDB -> DriverManager.getConnection("jdbc:duckdb:");
             case SQLite -> DriverManager.getConnection("jdbc:sqlite::memory:");
             case Postgres, DB2, MemSQL, Sybase, SybaseIQ, Composite, SqlServer, Hive, Snowflake, Presto, Trino,
-                 BigQuery, Redshift, Databricks, Spanner, Athena, Oracle, ClickHouse, Aurora ->
+                 BigQuery, Redshift, Databricks, Spanner, Athena, Oracle, ClickHouse, Aurora, MariaDB, MySQL ->
                     throw new com.legend.error.NotImplementedException(
                             "no in-memory instance of database type '" + type + "'");
         };

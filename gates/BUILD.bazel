@@ -285,6 +285,7 @@ test_suite(
         "//pct:pct_snowflake",
         "//pct:pct_bigquery",
         "//pct:pct_sqlite",
+        "//pct:pct_mariadb",
     ],
 )
 

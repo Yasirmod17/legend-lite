@@ -7,6 +7,7 @@ import com.legend.sql.SqlQuery;
 import com.legend.sql.dialect.DuckDb;
 import com.legend.sql.dialect.EngineStyleH2;
 import com.legend.sql.dialect.H2;
+import com.legend.sql.dialect.MariaDb;
 import com.legend.sql.dialect.BigQuery;
 import com.legend.sql.dialect.Databricks;
 import com.legend.sql.dialect.Postgres;
@@ -55,6 +56,7 @@ public final class RenderCensus {
         dialects.put("Snowflake", Snowflake::new);
         dialects.put("BigQuery", BigQuery::new);
         dialects.put("SQLite", SQLite::new);
+        dialects.put("MariaDb", MariaDb::new);
         Map<String, Object> models = new HashMap<>();
         StringBuilder out = new StringBuilder();
         int n = 0;

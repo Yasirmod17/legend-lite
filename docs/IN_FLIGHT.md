@@ -773,7 +773,18 @@ rows in `TypeNames`, `Spellings`, `CarrierStrategies.Caps`; arm in `database/Dat
 guard edits, each with its dated reason: `DialectBoundaryTest` (the census's dialect label; the four new dialects'
 constructions owned by `Databases`); `gates/BUILD.bazel` puts the cloud and SQLite lanes in `heavy` (the cloud lanes
 were in no lane); `tools/census/RenderCensus.java` renders SQLite.
-**Next** (the user's order): MariaDB/MySQL, Trino, ClickHouse, MongoDB, Elasticsearch, SingleStore (the plan's §2).
+**2026-10-11, MariaDB landed on the branch** (all five suites green on a real MariaDB 11.4 server, 62 pinned of 1,249;
+the plan's §13): new `sql/dialect/MariaDb.java`; rows in `Lexicon`, `TypeNames`, `Spellings`, `CarrierStrategies.Caps`;
+`model/ConnectionDefinition.java` (`MariaDB` and `MySQL` in `DatabaseType`, register row S43) and
+`parser/section/ConnectionSectionGrammar.java` (the lite database types); arms in `database/Databases.java`,
+`exec/Sessions.java` (and its `raisedMessage`), `EngineText.java` and `test/StorelessRuntime.java`; exec edits:
+`exec/RaisedErrors.java` (`unwrapped(e, session)`), `exec/Executor.java` (its
+failure sites pass the session), `exec/SqlTypeCensus.java` (MariaDB's type names); new `testing/.../EmbeddedMariaDb.java`
+and `tools/mariadb/` (the server, as a Bazel repository); `MODULE.bazel`, `tools/deps/jars_table.bzl` (the driver,
+test-only); guard edits, each with its dated reason: `DialectBoundaryTest` (a JDBC URL), `TenetRatchetTest` (one
+accessor), `SqlTextRatchetTest` (one session read); `gates/BUILD.bazel` puts the MariaDB lanes in `heavy`;
+`tools/census/RenderCensus.java` renders MariaDB.
+**Next** (the user's order): MySQL, Trino, ClickHouse, MongoDB, Elasticsearch, SingleStore (the plan's §2).
 
 ## Rules between sessions
 

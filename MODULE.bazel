@@ -115,13 +115,18 @@ maven = use_extension("@rules_jvm_external//:extensions.bzl", "maven")
 # http_jar fetches each, pinned by sha256, with no Maven resolution (tools/deps/jars_table.bzl, the one table;
 # docs/BUILD_REBUILD_DESIGN_2026_10_05.md, section 5b).
 product_jars = use_extension("//tools/deps:jars.bzl", "product_jars")
-use_repo(product_jars, "bigquery_jdbc", "databricks_jdbc", "duckdb_jdbc", "duckdb_jdbc_warehouse", "h2", "h2_modern", "postgresql", "snowflake_jdbc", "sqlite_jdbc")
+use_repo(product_jars, "bigquery_jdbc", "databricks_jdbc", "duckdb_jdbc", "duckdb_jdbc_warehouse", "h2", "h2_modern", "mariadb_jdbc", "postgresql", "snowflake_jdbc", "sqlite_jdbc")
 
 # THE POSTGRES the Postgres lanes run on (tools/postgres/postgres.bzl): pinned Postgres 16 binaries, one
 # repository per platform, unpacked by Bazel -- no Docker, no jar on a classpath -- and the hub
 # @embedded_postgres that selects this platform's (Bazel workplan P1-15).
 embedded_postgres = use_extension("//tools/postgres:extensions.bzl", "embedded_postgres")
 use_repo(embedded_postgres, "embedded_postgres")
+
+# THE MARIADB the MariaDB lanes run on (tools/mariadb/mariadb.bzl): MariaDB's own pinned server tarball, unpacked and
+# trimmed by Bazel -- no Docker -- and the hub @embedded_mariadb (Linux x86_64 only: MariaDB's one bintar platform).
+embedded_mariadb = use_extension("//tools/mariadb:extensions.bzl", "embedded_mariadb")
+use_repo(embedded_mariadb, "embedded_mariadb")
 
 # test tooling, at legend-lite's own versions (root pom <junit.version>). JUnit's
 # BOM keeps the Jupiter and Platform jars in step. tools/junit/JUnitMain drives the

@@ -124,6 +124,27 @@ public record TypeNames(Map<SqlType.Scalar, String> scalarNames,
         return m;
     }
 
+    /** MariaDB (2026-10-11): the CAST targets MariaDB takes (SIGNED, DOUBLE, CHAR, DATE, DATETIME(6), DECIMAL);
+     *  a boolean is an integer, a Variant its JSON text; no STRUCT. */
+    public static final TypeNames MARIADB = new TypeNames(mariadb(), false);
+
+    private static Map<SqlType.Scalar, String> mariadb() {
+        Map<SqlType.Scalar, String> m = new EnumMap<>(SqlType.Scalar.class);
+        m.put(SqlType.Scalar.BOOLEAN, "SIGNED");
+        m.put(SqlType.Scalar.INTEGER, "SIGNED");
+        m.put(SqlType.Scalar.BIGINT, "SIGNED");
+        m.put(SqlType.Scalar.HUGEINT, "DECIMAL(38,0)");
+        m.put(SqlType.Scalar.DOUBLE, "DOUBLE");
+        m.put(SqlType.Scalar.VARCHAR, "CHAR");
+        m.put(SqlType.Scalar.LITERAL, "CHAR");
+        m.put(SqlType.Scalar.TEMPORAL_TEXT, "CHAR");
+        m.put(SqlType.Scalar.DATE, "DATE");
+        m.put(SqlType.Scalar.TIMESTAMP, "DATETIME(6)");
+        m.put(SqlType.Scalar.TIMESTAMPTZ, "DATETIME(6)");
+        m.put(SqlType.Scalar.JSON, "CHAR");
+        return m;
+    }
+
     private static Map<SqlType.Scalar, String> postgres() {
         Map<SqlType.Scalar, String> m = base();
         m.put(SqlType.Scalar.HUGEINT, "NUMERIC(38)");

@@ -86,7 +86,9 @@ class DialectBoundaryTest {
      *  dialect package, by file. Added 2026-10-03 (C3a), pinned at what is left; shrink-only. */
     // SystemDatabase.java 3 -> 0 (2026-10-04, C3b): it opens by the declared type through Sessions
     private static final Map<String, Integer> DATABASE_NAME_DECISIONS = Map.of(
-            "ConnectionSectionGrammar.java", 3,   // the grammar: a specification keyword parses per database, as upstream's
+            // the grammar: a specification keyword parses per database, as upstream's (3 -> 2, 2026-10-11,
+            // docs/CLOUD_BACKENDS_PCT_2026_10_11.md §13: the lite database types are a set, no longer SQLite by name)
+            "ConnectionSectionGrammar.java", 2,
             // 0 -> 2 (2026-10-11, docs/CLOUD_BACKENDS_PCT_2026_10_11.md §12): the wire census (a diagnostic, deciding no
             // SQL) reads SQLite's own type names by the label the executor gives it, the dialect class's simple name, as
             // it reads Snowflake's and BigQuery's (names this pattern does not list); exec may not reference the
@@ -103,8 +105,10 @@ class DialectBoundaryTest {
             "EngineText.java", 5);          // legend-engine's text printers, root layer only (invariant 4d)
 
     /** Lines spelling a JDBC URL, by file: only the execution side's session owner opens a database (C3b). */
+    // Sessions.java 9 -> 10 (2026-10-11, docs/CLOUD_BACKENDS_PCT_2026_10_11.md §13): a MariaDB connection's
+    // declared static datasource is jdbc:mariadb://
     private static final Map<String, Integer> JDBC_URLS = Map.of(
-            "Sessions.java", 9);            // the declared specifications' URLs and the in-memory instances
+            "Sessions.java", 10);           // the declared specifications' URLs and the in-memory instances
 
     @Test
     void eachDatabaseDecisionHasOneOwner() throws IOException {

@@ -52,7 +52,7 @@ public final class Executor {
             // the executor boundary — platform vocabulary above
             // cause = the UNWRAPPED exception (Positioned when the raise
             // was ours) — assertError's position adjudication reads it
-            java.sql.SQLException un = RaisedErrors.unwrapped(e);
+            java.sql.SQLException un = RaisedErrors.unwrapped(e, connection);
             throw new DataError(String.valueOf(un.getMessage()), un);
         }
     }
@@ -88,7 +88,7 @@ public final class Executor {
                 return;
             }
         } catch (SQLException e) {
-            java.sql.SQLException un = RaisedErrors.unwrapped(e);
+            java.sql.SQLException un = RaisedErrors.unwrapped(e, connection);
             throw new DataError(String.valueOf(un.getMessage()), un);
         }
         executeRaw(connection, dialect.render(load.values()));
@@ -108,7 +108,7 @@ public final class Executor {
             }
             st.execute(script);
         } catch (SQLException e) {
-            java.sql.SQLException un = RaisedErrors.unwrapped(e);
+            java.sql.SQLException un = RaisedErrors.unwrapped(e, connection);
             throw new DataError(String.valueOf(un.getMessage()), un);
         }
     }
@@ -171,7 +171,7 @@ public final class Executor {
             // SQLException rides as cause)
             // cause = the UNWRAPPED exception (Positioned when the raise
             // was ours) — assertError's position adjudication reads it
-            java.sql.SQLException un = RaisedErrors.unwrapped(e);
+            java.sql.SQLException un = RaisedErrors.unwrapped(e, connection);
             throw new DataError(String.valueOf(un.getMessage()), un);
         }
     }
@@ -229,7 +229,7 @@ public final class Executor {
         } catch (SQLException e) {
             // cause = the UNWRAPPED exception (Positioned when the raise
             // was ours) — assertError's position adjudication reads it
-            java.sql.SQLException un = RaisedErrors.unwrapped(e);
+            java.sql.SQLException un = RaisedErrors.unwrapped(e, connection);
             throw new DataError(String.valueOf(un.getMessage()), un);
         }
     }
@@ -261,7 +261,7 @@ public final class Executor {
         } catch (SQLException e) {
             // cause = the UNWRAPPED exception (Positioned when the raise
             // was ours) — assertError's position adjudication reads it
-            java.sql.SQLException un = RaisedErrors.unwrapped(e);
+            java.sql.SQLException un = RaisedErrors.unwrapped(e, connection);
             throw new DataError(String.valueOf(un.getMessage()), un);
         }
     }
@@ -295,7 +295,7 @@ public final class Executor {
         } catch (SQLException e) {
             // cause = the UNWRAPPED exception (Positioned when the raise
             // was ours) — assertError's position adjudication reads it
-            java.sql.SQLException un = RaisedErrors.unwrapped(e);
+            java.sql.SQLException un = RaisedErrors.unwrapped(e, connection);
             throw new DataError(String.valueOf(un.getMessage()), un);
         }
     }

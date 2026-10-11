@@ -5,6 +5,7 @@
 
 load("//tools/junit:defs.bzl", "junit_test")
 load("//tools/java:defs.bzl", "legend_java_library")
+load("//tools/mariadb:defs.bzl", "EMBEDDED_MARIADB_COMPATIBLE")
 load("//tools/postgres:defs.bzl", "EMBEDDED_POSTGRES_COMPATIBLE")
 load("@bazel_lib//lib:write_source_files.bzl", "write_source_files")
 load("//tools/generators:defs.bzl", "UPSTREAM_ROOTS", "UPSTREAM_TREES", "program_jvm_flags")
@@ -235,6 +236,36 @@ test_suite(
     name = "pct_sqlite",
     tags = ["manual"],
     tests = [":pct_sqlite_" + s.lower() for s in _SUITES],
+)
+
+# THE MARIADB LANES — the five suites on MariaDB 11.4 (LEGENDLITE_PCT_BACKEND=mariadb), on a real server this JVM
+# starts from the pinned server Bazel unpacked (@embedded_mariadb, //testing EmbeddedMariaDb): no Docker. Each suite
+# carries MariaDB's OWN expected failures (Test_LegendLite_MariaDB_*Functions_PCT). Manual, in //gates:heavy
+# (docs/CLOUD_BACKENDS_PCT_2026_10_11.md §13): a per-push lane is the user's call. Its driver, MariaDB Connector/J, is
+# this package's own (test-only).
+[junit_test(
+    name = "pct_mariadb_" + s.lower(),
+    memory_mb = 4096,
+    data = [
+        "@embedded_mariadb//:mariadb",
+        "@embedded_mariadb//:mariadb/MARIADB_ROOT",
+    ],
+    env = {"LEGENDLITE_PCT_BACKEND": "mariadb"},
+    jvm_flags = ["-Dembedded.mariadb.root=$(rlocationpath @embedded_mariadb//:mariadb/MARIADB_ROOT)"],
+    select = ["--select-class=org.finos.legend.lite.pct.Test_LegendLite_MariaDB_%sFunctions_PCT" % s],
+    tags = ["manual"],
+    target_compatible_with = EMBEDDED_MARIADB_COMPATIBLE,
+    runtime_deps = [
+        ":pct_tests_lib",
+        "//core:drivers",
+        "@mariadb_jdbc//jar",
+    ],
+) for s in _SUITES]
+
+test_suite(
+    name = "pct_mariadb",
+    tags = ["manual"],
+    tests = [":pct_mariadb_" + s.lower() for s in _SUITES],
 )
 
 # THE CLOUD LANES — the five suites on a real Databricks, Snowflake and BigQuery account

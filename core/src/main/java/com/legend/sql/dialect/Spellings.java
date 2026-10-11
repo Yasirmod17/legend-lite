@@ -173,6 +173,24 @@ public record Spellings(Map<SqlFn, String> fnNames) {
         return m;
     }
 
+    /** MariaDB EXECUTION spellings (11.4, 2026-10-11): ONLY a name that exists there with DuckDB's arguments and
+     *  meaning, each measured. */
+    public static final Spellings MARIADB = new Spellings(mariadb());
+
+    private static Map<SqlFn, String> mariadb() {
+        Map<SqlFn, String> m = new EnumMap<>(SqlFn.class);
+        for (SqlFn f : new SqlFn[] {SqlFn.ABS, SqlFn.ATAN, SqlFn.ATAN2, SqlFn.COS, SqlFn.COT, SqlFn.SIN, SqlFn.TAN,
+                SqlFn.DEGREES, SqlFn.RADIANS, SqlFn.EXP, SqlFn.LN, SqlFn.LOG10, SqlFn.SQRT, SqlFn.LOWER, SqlFn.UPPER,
+                SqlFn.REPLACE, SqlFn.REVERSE_STRING, SqlFn.FLOOR_RAW}) {
+            m.put(f, DUCKDB.fnNames().get(f));
+        }
+        m.put(SqlFn.POW, "POW");
+        m.put(SqlFn.STRPOS, "INSTR");
+        m.put(SqlFn.LIST_LENGTH, "JSON_LENGTH");
+        m.put(SqlFn.JSON_ARRAY_LENGTH, "JSON_LENGTH");
+        return m;
+    }
+
     private static Map<SqlFn, String> build() {
         Map<SqlFn, String> m = new EnumMap<>(SqlFn.class);
         m.put(SqlFn.ABS, "abs");

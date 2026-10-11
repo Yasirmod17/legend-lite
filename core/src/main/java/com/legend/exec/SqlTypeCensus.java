@@ -284,7 +284,8 @@ public final class SqlTypeCensus {
                 if (label.equals(meta)) {
                     WIRE_AGREE.increment();
                 } else if (delivers(outs.get(i).type(), meta) || snowflakeOwn(dialect, outs.get(i).type(), meta)
-                        || bigQueryOwn(dialect, outs.get(i).type(), meta) || sqliteOwn(dialect, outs.get(i).type(), meta)) {
+                        || bigQueryOwn(dialect, outs.get(i).type(), meta) || sqliteOwn(dialect, outs.get(i).type(), meta)
+                        || mariaDbOwn(dialect, outs.get(i).type(), meta)) {
                     // THE DELIVERY RELATION (adjudicated 2026-08-23):
                     // value-subset narrowing (every INTEGER fits the
                     // BIGINT contract; DECIMAL(p,s) fits DECIMAL(P>=p,s))
@@ -568,11 +569,40 @@ public final class SqlTypeCensus {
         };
     }
 
+    /** MariaDB's own types, which are the platform's by design (2026-10-11): a comparison and a boolean are integers;
+     *  a list, a struct, a map and a Variant are JSON text (a JSON function's type is JSON, a column's text); an
+     *  integer sum or a big integer is a DECIMAL of scale 0 (SUM of BIGINT, measured), or an unsigned BIGINT (a bit
+     *  operation's); a NULL literal's column claims no type. */
+    private static boolean mariaDbOwn(String dialect, SqlType label, String meta) {
+        if (!"MariaDb".equals(dialect)) {
+            return false;
+        }
+        boolean integral = label == SqlType.Scalar.BIGINT || label == SqlType.Scalar.INTEGER
+                || label == SqlType.Scalar.HUGEINT;
+        boolean composite = label instanceof SqlType.Array || label instanceof SqlType.Struct
+                || label instanceof SqlType.Map || label == SqlType.Scalar.JSON;
+        return meta.equals("NULL")
+                || label == SqlType.Scalar.BOOLEAN && (meta.equals("INTEGER") || meta.equals("BIGINT")
+                        || meta.equals("TINYINT"))
+                || integral && (meta.startsWith("DECIMAL(") && meta.endsWith(",0)") || meta.equals("BIGINT UNSIGNED"))
+                || label instanceof SqlType.Decimal d && meta.startsWith("DECIMAL(")
+                        && meta.endsWith("," + d.scale() + ")")
+                || composite && (meta.equals("JSON") || meta.equals("VARCHAR"));
+    }
+
     /** A driver's own type names for the census's: BigQuery's (2026-10-11) INT64, FLOAT64 and DATETIME (the naive
      *  date-time; its TIMESTAMP, an instant, folds with every TIMESTAMP spelling in normalizeMeta); SQLite's FLOAT (a
      *  REAL value) and NUMERIC (its name for a NULL value, measured: no storage class). */
     private static @com.legend.base.Nullable String dialectSpelling(String dialect,
             @com.legend.base.Nullable String name) {
+        // MariaDB's (2026-10-11): its text types and a UUID are text, its DATETIME the naive date-time
+        if ("MariaDb".equals(dialect) && name != null) {
+            return switch (name) {
+                case "LONGTEXT", "MEDIUMTEXT", "TEXT", "TINYTEXT", "CHAR", "UUID" -> "VARCHAR";
+                case "DATETIME" -> "TIMESTAMP";
+                default -> name;
+            };
+        }
         if ("SQLite".equals(dialect) && name != null) {
             return switch (name) {
                 case "FLOAT" -> "DOUBLE";

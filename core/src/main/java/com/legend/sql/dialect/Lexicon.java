@@ -67,6 +67,30 @@ public record Lexicon(char quoteChar, Set<String> reservedWords) {
             "update", "using", "vacuum", "values", "view", "virtual", "when",
             "where", "with", "without"));
 
+    /** MariaDB (2026-10-11, docs/CLOUD_BACKENDS_PCT_2026_10_11.md §13): double quotes under the session's
+     *  ANSI_QUOTES; MariaDB's reserved words. The {@code MariaDb} dialect quotes EVERY identifier, so the list decides
+     *  no spelling there. */
+    public static final Lexicon MARIADB = new Lexicon('"', Set.of(
+            "accessible", "add", "all", "alter", "analyze", "and", "as", "asc", "asensitive", "before", "between",
+            "bigint", "binary", "blob", "both", "by", "call", "cascade", "case", "change", "char", "character", "check",
+            "collate", "column", "condition", "constraint", "continue", "convert", "create", "cross", "current_date",
+            "current_role", "current_time", "current_timestamp", "current_user", "cursor", "database", "databases",
+            "day_hour", "day_microsecond", "day_minute", "day_second", "dec", "decimal", "declare", "default",
+            "delayed", "delete", "desc", "describe", "deterministic", "distinct", "distinctrow", "div", "double",
+            "drop", "dual", "each", "else", "elseif", "enclosed", "escaped", "except", "exists", "exit", "explain",
+            "false", "fetch", "float", "for", "force", "foreign", "from", "fulltext", "general", "grant", "group",
+            "having", "high_priority", "if", "ignore", "in", "index", "infile", "inner", "inout", "insensitive",
+            "insert", "int", "integer", "intersect", "interval", "into", "is", "iterate", "join", "key", "keys",
+            "kill", "leading", "leave", "left", "like", "limit", "lines", "load", "localtime", "localtimestamp",
+            "lock", "long", "loop", "match", "minus", "mod", "modifies", "natural", "not", "null", "numeric", "offset",
+            "on", "optimize", "option", "or", "order", "out", "outer", "over", "partition", "precision", "primary",
+            "procedure", "range", "read", "reads", "real", "recursive", "references", "regexp", "release", "rename",
+            "repeat", "replace", "require", "restrict", "return", "returning", "revoke", "right", "rlike", "row_number",
+            "rows", "schema", "schemas", "select", "sensitive", "separator", "set", "show", "signal", "smallint",
+            "spatial", "specific", "sql", "starting", "straight_join", "table", "terminated", "then", "to",
+            "trailing", "trigger", "true", "undo", "union", "unique", "unlock", "unsigned", "update", "usage", "use",
+            "using", "values", "varchar", "when", "where", "while", "window", "with", "write", "xor", "zerofill"));
+
     /** Engine-text lowering (H2/DB2 golden style): minimal quoting. */
 
     /** H2 2.1.214 reserved words — the ENGINE's own list

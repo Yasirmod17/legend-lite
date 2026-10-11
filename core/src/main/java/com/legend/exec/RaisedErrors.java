@@ -93,6 +93,18 @@ public final class RaisedErrors {
         }
     }
 
+    /** {@link #unwrapped(java.sql.SQLException)}, or, for a failure whose text carries no raise, the raise the session
+     *  it failed on holds ({@link Sessions#raisedMessage}: a database whose errors cannot carry a raise's text keeps it
+     *  in the session), unwrapped. */
+    public static java.sql.SQLException unwrapped(java.sql.SQLException e, java.sql.Connection session) {
+        java.sql.SQLException un = unwrapped(e);
+        if (un != e) {
+            return un;
+        }
+        String held = Sessions.raisedMessage(session);
+        return held == null ? e : unwrapped(new java.sql.SQLException(held, e.getSQLState(), e));
+    }
+
     /** Funnel rethrow: a raised-message SQLException re-surfaces with
      * the clean text (state and cause preserved) — as {@link Positioned}
      * when the emission carried its source span; everything else

@@ -75,6 +75,9 @@ public final class CarrierStrategies extends SqlRewriter {
         /** SQLite (2026-10-11): the portable strategies over its JSON lists (json_each correlates, measured); FULL
          *  OUTER is native (3.39). */
         public static final Caps SQLITE = new Caps(false, true, true, true);
+        /** MariaDB (2026-10-11): the portable strategies over its JSON lists (a JSON_TABLE argument correlates,
+         *  measured); no FULL OUTER JOIN (measured: a syntax error), so it is emulated, as on H2. */
+        public static final Caps MARIADB = new Caps(false, true, true, false);
     }
 
     private final Caps caps;
