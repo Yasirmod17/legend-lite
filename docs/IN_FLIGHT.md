@@ -692,6 +692,40 @@ measurements; it is W3.1's territory (`docs/EXECUTION_PLAN_2026_09_26.md`). That
 - **The notebook widget**, `DataCube(df)`: the same two calls over the notebook's widget channel.
 - Later: model handles and `execute` from Python, typed Pythonic queries, the shared warehouse from Python.
 
+## A seventh line, 2026-10-11: Postgres SQL in Pure, the `#SQL{...}#` island (the user's ask, rule 5)
+
+Session "AlloySQL porting and exploration", branch `claude/loving-euler-gjta59`; the study and plan are
+`docs/LEGEND_SQL_STUDY_2026_10_11.md` (on the branch, landing with it). Phase 1's translator: a Postgres `SELECT`
+inside any Pure query becomes an ordinary Relation expression, typed once by the Typer.
+
+**Announced 2026-10-11, before landing: a cross-area edit in `core/`.** It lands as one merge of the branch, after one
+full CI run on it.
+- **New files.**
+  - `protocol/sql/`: `SqlAst`, `SqlLexer`, `SqlParser`, `SqlSyntaxException`, `SqlToPure`, `SqlTranslationException`.
+  - `protocol/spec/SqlIsland.java`, `compiler/spec/SqlIslands.java` (the seam), `error/IslandSyntaxException.java`.
+- **Edits.**
+  - `compiler/NameResolver.java` and `compiler/spec/Typer.java`: the island's arm.
+  - `lowering/Lowerer.java`: four lowering fixes the island's cases found, each with a test that fails without it:
+    - a union's sorted or limited branch becomes a subselect;
+    - `exists` over a sliced relation is isolated first (it was a silent wrong answer);
+    - a join condition reads an enclosing row through the enclosing scopes;
+    - a relation `map` used as a value pushes the enclosing row.
+- **Tests.**
+  - `CodeShapeGuardrailTest`: five scanner and counter fields allowlisted, dated.
+  - `integration/` `ConcatenateFlattenCheckerTest`, `CorrelatedRelationCheckerTest`, `SqlIslandIntegrationTest`,
+    `SqlParityTest`.
+  - `server/` `SqlIslandPostgresTest`, `SqlParityPostgresTest`; `testcases/` `SqlIslandCases`, `SqlParity`.
+  - `protocol/sql/` `SqlParserTest`, `SqlToPureTest`.
+  - `src/test/resources/sql-parity/`: the ledger, the answers snapped from Postgres 16, and the `lite/` cases.
+- **Build.**
+  - `core/BUILD.bazel`: `sql_island_postgres_test`, `sql_parity_test`, `sql_parity_postgres_test`.
+  - `gates/BUILD.bazel`: the core suite gains the three.
+  - `third_party/legend_engine_src.BUILD`: the `sql_parity_tests` filegroup, upstream's parity corpus as test input.
+- **Docs.** `docs/SEMANTICS_REGISTER.md` (S43 to S47), `docs/GATES.md`.
+
+Not touched: the database owner's `lowering/` files (`Render`, `WireRender`, `LiteralSpelling`, `Fold`, `Scalars`,
+`MixedEncoding`), `sql/dialect/`, the parser.
+
 ## Rules between sessions
 
 1. Never force-push; never bare `git stash` (the stash stack is shared by every worktree).
