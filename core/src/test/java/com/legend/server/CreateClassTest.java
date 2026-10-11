@@ -151,8 +151,7 @@ class CreateClassTest {
                 (
                   *trades::domain::Trade: Relation
                   {
-                    ~func trades::function::TradeFn():meta::pure::metamodel::relation::Relation<(trade_id:Integer,\
-                customer_id:Integer,region:String,'Trade Note':String,notional:Decimal,big:Boolean)>[1]
+                    ~func trades::function::TradeFn():Relation<Any>[1]
                     tradeId: trade_id,
                     +customerId: Integer[0..1]: customer_id,
                     region: region,

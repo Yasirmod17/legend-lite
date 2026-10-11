@@ -152,7 +152,9 @@ final class CreateClass {
         String relationType = relationType(columns);
         m.put(element("###Pure\nfunction " + function + "(): " + relationType + "[1]\n{\n" + bodyText(body) + "\n}\n"));
         m.put(element("###Pure\n" + classText(className, spec.getStringOr("documentation", null), columns)));
-        m.put(element("###Mapping\n" + mappingText(classMapping, className, function + "():" + relationType + "[1]",
+        // the mapping names its function by descriptor, which takes no package in a type (legend-engine resolves
+        // `TradeFn():Relation<Any>[1]` to TradeFn__Relation_1_, and a `meta::pure::...::Relation<...>` not at all)
+        m.put(element("###Mapping\n" + mappingText(classMapping, className, function + "():Relation<Any>[1]",
                 columns)));
         Json.Obj mm = modelMappingOf(m.get(modelMapping), modelMapping, classMapping);
         if (mm != null) {

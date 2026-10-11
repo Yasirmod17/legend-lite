@@ -604,6 +604,18 @@ Agreed after Create a Class landed (0cee56761): **the routes are named after Leg
   site (a site-level check is the Studio line's, `site/verify.mjs`, offered). **Not in this landing**: associations and
   data spaces (§15.1's next two), a grid over a class (step 3's dashboards read classes), Python (§15.5); a page reopened
   in a tab where another grid holds a kept table's name reads it under a fresh one, and says so.
+- **As built in step 2's second landing (Create an Association…, Create a Data Space…, the one-go routes,
+  2026-10-11)**: the routes' tests (core): an association in Pure's own shape, its ModelJoin in the model mapping,
+  walked both ways through a key-only column; the suggestions; the whole page in one request, all or nothing. **The
+  engine's own check**: `ModelWriterUpstreamTest` pins the files one request writes (two classes with their sample
+  rows, their association, the data space) with legend-engine 4.145.0's answers to them, recorded by
+  `docs/datacube-model-homework-2026-10-11/record-upstream.sh`: the project compiled, and each class's query and both
+  walks planned. It caught one difference: a `~func` names its function by descriptor, and a descriptor's types take
+  no package (legend-pure's `FunctionDescriptor`). The engine looks `TradeFn():meta::pure::...::Relation<...>[1]` up as
+  a plain path and finds nothing; lite's compiler took it (told to the Compiler Rewrite line). The writer now writes
+  `TradeFn():Relation<Any>[1]`, the form of upstream's own tests and Studio's. The browser: two grids made classes,
+  the association from the page's Model menu, its how-many read from the rows in the tab, the data space; and the
+  whole page in one go in a fresh tab.
 
 ### 15.8 Not in step 2
 
