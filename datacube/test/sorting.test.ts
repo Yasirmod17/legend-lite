@@ -79,11 +79,11 @@ describe('sorting by a pivoted column', () => {
     ]);
   });
 
-  it('emits the sort AFTER the pivot\'s groupBy, where the column exists', () => {
-    const out = printLevel({
+  it('emits the sort AFTER the pivot\'s groupBy, where the column exists', async () => {
+    const out = (await printLevel({
       ...CUBE,
       sorts: [{ column: '2023__|__total', direction: 'desc' }],
-    }, undefined, { tuples: [['2023'], ['2024']] });
+    }, undefined, { tuples: [['2023'], ['2024']] }));
     assert.ok(out.indexOf('groupBy(') < out.indexOf('sort('));
     assert.match(out, /sort\(\[~'2023__\|__total'->descending\(\)/);
   });
@@ -109,25 +109,25 @@ describe('sorting by a pivoted column', () => {
     assert.deepEqual(r.columns[0]?.values, ['AMER', 'APAC', 'EMEA']);
   });
 
-  it('still appends the row dimension, so ties are deterministic', () => {
+  it('still appends the row dimension, so ties are deterministic', async () => {
     // Without it, two groups tying on the pivot cell can come back in
     // either order and a windowed read can repeat or skip one.
-    const out = printLevel({
+    const out = (await printLevel({
       ...CUBE,
       sorts: [{ column: '2024__|__total', direction: 'desc' }],
-    }, undefined, { tuples: [['2023'], ['2024']] });
+    }, undefined, { tuples: [['2023'], ['2024']] }));
     assert.match(out, /~region->ascending\(\)\]\)/);
   });
 });
 
 describe('sorting by a derived measure', () => {
-  it('sorts on a post-aggregation column', () => {
-    const out = printLevel({
+  it('sorts on a post-aggregation column', async () => {
+    const out = (await printLevel({
       ...CUBE,
       pivotOn: [],
-      groupDerived: [{ name: 'share', lambda: row('$x.total / 100') }],
+      groupDerived: [{ name: 'share', lambda: (await row('$x.total / 100')) }],
       sorts: [{ column: 'share', direction: 'desc' }],
-    });
+    }));
     // The column must exist before it is ordered by.
     assert.ok(out.indexOf('extend(~[share') < out.indexOf('sort('));
     assert.match(out, /sort\(\[~share->descending\(\)/);

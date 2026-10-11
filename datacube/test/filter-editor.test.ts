@@ -101,17 +101,17 @@ describe('toFilter', () => {
     });
   });
 
-  it('joins several conditions with the group operator', () => {
+  it('joins several conditions with the group operator', async () => {
     let tree = newGroup([newCondition('region'), newCondition('desk')]);
     tree = updateNode(tree, tree.children[0]!.id, { text: 'EMEA' });
     tree = updateNode(tree, tree.children[1]!.id, { text: 'Rates' });
     tree = updateNode(tree, tree.id, { join: 'or' });
     const f = toFilter(tree);
     assert.equal(f?.kind, 'or');
-    assert.equal(printFilter(f!, typed), "x|($x.region == 'EMEA') || ($x.desk == 'Rates')");
+    assert.equal((await printFilter(f!, typed)), "x|($x.region == 'EMEA') || ($x.desk == 'Rates')");
   });
 
-  it('expresses A AND NOT (B OR C), which a flat list cannot', () => {
+  it('expresses A AND NOT (B OR C), which a flat list cannot', async () => {
     // The reason the editor is a tree: `not` lives on every node,
     // groups included, exactly as DataCube models it.
     let inner = newGroup([newCondition('desk'), newCondition('desk')]);
@@ -124,16 +124,16 @@ describe('toFilter', () => {
     root = addTo(root, root.id, inner);
 
     assert.equal(
-      printFilter(toFilter(root)!, typed),
+      (await printFilter(toFilter(root)!, typed)),
       "x|($x.region == 'EMEA') && !(($x.desk == 'Rates') || ($x.desk == 'Credit'))",
     );
   });
 
-  it('negates a single condition', () => {
+  it('negates a single condition', async () => {
     let tree = newGroup([newCondition('region')]);
     tree = updateNode(tree, tree.children[0]!.id, { text: 'EMEA', not: true });
     // the compiler prints `not(equal(...))` as upstream's printer does: `!=`
-    assert.equal(printFilter(toFilter(tree)!, typed), "x|$x.region != 'EMEA'");
+    assert.equal((await printFilter(toFilter(tree)!, typed)), "x|$x.region != 'EMEA'");
   });
 
   it('drops a group whose children are all incomplete', () => {
@@ -141,18 +141,18 @@ describe('toFilter', () => {
     assert.equal(toFilter(tree), undefined);
   });
 
-  it('needs no value for a nullary operator', () => {
+  it('needs no value for a nullary operator', async () => {
     let tree = newGroup([newCondition('region')]);
     tree = updateNode(tree, tree.children[0]!.id, { operator: 'isEmpty' });
-    assert.equal(printFilter(toFilter(tree)!, typed), 'x|$x.region->isEmpty()');
+    assert.equal((await printFilter(toFilter(tree)!, typed)), 'x|$x.region->isEmpty()');
   });
 
-  it('needs a second column for a column operator', () => {
+  it('needs a second column for a column operator', async () => {
     let tree = newGroup([newCondition('region')]);
     tree = updateNode(tree, tree.children[0]!.id, { operator: 'equalColumn' });
     assert.equal(toFilter(tree), undefined, 'incomplete until a column is picked');
     tree = updateNode(tree, tree.children[0]!.id, { rightColumn: 'desk' });
-    assert.equal(printFilter(toFilter(tree)!, typed), 'x|$x.region == $x.desk');
+    assert.equal((await printFilter(toFilter(tree)!, typed)), 'x|$x.region == $x.desk');
   });
 });
 
@@ -675,10 +675,10 @@ describe('TODAY and NOW', () => {
     assert.equal(parseTyped('today()', 'String'), 'today()');
   });
 
-  it('render as the Pure functions, so the date moves with the day', () => {
+  it('render as the Pure functions, so the date moves with the day', async () => {
     assert.equal(
-      printFilter({ kind: 'condition', column: 'trade_date',
-        operator: 'lessThan', value: { relative: 'today' } }, typed),
+      (await printFilter({ kind: 'condition', column: 'trade_date',
+        operator: 'lessThan', value: { relative: 'today' } }, typed)),
       'x|$x.trade_date < today()',
     );
   });

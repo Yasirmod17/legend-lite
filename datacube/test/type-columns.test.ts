@@ -19,7 +19,7 @@ const CUBE: CubeSnapshot = {
     { name: 'amount', type: 'Float' },
     { name: 'gone', type: 'Integer' },
   ],
-  derived: [{ name: 'twice', lambda: row('$x.amount * 2') }],
+  derived: [{ name: 'twice', lambda: (await row('$x.amount * 2')) }],
   rows: [],
   pivotOn: [],
   measures: [],

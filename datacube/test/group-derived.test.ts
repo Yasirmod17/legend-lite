@@ -102,46 +102,46 @@ describe('the two extend stages are not interchangeable', () => {
 });
 
 describe('serialize places each stage correctly', () => {
-  it('puts a leaf-derived column BEFORE the aggregation', () => {
-    const out = printLevel({
+  it('puts a leaf-derived column BEFORE the aggregation', async () => {
+    const out = (await printLevel({
       ...BASE,
-      derived: [{ name: 'net', lambda: row('$x.revenue - $x.profit') }],
-    });
+      derived: [{ name: 'net', lambda: (await row('$x.revenue - $x.profit')) }],
+    }));
     const extendAt = out.indexOf('extend(~[net');
     const groupAt = out.indexOf('groupBy(');
     assert.ok(extendAt >= 0 && groupAt >= 0);
     assert.ok(extendAt < groupAt, 'leaf extend precedes the grouping');
   });
 
-  it('puts a group-derived column AFTER the aggregation', () => {
-    const out = printLevel({
+  it('puts a group-derived column AFTER the aggregation', async () => {
+    const out = (await printLevel({
       ...BASE,
       groupDerived: [
-        { name: 'margin', lambda: row('$x.profit / $x.revenue') },
+        { name: 'margin', lambda: (await row('$x.profit / $x.revenue')) },
       ],
-    });
+    }));
     const groupAt = out.indexOf('groupBy(');
     const extendAt = out.indexOf('extend(~[margin');
     assert.ok(groupAt >= 0 && extendAt >= 0);
     assert.ok(groupAt < extendAt, 'group extend follows the grouping');
   });
 
-  it('places it after a PIVOT too (the pivot is a groupBy now)', () => {
-    const out = printLevel({
+  it('places it after a PIVOT too (the pivot is a groupBy now)', async () => {
+    const out = (await printLevel({
       ...BASE,
       pivotOn: ['region'],
-      groupDerived: [{ name: 'margin', lambda: row('$x.profit') }],
-    }, undefined, { tuples: [['EMEA']] });
+      groupDerived: [{ name: 'margin', lambda: (await row('$x.profit')) }],
+    }, undefined, { tuples: [['EMEA']] }));
     assert.ok(out.indexOf("if($x.region == 'EMEA'") >= 0, out);
     assert.ok(out.indexOf('groupBy(') < out.indexOf('extend(~[margin'));
   });
 
-  it('emits both stages in one pipeline, in order', () => {
-    const out = printLevel({
+  it('emits both stages in one pipeline, in order', async () => {
+    const out = (await printLevel({
       ...BASE,
-      derived: [{ name: 'net', lambda: row('$x.revenue - $x.profit') }],
-      groupDerived: [{ name: 'margin', lambda: row('$x.profit / $x.revenue') }],
-    });
+      derived: [{ name: 'net', lambda: (await row('$x.revenue - $x.profit')) }],
+      groupDerived: [{ name: 'margin', lambda: (await row('$x.profit / $x.revenue')) }],
+    }));
     assert.ok(
       out.indexOf('extend(~[net') <
         out.indexOf('groupBy(') &&
@@ -149,17 +149,17 @@ describe('serialize places each stage correctly', () => {
     );
   });
 
-  it('and the group stage lands before the sort and the cap', () => {
+  it('and the group stage lands before the sort and the cap', async () => {
     // Otherwise a cube could not sort by a derived measure, which is
     // the commonest thing to want to do with one.
-    const out = printLevel(
+    const out = (await printLevel(
       {
         ...BASE,
-        groupDerived: [{ name: 'margin', lambda: row('$x.profit') }],
+        groupDerived: [{ name: 'margin', lambda: (await row('$x.profit')) }],
         sorts: [{ column: 'margin', direction: 'desc' }],
       },
       { level: 1, parent: [], limit: 11 },
-    );
+    ));
     assert.ok(out.indexOf('extend(~[margin') < out.indexOf('sort('));
     assert.ok(out.indexOf('sort(') < out.indexOf('limit('));
   });

@@ -479,13 +479,13 @@ describe('Show leaf count', () => {
     leafCount: true,
   };
 
-  it('a grouped level counts its rows; the grand total does not', () => {
-    const q1 = printLevel(FLAT, { level: 1, parent: [] });
+  it('a grouped level counts its rows; the grand total does not', async () => {
+    const q1 = (await printLevel(FLAT, { level: 1, parent: [] }));
     assert.match(q1, /__leafCount:x\|1:y\|\$y->count\(\)/);
-    const q0 = printLevel(FLAT, { level: 0, parent: [] });
+    const q0 = (await printLevel(FLAT, { level: 0, parent: [] }));
     assert.doesNotMatch(q0, /__leafCount/);
-    assert.doesNotMatch(printLevel({ ...FLAT, leafCount: false },
-      { level: 1, parent: [] }), /__leafCount/);
+    assert.doesNotMatch((await printLevel({ ...FLAT, leafCount: false },
+      { level: 1, parent: [] })), /__leafCount/);
   });
 
   it('shows the count on the label, never as a column', () => {
@@ -558,8 +558,8 @@ describe('the count, next level (the default)', () => {
     assert.equal(tree(levelsWith(true))?.[1], 'EMEA (3+)');
   });
 
-  it('asks nothing of the query', () => {
-    assert.doesNotMatch(printLevel(CUBE, { level: 1, parent: [] }), /__leafCount/);
+  it('asks nothing of the query', async () => {
+    assert.doesNotMatch((await printLevel(CUBE, { level: 1, parent: [] })), /__leafCount/);
   });
 });
 
