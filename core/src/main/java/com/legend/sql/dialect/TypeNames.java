@@ -42,6 +42,24 @@ public record TypeNames(Map<SqlType.Scalar, String> scalarNames,
      * collection and variant carrier (POSTGRES_BACKEND.md §5); no STRUCT. */
     public static final TypeNames POSTGRES = new TypeNames(postgres(), false);
 
+    /** Databricks SQL (2026-10-11, docs/CLOUD_BACKENDS_PCT_2026_10_11.md): INT and STRING (a bare VARCHAR needs a
+     * length there); HUGEINT as DECIMAL(38,0); a zoned timestamp is the session-zone TIMESTAMP (the session is UTC);
+     * JSON as VARIANT, the variant carrier; STRUCT natively ({@code STRUCT<a: T>}, the dialect's spelling). */
+    public static final TypeNames DATABRICKS = new TypeNames(databricks(), true);
+
+    private static Map<SqlType.Scalar, String> databricks() {
+        Map<SqlType.Scalar, String> m = base();
+        m.put(SqlType.Scalar.INTEGER, "INT");
+        m.put(SqlType.Scalar.HUGEINT, "DECIMAL(38,0)");
+        m.put(SqlType.Scalar.TIMESTAMPTZ, "TIMESTAMP");
+        m.put(SqlType.Scalar.DOUBLE, "DOUBLE");
+        m.put(SqlType.Scalar.VARCHAR, "STRING");
+        m.put(SqlType.Scalar.LITERAL, "STRING");
+        m.put(SqlType.Scalar.TEMPORAL_TEXT, "STRING");
+        m.put(SqlType.Scalar.JSON, "VARIANT");
+        return m;
+    }
+
     private static Map<SqlType.Scalar, String> postgres() {
         Map<SqlType.Scalar, String> m = base();
         m.put(SqlType.Scalar.HUGEINT, "NUMERIC(38)");

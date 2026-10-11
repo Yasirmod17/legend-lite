@@ -64,6 +64,8 @@ public final class CarrierStrategies extends SqlRewriter {
          * WITHOUT H2's FULL OUTER emulation: Postgres joins FULL OUTER
          * natively. */
         public static final Caps POSTGRES = new Caps(false, true, true, true);
+        /** Databricks (2026-10-11): typed native arrays with lambdas, as DuckDB's (docs/CLOUD_BACKENDS_PCT_2026_10_11.md). */
+        public static final Caps DATABRICKS = new Caps(true, true, true, true);
     }
 
     private final Caps caps;

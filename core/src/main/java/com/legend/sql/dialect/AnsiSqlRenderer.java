@@ -1182,19 +1182,34 @@ public class AnsiSqlRenderer implements SqlDialect {
             }
             case com.legend.sql.SqlType.Decimal d ->
                     "DECIMAL(" + d.precision() + ", " + d.scale() + ")";
-            case com.legend.sql.SqlType.Array a -> castTypeName(a.element()) + "[]";
-            case com.legend.sql.SqlType.Map m ->
-                    "MAP(" + castTypeName(m.key()) + ", " + castTypeName(m.value()) + ")";
+            case com.legend.sql.SqlType.Array a -> arrayTypeName(castTypeName(a.element()));
+            case com.legend.sql.SqlType.Map m -> mapTypeName(castTypeName(m.key()), castTypeName(m.value()));
             case com.legend.sql.SqlType.Struct st -> {
                 if (!typeNames.structSupport()) {
                     throw new DialectCapability(
                             "a STRUCT type reached a dialect without struct support");
                 }
-                yield "STRUCT(" + st.fields().stream()
-                        .map(fl -> ident(fl.name()) + " " + castTypeName(fl.type()))
-                        .collect(Collectors.joining(", ")) + ")";
+                yield structTypeName(st.fields().stream()
+                        .map(fl -> java.util.Map.entry(ident(fl.name()), castTypeName(fl.type()))).toList());
             }
         };
+    }
+
+    /** A list type's spelling, its element spelled: {@code T[]} (DuckDB, Postgres); a dialect with the
+     *  {@code ARRAY<T>} form overrides (Databricks, 2026-10-11). */
+    protected String arrayTypeName(String element) {
+        return element + "[]";
+    }
+
+    /** A map type's spelling: {@code MAP(K, V)}; the {@code MAP<K, V>} form is an override. */
+    protected String mapTypeName(String key, String value) {
+        return "MAP(" + key + ", " + value + ")";
+    }
+
+    /** A struct type's spelling, each field its name (spelled) and type: {@code STRUCT(a T, ...)}. */
+    protected String structTypeName(List<java.util.Map.Entry<String, String>> fields) {
+        return "STRUCT(" + fields.stream().map(f -> f.getKey() + " " + f.getValue())
+                .collect(Collectors.joining(", ")) + ")";
     }
 
     /** The DATE-FORMAT spelling — this renderer family's voice is DuckDB

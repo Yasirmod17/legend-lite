@@ -69,6 +69,34 @@ public record Spellings(Map<SqlFn, String> fnNames) {
         return m;
     }
 
+    /** Databricks SQL EXECUTION spellings (2026-10-11, docs/CLOUD_BACKENDS_PCT_2026_10_11.md), each measured on the
+     * account: ONLY a name that exists there with DuckDB's arguments and meaning. Never inherited: {@code concat}
+     * (NULL-propagating there), {@code split} and {@code regexp_extract} (a regex, and group 1 by default), the
+     * DuckDB-only names, and the trims ({@code rtrim(s, c)} reads its arguments the other way round there).
+     * Everything absent here is a coded arm or a wall in the {@code Databricks} dialect. */
+    public static final Spellings DATABRICKS = new Spellings(databricks());
+
+    private static Map<SqlFn, String> databricks() {
+        Map<SqlFn, String> m = new EnumMap<>(SqlFn.class);
+        for (SqlFn f : new SqlFn[] {SqlFn.ABS, SqlFn.ACOS, SqlFn.ASCII_CODE, SqlFn.ASIN, SqlFn.ATAN, SqlFn.ATAN2,
+                SqlFn.CBRT, SqlFn.CHR, SqlFn.COALESCE, SqlFn.COS, SqlFn.COSH, SqlFn.COT, SqlFn.DEGREES, SqlFn.EXP,
+                SqlFn.GREATEST, SqlFn.LEAST, SqlFn.LEFT, SqlFn.LENGTH, SqlFn.LEVENSHTEIN, SqlFn.LIST_FLATTEN, SqlFn.LN,
+                SqlFn.LOG10, SqlFn.LOWER, SqlFn.MAKE_DATE, SqlFn.MAP_KEYS, SqlFn.MAP_VALUES, SqlFn.MD5,
+                SqlFn.POW, SqlFn.RADIANS, SqlFn.REPEAT_STR, SqlFn.REPLACE, SqlFn.REVERSE_STRING, SqlFn.RIGHT,
+                SqlFn.SHA1, SqlFn.SIN, SqlFn.SINH, SqlFn.SPLIT_PART, SqlFn.SQRT, SqlFn.SUBSTRING,
+                SqlFn.TAN, SqlFn.TANH, SqlFn.UPPER}) {
+            m.put(f, DUCKDB.fnNames().get(f));
+        }
+        m.put(SqlFn.ERROR, "raise_error");
+        m.put(SqlFn.STARTS_WITH, "startswith");
+        m.put(SqlFn.ENDS_WITH, "endswith");
+        m.put(SqlFn.STRPOS, "instr");
+        m.put(SqlFn.MAP_FROM_LISTS, "map_from_arrays");
+        m.put(SqlFn.MAP_FROM_ENTRIES, "map_from_entries");
+        m.put(SqlFn.LIST_REVERSE, "reverse");
+        return m;
+    }
+
     private static Map<SqlFn, String> build() {
         Map<SqlFn, String> m = new EnumMap<>(SqlFn.class);
         m.put(SqlFn.ABS, "abs");

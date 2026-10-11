@@ -101,6 +101,22 @@ public record Lexicon(char quoteChar, Set<String> reservedWords) {
 
     public static final Lexicon ENGINE_STYLE = new Lexicon('"', Set.of());
 
+    /** Databricks SQL (2026-10-11, docs/CLOUD_BACKENDS_PCT_2026_10_11.md): backticks. The {@code Databricks}
+     * dialect quotes EVERY identifier, so this list never decides a spelling there; it is Databricks' documented
+     * reserved set (ANSI mode's reserved words) for any reader that asks. */
+    public static final Lexicon DATABRICKS = new Lexicon('`', Set.of(
+            "all", "alter", "and", "any", "array", "as", "at", "authorization", "between", "both", "by", "case",
+            "cast", "check", "collate", "column", "commit", "constraint", "create", "cross", "cube", "current",
+            "current_date", "current_time", "current_timestamp", "current_user", "delete", "describe", "distinct",
+            "drop", "else", "end", "escape", "except", "exists", "external", "false", "fetch", "filter", "for",
+            "foreign", "from", "full", "function", "global", "grant", "group", "grouping", "having", "in", "inner",
+            "insert", "intersect", "interval", "into", "is", "join", "lateral", "leading", "left", "like", "local",
+            "natural", "no", "not", "null", "of", "on", "only", "or", "order", "out", "outer", "overlaps",
+            "partition", "position", "primary", "range", "references", "revoke", "right", "rollback", "rollup",
+            "row", "rows", "select", "session_user", "set", "some", "start", "table", "tablesample", "then", "time",
+            "to", "trailing", "true", "union", "unique", "unknown", "update", "user", "using", "values", "when",
+            "where", "window", "with"));
+
     /** PostgreSQL 16+ (2026-10-01 W5.5/P1 Postgres dialect). The {@code Postgres} dialect
      * QUOTES EVERY identifier (Postgres folds an unquoted name to lowercase, so a bare
      * {@code NAME} reads {@code name}), so this list never decides a spelling there; it

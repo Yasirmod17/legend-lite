@@ -673,6 +673,13 @@ public final class SqlTypeCensus {
                 return "VARCHAR";
             case "JSONB":
                 return "JSON";
+            // Databricks' driver reports Spark's type names (2026-10-11): the same types, other spellings
+            case "INT":
+                return "INTEGER";
+            case "STRING":
+                return "VARCHAR";
+            case "VARIANT":
+                return "JSON";
             default:
                 break;
         }

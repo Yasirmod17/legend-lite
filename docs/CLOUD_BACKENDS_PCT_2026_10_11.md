@@ -97,7 +97,20 @@ there -- the user's names and region are to be read, not assumed). The AWS key r
 variables `DB_AWS_ACCESS_KEY_ID` and `DB_AWS_SECRET_ACCESS_KEY` (the session environment's settings; prefixed because
 the environment already sets `AWS_ACCESS_KEY_ID` as a proxy placeholder) and CI as the repository secret
 `AWS_DB_CREDS` (five `KEY=VALUE` lines; only the access key id and secret are used -- never the console password).
-The fetch step that writes the properties file from Secrets Manager is written once the secrets' layout is seen.
+**The secrets, as measured (2026-10-11):** Secrets Manager in `us-east-1` (mirrored in `us-east-2`) holds legend-engine's
+own PCT secrets, read by key exactly as its `*TestConnectionIntegration` classes read them (legend-engine 4.145.0):
+
+| Cloud | Secret | Keys used | Coordinates (legend-engine's, not secret) |
+|---|---|---|---|
+| Databricks | `databricks` | `integration_test.apitoken` (a personal access token) | host `dbc-f0687849-717f.cloud.databricks.com`, httpPath `/sql/1.0/warehouses/c56852187940e5a3` |
+| Snowflake | `snowflake.INTEGRATION_USER1` | `encrypted_private_key` (PKCS#8, stored without PEM armour), `private_key_encryption_password` | account `ki79827`, region `us-east-2` (aws), warehouse `INTEGRATION_WH1`, database `INTEGRATION_DB1`, role `INTEGRATION_ROLE1`, user `INTEGRATION_USER1` |
+| BigQuery | `bigquery.integration-bq-sa1` | `service_account_json` (a service-account key) | project `legend-integration-testing` |
+
+The fetch is a short script (in the session's scratchpad, not the repository): `GetSecretValue` signed with SigV4 by
+`curl --aws-sigv4` (the key pair read from stdin, never the command line), each secret written into `~/.legendlite/` at
+mode 0600 -- the properties file, the Snowflake key re-armoured as PEM (`snowflake.property.private_key_file` +
+`private_key_file_pwd`), the BigQuery key file -- and nothing printed but key names. The Snowflake JDBC URL is
+`jdbc:snowflake://ki79827.us-east-2.aws.snowflakecomputing.com/?warehouse=INTEGRATION_WH1&db=INTEGRATION_DB1&role=INTEGRATION_ROLE1`.
 
 ## 5. Running
 
@@ -128,6 +141,14 @@ Measured 2026-10-11 in a Claude Code cloud container (4 cores, 15 GB, network ac
 - The Postgres lane cannot run there: the container runs as root and `initdb` refuses root. The DuckDB lane passes
   (`//pct:pct_duckdb_essential`, 45 s).
 - Maven Central rate-limits the shared address now and then (HTTP 429): retry.
+- The cloud lanes' test JVMs need the container's egress proxy and its CA: Bazel's test environment drops
+  `JAVA_TOOL_OPTIONS`, so without it Snowflake fails PKIX and Databricks cannot connect. In `~/.bazelrc`:
+  `test --test_env=JAVA_TOOL_OPTIONS --test_env=HTTPS_PROXY --test_env=https_proxy --test_env=NO_PROXY --test_env=no_proxy`.
+- Disk: one output base is about 15 GB of the container's ~39 GB allowance, so a second checkout with its own output
+  base does not fit; one tree, one Bazel server. A first build of the PCT lanes takes about 6 minutes.
+- Measured 2026-10-11 with those settings: Databricks and Snowflake log in (their drivers authenticate when the
+  connection opens) and the Grammar lane fails at `Sessions.jdbcProduct`, as expected before a dialect; BigQuery's
+  connection opens too (its driver may authenticate lazily: its first query proves it).
 
 ## 7. DataCube straight to the warehouse's HTTP SQL API (CORS)
 
@@ -137,8 +158,17 @@ server between.
 | | Endpoint | CORS preflight |
 |---|---|---|
 | BigQuery | `POST https://bigquery.googleapis.com/bigquery/v2/projects/<p>/queries` | **Passes** (measured 2026-10-11: `OPTIONS` from `Origin: http://localhost:5173` answers 200 with that origin, methods including POST, headers `authorization,content-type`, max-age 3600) |
-| Snowflake | `POST https://<account>.snowflakecomputing.com/api/v2/statements` | to measure on the account's host |
-| Databricks | `POST https://<host>/api/2.0/sql/statements` | to measure on the workspace host; results over `EXTERNAL_LINKS` are presigned cloud-storage URLs, which need their own CORS |
+| Snowflake | `POST https://ki79827.us-east-2.aws.snowflakecomputing.com/api/v2/statements` | **Passes** (measured 2026-10-11: `OPTIONS` answers 204 echoing ANY origin -- `http://localhost:5173` and `https://claude.ai` alike -- methods `GET,POST`, headers `Authorization,Content-Type,User-Agent,Accept,X-Snowflake-Authorization-Token-Type`, max-age 86400) |
+| Databricks | `POST https://dbc-f0687849-717f.cloud.databricks.com/api/2.0/sql/statements` | **Fails** (measured 2026-10-11: `OPTIONS` answers 401 `WWW-Authenticate: Bearer` with no `Access-Control-*` header, on every path tried; a simple GET answers 401 without one too). A browser cannot call the workspace's API directly: it needs a relay (the warehouse server, or a Databricks App on the workspace's own origin) |
+
+**From a page (measured 2026-10-11):** a page served at `http://localhost:5173`, in the container's pinned Chromium
+(headless, through the egress proxy), `fetch`es each endpoint with `SELECT 1` and a deliberately invalid bearer token:
+Snowflake and BigQuery are REACHED (the preflight passes; the page reads each one's JSON 401 --
+`{"code":"390303","message":"Invalid OAuth access token..."}` and `{"error":{"code":401,...}}`), Databricks is BLOCKED
+by the browser (`TypeError: Failed to fetch`). A real query from the page needs a real short-lived credential in the
+browser -- a Snowflake key-pair JWT (`X-Snowflake-Authorization-Token-Type: KEYPAIR_JWT`, minted from the
+`snowflake.INTEGRATION_USER1` key) and a BigQuery OAuth access token (from the service account) -- which this session did
+not mint into a page (the session's safety review stopped it as credential materialisation): **open, the user's call**.
 
 Questions it settles: whether each preflight answers for the page's origin; which credential a browser can hold
 (BigQuery: an OAuth access token; Snowflake: OAuth or a key-pair JWT; Databricks: a token); and the result format
@@ -155,3 +185,31 @@ raw-SQL probe from the page (`run(sql)`: CORS, the credential, the result format
 per cloud behind `QueryEngine` once its dialect plans. A JSON result is decoded to the exact `Scalar`s
 (`engine-client/src/values.ts`) and to Arrow IPC for snapping. Constraints: `datacube/test/guardrails.test.ts` (no
 runtime fallback between engines) and the bundle budget.
+
+## 8. Databricks, measured (2026-10-11)
+
+The account: a Databricks SQL warehouse (`dbsql_version` 2026.39); the JDBC driver (databricks-jdbc 3.4.3) reports the
+product `SparkSQL` (`Sessions.jdbcProduct`). Every spelling in `core/.../sql/dialect/Databricks.java` was measured there
+first with a scratch JDBC probe (statements over literals and `VALUES` only). What differs from DuckDB, and the dialect's
+answer:
+
+| Measured | Consequence |
+|---|---|
+| `'it''s'` is `its`: two adjacent literals concatenate; backslash escapes are read | a quote is written `\'`, a backslash `\\` |
+| a bare integer literal is a 32-bit INT; `2147483647 + 1` wraps to `-2147483648` with ANSI mode off | every integer literal is a BIGINT, `1L`; a window function's offset stays an INT |
+| the warehouse's ANSI mode is OFF by default: overflow wraps, `CAST('abc' AS BIGINT)` is NULL, `x/0` is NULL, `element_at` out of range is NULL | the session sets `ANSI_MODE = true` (each then raises, as DuckDB does) and `TIME ZONE 'UTC'` |
+| `concat('a', NULL)` and `'a' \|\| NULL` are NULL | concat is `concat_ws('', ...)`, each argument as text |
+| `regexp_extract` defaults to group 1 (and refuses a pattern without one); `split` takes a regex; `regexp_replace` replaces every match | group 0 is passed; the delimiter is `\Q..\E`-quoted; a first-match replace is `^(?s:(.*?))(?:p)` → `$1` + the replacement, its groups shifted by one |
+| `round` is half-up, `bround` half-even | ROUND is `bround`, ROUND_HALF_UP `round` |
+| `timestampdiff` counts whole units; DuckDB's date_diff counts boundaries | year/quarter/month by the calendar, day by `datediff` of dates, sub-day by the floored `unix_micros` |
+| `extract(DOW ...)` is Sunday 1 | DuckDB's dow is `extract(DOW ...) - 1`; isodow is `DOW_ISO` |
+| a lambda's index parameter is 0-based | the body reads `i + 1` (DuckDB's is 1-based) |
+| a bare `NULL` where an array is required is refused (`VOID`) | the empty collection is `CAST(NULL AS ARRAY<VOID>)`; a list function over it answers `CAST(NULL AS <its type>)` |
+| a parenthesized `(VALUES ...) AS t(c)` is a syntax error | `VALUES (..), (..) AS t(c)` |
+| no quantified comparison (`x = ALL (subquery)`) | its SQL truth table over `EXISTS`, NULLs included |
+| a RANGE frame's offset must have its ORDER BY key's type | `1L PRECEDING` over a BIGINT key |
+| `map_concat` refuses a duplicate key (its dedup policy is not a warehouse setting) | each map less the keys a later one sets (`map_filter`), then concatenated |
+| `CAST(struct AS VARIANT)` is refused; `to_variant_object` converts; a variant takes no `[...]` subscript; object keys come back sorted | variant navigation casts to `MAP<STRING, VARIANT>` / `ARRAY<VARIANT>` (`try_element_at`) |
+| arrays, structs, maps and variants arrive over JDBC as JSON text; `getObject(i, LocalDateTime.class)` answers a String | the executor's JSON carrier parses lists; a struct's text is decoded by the dialect's `normalize`; the timestamp re-fetch keeps the driver's `Timestamp` when the driver answers another class |
+| a correlated scalar subquery in a join condition is refused | the as-of join is a wall (a window-based form is possible later) |
+| `QUALIFY`, `SELECT * EXCEPT`, native `PIVOT` (columns named by the `IN` aliases), `listagg ... WITHIN GROUP`, `median`, `mode`, `percentile_cont/disc ... WITHIN GROUP`, `max_by`, `max(boolean)`, `explode`, correlated `(SELECT agg FROM explode(t.xs))` | used as they are |

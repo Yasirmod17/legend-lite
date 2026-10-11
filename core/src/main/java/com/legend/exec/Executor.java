@@ -691,9 +691,10 @@ public final class Executor {
             // sibling of the deleted midnight heuristic): every
             // timestamp cell re-fetches as java.time, the BC-faithful
             // carrier — Timestamp's epoch is WRONG for BC years
-            java.time.LocalDateTime ldt =
-                    rs.getObject(i, java.time.LocalDateTime.class);
-            return ldt != null ? ldt : o;
+            // (read as an Object: a driver that answers the re-fetch with another class -- Databricks'
+            // answers its text, 2026-10-11 -- keeps the Timestamp it delivered)
+            Object ldt = rs.getObject(i, java.time.LocalDateTime.class);
+            return ldt instanceof java.time.LocalDateTime ? ldt : o;
         }
         return o;
     }
