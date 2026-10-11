@@ -64,6 +64,27 @@ public record TypeNames(Map<SqlType.Scalar, String> scalarNames,
         return m;
     }
 
+    /** BigQuery (GoogleSQL; 2026-10-11): INT64, FLOAT64, STRING, BOOL; HUGEINT as BIGNUMERIC (it holds every 128-bit
+     *  integer); a naive TIMESTAMP is DATETIME, a zoned one TIMESTAMP; JSON; STRUCT natively. */
+    public static final TypeNames BIGQUERY = new TypeNames(bigquery(), true);
+
+    private static Map<SqlType.Scalar, String> bigquery() {
+        Map<SqlType.Scalar, String> m = new EnumMap<>(SqlType.Scalar.class);
+        m.put(SqlType.Scalar.BOOLEAN, "BOOL");
+        m.put(SqlType.Scalar.INTEGER, "INT64");
+        m.put(SqlType.Scalar.BIGINT, "INT64");
+        m.put(SqlType.Scalar.HUGEINT, "BIGNUMERIC");
+        m.put(SqlType.Scalar.DOUBLE, "FLOAT64");
+        m.put(SqlType.Scalar.VARCHAR, "STRING");
+        m.put(SqlType.Scalar.LITERAL, "STRING");
+        m.put(SqlType.Scalar.TEMPORAL_TEXT, "STRING");
+        m.put(SqlType.Scalar.DATE, "DATE");
+        m.put(SqlType.Scalar.TIMESTAMP, "DATETIME");
+        m.put(SqlType.Scalar.TIMESTAMPTZ, "TIMESTAMP");
+        m.put(SqlType.Scalar.JSON, "JSON");
+        return m;
+    }
+
     /** Databricks SQL (2026-10-11, docs/CLOUD_BACKENDS_PCT_2026_10_11.md): INT and STRING (a bare VARCHAR needs a
      * length there); HUGEINT as DECIMAL(38,0); a zoned timestamp is the session-zone TIMESTAMP (the session is UTC);
      * JSON as VARIANT, the variant carrier; STRUCT natively ({@code STRUCT<a: T>}, the dialect's spelling). */

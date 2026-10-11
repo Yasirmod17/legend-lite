@@ -130,6 +130,19 @@ public record Lexicon(char quoteChar, Set<String> reservedWords) {
             "to", "trailing", "true", "union", "unique", "unknown", "update", "user", "using", "values", "when",
             "where", "window", "with"));
 
+    /** BigQuery (GoogleSQL; 2026-10-11, docs/CLOUD_BACKENDS_PCT_2026_10_11.md): backticks; GoogleSQL's reserved
+     *  keywords. The {@code BigQuery} dialect quotes every identifier, so the list decides no spelling there. */
+    public static final Lexicon BIGQUERY = new Lexicon('`', Set.of(
+            "all", "and", "any", "array", "as", "asc", "assert_rows_modified", "at", "between", "by", "case", "cast",
+            "collate", "contains", "create", "cross", "cube", "current", "default", "define", "desc", "distinct",
+            "else", "end", "enum", "escape", "except", "exclude", "exists", "extract", "false", "fetch", "following",
+            "for", "from", "full", "group", "grouping", "groups", "hash", "having", "if", "ignore", "in", "inner",
+            "intersect", "interval", "into", "is", "join", "lateral", "left", "like", "limit", "lookup", "merge",
+            "natural", "new", "no", "not", "null", "nulls", "of", "on", "or", "order", "outer", "over", "partition",
+            "preceding", "proto", "qualify", "range", "recursive", "respect", "right", "rollup", "rows", "select",
+            "set", "some", "struct", "tablesample", "then", "to", "treat", "true", "unbounded", "union", "unnest",
+            "using", "when", "where", "window", "with", "within"));
+
     /** PostgreSQL 16+ (2026-10-01 W5.5/P1 Postgres dialect). The {@code Postgres} dialect
      * QUOTES EVERY identifier (Postgres folds an unquoted name to lowercase, so a bare
      * {@code NAME} reads {@code name}), so this list never decides a spelling there; it

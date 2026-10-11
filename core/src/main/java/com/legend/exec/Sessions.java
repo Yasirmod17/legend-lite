@@ -77,7 +77,9 @@ public final class Sessions {
             // the Databricks JDBC driver reports Spark's name (measured, databricks-jdbc 3.4.3)
             case Databricks -> "SparkSQL";
             case Snowflake -> "Snowflake";
-            case DB2, MemSQL, Sybase, SybaseIQ, Composite, SqlServer, Hive, Presto, Trino, BigQuery,
+            // Google's BigQuery JDBC driver (measured, google-cloud-bigquery-jdbc 1.6.0)
+            case BigQuery -> "Google BigQuery";
+            case DB2, MemSQL, Sybase, SybaseIQ, Composite, SqlServer, Hive, Presto, Trino,
                  Redshift, Spanner, Athena, Oracle, ClickHouse, Aurora ->
                     throw new com.legend.error.NotImplementedException(
                             "sessions on database type '" + type + "' are not implemented");

@@ -97,6 +97,31 @@ public record Spellings(Map<SqlFn, String> fnNames) {
         return m;
     }
 
+    /** BigQuery EXECUTION spellings (GoogleSQL; 2026-10-11): ONLY a name that exists on BigQuery with DuckDB's
+     *  arguments and meaning, each measured on the account. */
+    public static final Spellings BIGQUERY = new Spellings(bigquery());
+
+    private static Map<SqlFn, String> bigquery() {
+        Map<SqlFn, String> m = new EnumMap<>(SqlFn.class);
+        for (SqlFn f : new SqlFn[] {SqlFn.ABS, SqlFn.ACOS, SqlFn.ASIN, SqlFn.ATAN, SqlFn.ATAN2, SqlFn.CBRT, SqlFn.CHR,
+                SqlFn.COALESCE, SqlFn.COS, SqlFn.COSH, SqlFn.COT, SqlFn.SIN, SqlFn.SINH, SqlFn.TAN, SqlFn.TANH,
+                SqlFn.LOWER, SqlFn.UPPER, SqlFn.LTRIM, SqlFn.RTRIM, SqlFn.TRIM, SqlFn.REPLACE, SqlFn.STARTS_WITH,
+                SqlFn.ENDS_WITH, SqlFn.STRPOS, SqlFn.SPLIT}) {
+            m.put(f, f.name());
+        }
+        m.put(SqlFn.ERROR, "ERROR");
+        m.put(SqlFn.ASCII_CODE, "ASCII");
+        m.put(SqlFn.REVERSE_STRING, "REVERSE");
+        m.put(SqlFn.REPEAT_STR, "REPEAT");
+        m.put(SqlFn.LEVENSHTEIN, "EDIT_DISTANCE");
+        m.put(SqlFn.FLOOR_RAW, "FLOOR");
+        m.put(SqlFn.MATCHES, "REGEXP_CONTAINS");
+        m.put(SqlFn.SUBSTRING, "SUBSTR");
+        m.put(SqlFn.LIST_REVERSE, "ARRAY_REVERSE");
+        m.put(SqlFn.LIST_LENGTH, "ARRAY_LENGTH");
+        return m;
+    }
+
     /** Snowflake EXECUTION spellings (2026-10-11): ONLY a name that exists on Snowflake with DuckDB's arguments and meaning, each
      *  measured. Never inherited: concat (NULL-propagating here), greatest/least (NULL if any argument is: the
      *  _IGNORE_NULLS forms are DuckDB's), log10 (no such function), strpos (CHARINDEX swaps the arguments). */
