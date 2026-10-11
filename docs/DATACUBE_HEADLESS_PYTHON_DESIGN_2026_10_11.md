@@ -332,3 +332,30 @@ keeps its name and runs in the lane.
 - **mini-racer's timer defect** is reported upstream (https://github.com/bpcreech/PyMiniRacer/issues/97). It is not by
   design (ECMAScript defines both results), not reported before, and not fixed in 0.14.1 or on main. The host's floor
   goes when the pin moves past the fix; the lane tests every timeout form.
+
+## 14. The branch's audit (2026-10-11): 2 blockers, 9 should-fix, every one answered
+
+- **B1, the configuration.** A headless grid ignored its configuration (its row cap, each column's aggregate, a hidden
+  column), so Python could show other numbers than the tab. It now folds the configuration into its query as the tab's
+  state owner does (`cube-state.ts` `fold`). Its columns are laid out by `shownColumns`, which the tab's repaint calls
+  too: one function, moved out of `app.ts`.
+- **B2, two locks in opposite orders.** `Grid.view` gets the session's engine before it holds the frames still, the order
+  a frame's registering takes them. A test reads a grid while another thread registers frames.
+- **The judges.**
+  - The assertion stand-in's deep equality kept a failed pair as equal (a Set's members sharing an object). It now
+    lets a pair go when its comparison ends, as Node does; the case is in the corpus.
+  - The node:test stand-in is now compared live with Node's own node:test, which runs the same suite in a child Node.
+    That found one more difference, fixed: a suite's `after` hooks run when its `before` fails.
+  - The lane asserts that no test is skipped.
+  - One gap is stated in the stand-in: a promise rejected and never handled fails a file in Node, not here.
+- **The host.**
+  - Its calls run one at a time.
+  - A call past the memory cap breaks the engine, and the session makes another.
+  - A call can take a timeout.
+  - The native library sets up each function on first use, so the start-up check names a missing one instead of
+    legend-lite failing to load.
+- **Two things said rather than built:**
+  - A connection given to `Headless` (the frames') is left as it is, so a file registered meanwhile is not on its search
+    path. No grid registers one.
+  - The host's database answers a query whole (no `send`), so a superseded query is not cancelled between batches as in
+    the tab. `duckdb-cancel`, in the lane, tests `DuckDbEngine` over a connection that has `send`, not this host's.

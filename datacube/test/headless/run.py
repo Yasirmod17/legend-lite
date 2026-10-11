@@ -90,6 +90,20 @@ class Host(unittest.TestCase):
             self.assertEqual(h.evaluate("new Promise((done) => { const t = setTimeout(() => done('fired'), 5);"
                                         " clearTimeout(t); setTimeout(() => done('cleared'), 20); })"), 'cleared')
 
+    def test_a_call_past_the_memory_cap_fails_and_the_engine_takes_no_more(self):
+        with Headless(PRODUCT, folder=TMP, memory_limit=256 * 1024 * 1024) as h:
+            with self.assertRaises(MemoryError):
+                h.evaluate('(() => { const keep = []; for (;;) keep.push(new Array(1e6).fill(1.5)); })()')
+            self.assertTrue(h.broken)
+            with self.assertRaisesRegex(RuntimeError, 'ran out of its memory'):
+                h.evaluate('1')
+
+    def test_a_call_that_never_answers_times_out_and_the_next_is_answered(self):
+        with Headless(PRODUCT, folder=TMP) as h:
+            with self.assertRaises(TimeoutError):
+                h.evaluate('new Promise(() => {})', timeout=0.5)
+            self.assertEqual(h.evaluate('1 + 1'), 2)
+
     def test_a_registered_file_stays_in_the_folder(self):
         with Headless(PRODUCT, folder=TMP / 'files') as h:
             refused = h.evaluate("legendLite.database.registerFileText('../out.csv', 'a').then(() => 'written', (e) => String(e))")
@@ -125,6 +139,8 @@ class DataCubeTests(unittest.TestCase):
                 failed += bad
                 self.assertGreater(len(results), 0, f'{name}: no test ran')
                 self.assertEqual(bad, [])
+                # none skipped: a test the lane does not run says why in BUILD (its file left out), never by a skip
+                self.assertEqual([r['name'] for r in results if r['status'] == 'skip'], [], f'{name}: skipped')
         print(f'\n{len(bundles)} files: {total["pass"]} pass, {total["fail"]} fail, {total["skip"]} skip', flush=True)
         if failed:
             print('\n'.join(failed[:50]), file=sys.stderr)

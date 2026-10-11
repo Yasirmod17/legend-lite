@@ -203,7 +203,12 @@ _EXTRA_DATA = {
     "page-app": ["test/cube-fixture.ts", "test/gate.ts"],
     # the headless lane's stand-ins for node:assert and node:test, held to Node's own here
     "headless-assert": ["test/headless/node-assert.ts"],
-    "headless-test-runner": ["test/headless/node-test.ts"],
+    "headless-test-runner": [
+        "test/headless/node-test.ts",
+        "test/headless/runner-entry.ts",
+        "test/headless/runner-reporter.mjs",
+        "test/headless/runner-suite.ts",
+    ],
 }
 
 # the tests that write a model from a table's columns ask the compiler (T2): legend-lite's

@@ -85,6 +85,41 @@ class Grids(unittest.TestCase):
         grid.filter(('qty', 'greaterThan', 2))
         self.assertEqual(groups(grid.view(), 'qty'), TRADES[TRADES.qty > 2].groupby('desk').qty.sum().to_dict())
 
+    def test_its_configuration_is_folded_in_as_on_screen(self):
+        # the row cap, a hidden column and a column's aggregate: what the tab folds into its query and lays out
+        flat = self.page.grid(TRADES, name='trades_capped')
+        flat.configure({'maxRows': 2, 'columns': {'desk': {'hidden': True}}})
+        view = flat.view()
+        self.assertEqual(len(view.rows), 2, 'the row cap, as on screen')
+        self.assertEqual(view.total_rows, len(TRADES), 'and how many rows there are in all')
+        self.assertNotIn('desk', [c['name'] for c in view.columns], 'a hidden column, not shown')
+        grouped = self.page.grid(TRADES, name='trades_aggregated', rows=['desk'])
+        grouped.configure({'columns': {'qty': {'aggregateFn': 'max'}}})
+        self.assertEqual(groups(grouped.view(), 'qty'), TRADES.groupby('desk').qty.max().to_dict())
+        self.assertIn('max()', grouped.relation)
+        rows = grouped.to_pandas().set_index('desk').qty.to_dict()
+        self.assertEqual(rows, TRADES.groupby('desk').qty.max().to_dict())
+
+    def test_a_grid_read_while_another_thread_registers_frames_does_not_wait_on_it(self):
+        # the session's lock and the frames' lock, taken in one order by both: a grid read beside frames registered
+        import threading
+        grid = self.page.grid(TRADES, name='trades_threads', rows=['desk'], measures={'qty': 'sum'})
+        failures: list[BaseException] = []
+
+        def register() -> None:
+            try:
+                for i in range(20):
+                    self.page.grid(TRADES, name=f'trades_beside_{i}')
+            except BaseException as e:  # noqa: BLE001 -- reported below
+                failures.append(e)
+        other = threading.Thread(target=register)
+        other.start()
+        for _ in range(20):
+            self.assertEqual(groups(grid.view(), 'qty'), TRADES.groupby('desk').qty.sum().to_dict())
+        other.join(timeout=60)
+        self.assertFalse(other.is_alive(), 'the registering thread finished')
+        self.assertEqual(failures, [])
+
     def test_called_inside_a_running_event_loop_as_a_notebook_cell_is(self):
         # Jupyter runs a cell inside its own asyncio loop: the headless engine runs on a loop of its own, on its own
         # thread, so a synchronous call from inside a running loop answers, and never touches that loop

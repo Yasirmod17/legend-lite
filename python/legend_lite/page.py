@@ -376,40 +376,46 @@ class Grid(Tile):
 
     # -- headless: DataCube's own code, in Python (docs/DATACUBE_HEADLESS_PYTHON_DESIGN_2026_10_11.md §4) ------------
 
-    def _headless(self, function: str) -> Any:
-        """One of the headless bundle's grid functions, over this grid's cube and its frame. Called with the frames held
-        still (``Frames.serving``): the bundle's queries run on their connection meanwhile."""
+    def _headless(self) -> tuple[Any, Any]:
+        """The session's headless engine, got first (the session's lock, taken and let go), and the frames: a caller then
+        holds the frames still (the frames' lock) -- the order a frame's registering takes the two, so neither waits on
+        the other."""
         session = self._page._session
-        table = session.frames[self.frame]
-        spec = {'cube': _json.dumps(self._cube), 'model': table.model, 'runtime': table.runtime, 'source': table.accessor}
-        return session.headless().call(function, spec)
+        return session.headless(), session.frames
+
+    def _spec(self, frames: Any) -> dict[str, Any]:
+        """This grid's cube and its frame's model, as the bundle's grid functions take them (the frames held still)."""
+        table = frames[self.frame]
+        return {'cube': _json.dumps(self._cube), 'model': table.model, 'runtime': table.runtime, 'source': table.accessor}
 
     def view(self) -> GridView:
         """What the grid shows, as DataCube computes it: its columns and rows, their groups and totals, its pivot, and
         what its row cap cut -- by DataCube's own code, run headless in V8 (the `datacube` extra), as the grid on screen
-        runs it."""
+        runs it: its configuration folded into its query, its columns laid out as the screen lays them out."""
         import json
 
         from ._headless import cells
-        with self._page._session.frames.serving():
+        engine, frames = self._headless()
+        with frames.serving():
             # DataCube's cells are exact as it gives them (an Integer or a Float a number, a Decimal its text): read as
             # JSON reads them, an integer past 2^53 and a non-finite float from their tags
-            return GridView(cells(json.loads(self._headless('gridView'))))
+            return GridView(cells(json.loads(engine.call('gridView', self._spec(frames)))))
 
     @property
     def relation(self) -> str:
         """Its rows at their finest level, as Pure: filtered and extended by its calculated columns, grouped by its
         innermost group when it is grouped (a flat grid's rows as they are) -- the relation DataCube's Create a Class
         makes a class of."""
-        with self._page._session.frames.serving():
-            return self._headless('gridRelation')
+        engine, frames = self._headless()
+        with frames.serving():
+            return engine.call('gridRelation', self._spec(frames))
 
     def to_pandas(self) -> Any:
         """Every row of ``relation``, as a pandas DataFrame: DataCube says the query, the frames' own database answers
         it, and the rows come to Python from there (never through DataCube's engine)."""
-        frames = self._page._session.frames
+        engine, frames = self._headless()
         with frames.serving():
-            return frames.connection.execute(self._headless('gridSql')).to_arrow_table().to_pandas()
+            return frames.connection.execute(engine.call('gridSql', self._spec(frames))).to_arrow_table().to_pandas()
 
     def group(self, *rows: str) -> Grid:
         """Grouped by ``rows``, outermost first (the Rows zone); none, not grouped."""

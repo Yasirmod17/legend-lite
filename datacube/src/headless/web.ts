@@ -492,8 +492,15 @@ export function installWeb(g: Record<string, unknown> = globalThis as unknown as
   give('AbortController', AbortController);
   give('atob', atob);
   give('btoa', btoa);
+  // a microtask's exception reported as the platform reports one, never lost in a rejected promise
   give('queueMicrotask', (callback: () => void) => {
-    void Promise.resolve().then(callback);
+    void Promise.resolve().then(() => {
+      try {
+        callback();
+      } catch (e) {
+        report(e);
+      }
+    });
   });
   if (g['performance'] === undefined) {
     const origin = Date.now();

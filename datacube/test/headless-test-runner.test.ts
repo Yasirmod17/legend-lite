@@ -1,94 +1,51 @@
-// The headless lane's node:test stand-in (test/headless/node-test.ts) held to node:test's rules, where DataCube's tests
-// rely on them: which tests run, which pass, fail or are skipped, and in what order the hooks run around them. A suite
-// registered on the stand-in here (it is a module like any other in Node), run, and its results and order checked
-// against what node:test does with the same suite (node 22, run by hand: the same tests pass, fail and are skipped, in
-// this order; node:test reports a skipped suite once where the stand-in reports each of its tests skipped).
+// The headless lane's node:test stand-in (test/headless/node-test.ts) held to node:test itself: one suite
+// (test/headless/runner-suite.ts) registered on the stand-in here and run, and the same suite run by Node's own
+// node:test in a child Node -- this test's own binary, its own flags -- whose reporter says what each test came to.
+// What ran, passed, failed and was skipped, and the order the hooks and tests ran in, must be the same. The mock
+// timers are compared the same way, in this process.
 
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import * as T from './headless/node-test.ts';
+import { register } from './headless/runner-suite.ts';
 
-const order: string[] = [];
-const push = (s: string) => (): void => { order.push(s); };
-
-T.before(push('root before'));
-T.after(push('root after'));
-T.describe('hooks', () => {
-  T.before(push('hooks before'));
-  T.after(push('hooks after'));
-  T.beforeEach(push('outer beforeEach'));
-  T.afterEach(push('outer afterEach'));
-  T.it('passes', push('passes'));
-  T.it('fails', () => { order.push('fails'); throw new Error('no'); });
-  T.it.skip('skipped', push('never: skipped'));
-  T.it('no function');
-  T.describe('nested', () => {
-    T.beforeEach(push('inner beforeEach'));
-    T.afterEach(push('inner afterEach'));
-    T.it('inner', push('inner'));
-  });
-});
-T.describe('async', async () => {
-  await Promise.resolve();
-  T.it('registered after an await', push('late'));
-});
-T.describe('a before that fails', () => {
-  T.before(() => { throw new Error('setup'); });
-  T.it('x', push('never: x'));
-  T.it('y', push('never: y'));
-});
-T.describe('an afterEach that fails', () => {
-  T.afterEach(() => { throw new Error('teardown'); });
-  T.it('z', push('z'));
-});
+const ours: string[] = [];
+register(T as never, ours);
+// the stand-in's own forms, beside the shared suite: a skipped suite (node:test reports it once, the stand-in each of
+// its tests) and a skip by option
 T.describe.skip('a skipped suite', () => {
-  T.it('w', push('never: w'));
+  T.it('w', () => { ours.push('never: skipped suite'); });
 });
-T.it('a done callback', (_t, done) => { setTimeout(() => done?.(), 1); });
-T.it('a done callback given an error', (_t, done) => { done?.(new Error('callback')); });
-T.it('a rejection', async () => { throw new TypeError('async'); });
-T.it('t.skip()', (t) => t.skip());
-T.it('options: skip', { skip: true }, push('never: options skip'));
-T.it('t.diagnostic and t.name', (t) => { t.diagnostic('noted'); order.push(`name ${t.name}`); });
+T.it('options: skip', { skip: true }, () => { ours.push('never: options skip'); });
+
+/** The suite on Node's own node:test: each test's path and outcome, and the order things ran in. */
+function nodes(): { results: [string, string][]; order: string[] } {
+  const entry = fileURLToPath(new URL('./headless/runner-entry.ts', import.meta.url));
+  const reporter = fileURLToPath(new URL('./headless/runner-reporter.mjs', import.meta.url));
+  const ran = spawnSync(process.execPath, [...process.execArgv, `--test-reporter=${reporter}`, '--test-reporter-destination=stdout', entry],
+    { encoding: 'utf8', timeout: 60_000 });
+  const lines = ran.stdout.split('\n');
+  const results = lines.filter((l) => l.startsWith('RESULT ')).map((l) => JSON.parse(l.slice('RESULT '.length)) as [string, string]);
+  const order = lines.filter((l) => l.startsWith('ORDER ')).map((l) => JSON.parse(l.slice('ORDER '.length)) as string[])[0];
+  assert.ok(results.length > 0 && order !== undefined, `Node's run said nothing: ${ran.stdout}\n${ran.stderr}`);
+  return { results, order };
+}
 
 describe('the stand-in runs a suite as node:test runs it', () => {
-  it('reports each test as node:test would, and runs the hooks in its order', async () => {
+  it("reports each test as Node's own node:test does, and runs the hooks in its order", async () => {
     const results = await T.run();
-    assert.deepEqual(results.map((r) => [r.name, r.status]), [
-      ['hooks > passes', 'pass'],
-      ['hooks > fails', 'fail'],
-      ['hooks > skipped', 'skip'],
-      ['hooks > no function', 'pass'],
-      ['hooks > nested > inner', 'pass'],
-      ['async > registered after an await', 'pass'],
-      ['a before that fails > x', 'fail'],
-      ['a before that fails > y', 'fail'],
-      ['an afterEach that fails > z', 'fail'],
-      ['a skipped suite > w', 'skip'],
-      ['a done callback', 'pass'],
-      ['a done callback given an error', 'fail'],
-      ['a rejection', 'fail'],
-      ['t.skip()', 'skip'],
-      ['options: skip', 'skip'],
-      ['t.diagnostic and t.name', 'pass'],
-    ]);
+    const shared = results.filter((r) => !r.name.startsWith('a skipped suite') && r.name !== 'options: skip');
+    const node = nodes();
+    assert.deepEqual(shared.map((r) => [r.name, r.status]), node.results);
+    assert.deepEqual(ours.filter((o) => !o.startsWith('never:')), node.order);
+    assert.deepEqual(results.filter((r) => !shared.includes(r)).map((r) => [r.name, r.status]),
+      [['a skipped suite > w', 'skip'], ['options: skip', 'skip']]);
+    assert.ok(!ours.some((o) => o.startsWith('never:')), `nothing skipped ran: ${ours}`);
     assert.match(results.find((r) => r.name === 'a rejection')!.error!, /^TypeError: async/);
     assert.match(results.find((r) => r.name === 'an afterEach that fails > z')!.error!, /teardown/);
-    assert.deepEqual(order, [
-      'root before',
-      'hooks before',
-      // beforeEach outer to inner, afterEach inner to outer; afterEach after a failing test too
-      'outer beforeEach', 'passes', 'outer afterEach',
-      'outer beforeEach', 'fails', 'outer afterEach',
-      'outer beforeEach', 'outer afterEach',
-      'outer beforeEach', 'inner beforeEach', 'inner', 'inner afterEach', 'outer afterEach',
-      'hooks after',
-      'late',
-      'z',
-      'name t.diagnostic and t.name',
-      'root after',
-    ]);
   });
 
   it("runs mock timers as node:test's own do", (t) => {

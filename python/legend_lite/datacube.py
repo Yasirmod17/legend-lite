@@ -179,6 +179,10 @@ class _Session:
         """DataCube's own non-screen code, in V8, over these frames' database (the `datacube` extra): made on first
         use, one per session, as one state owner holds a grid's state on screen."""
         with self._lock:
+            if self._headless is not None and self._headless.broken:
+                # it ran out of its memory: a new one, the frames as they are
+                self._headless.close()
+                self._headless = None
             if self._headless is None:
                 from ._headless import Headless, bundle
                 self._headless = Headless(bundle(), connection=self.frames.connection)

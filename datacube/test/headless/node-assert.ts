@@ -62,12 +62,20 @@ function deep(a: unknown, b: unknown, memo: Memo): boolean {
   if (Object.getPrototypeOf(a) !== Object.getPrototypeOf(b)) return false;
   if (tag(a) !== tag(b)) return false;
   if (Array.isArray(a) !== Array.isArray(b)) return false;
-  // a cycle: the pair already being compared is taken as equal, as Node's memos take it
+  // a cycle: a pair still being compared, met again inside itself, is taken as equal, as Node's memos take it -- and
+  // only while it is: the pair leaves the memo when its comparison ends, so a pair that failed is never read as equal
+  // later (a Set's or a Map's search tries a member against several)
   const seen = memo.get(a);
   if (seen?.has(b)) return true;
   if (seen) seen.add(b);
   else memo.set(a, new Set([b]));
-  return deepObjects(a, b, memo);
+  try {
+    return deepObjects(a, b, memo);
+  } finally {
+    const still = memo.get(a);
+    still?.delete(b);
+    if (still?.size === 0) memo.delete(a);
+  }
 }
 
 function deepObjects(a: object, b: object, memo: Memo): boolean {

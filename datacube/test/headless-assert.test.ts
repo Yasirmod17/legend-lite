@@ -83,6 +83,10 @@ const VALUES: readonly (readonly [string, () => unknown])[] = [
   ['Number 1', () => Object(1) as unknown], ['Number 2', () => Object(2) as unknown], ['String a', () => Object('a') as unknown],
   ['{[sym]:1}', () => ({ [sym]: 1 })], ['{[sym]:2}', () => ({ [sym]: 2 })],
   ['cyclic', cyclic], ['function', () => Math.max],
+  // members sharing an object: a Set's search tries one member against several, and a pair that failed stays failed
+  ['Set shared s,t', () => { const a = { v: 1 }; const b = { v: 2 }; return new Set([{ p: a, z: 1 }, { p: b, z: 2 }]); }],
+  ['Set shared t,t', () => { const b = { v: 2 }; return new Set([{ p: b, z: 2 }, { p: b, z: 1 }]); }],
+  ['Map shared', () => { const a = { v: 1 }; return new Map<unknown, unknown>([[{ k: a }, a], [{ k: { v: 2 } }, a]]); }],
 ];
 
 describe('the stand-in judges as node:assert/strict judges', () => {

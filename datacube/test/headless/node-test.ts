@@ -8,6 +8,10 @@
 // One difference, of when, not what: node:test starts an async describe's function as it is registered and tells its
 // later registrations apart by their async context, which V8 alone does not keep. Here an async describe's function
 // runs when the run reaches its suite, one suite at a time, so whatever it registers is its own.
+//
+// One gap: node:test fails a file on a promise rejected and never handled; V8 alone has no hook for one that
+// mini-racer passes on, so here such a test passes. A test awaits what it asserts on (the Node lane still catches one
+// that does not).
 
 class Skip extends Error {}
 
@@ -324,13 +328,23 @@ async function runSuite(node: SuiteNode, path: readonly string[], eachBefore: re
   }
   const befores = [...eachBefore, ...node.beforeEach];
   const afters = [...node.afterEach, ...eachAfter];
+  const afterHooks = async (): Promise<void> => {
+    for (const h of node.after) {
+      try {
+        await h();
+      } catch (e) {
+        results.push({ name: [...here, '<after>'].join(' > '), status: 'fail', error: describeError(e) });
+      }
+    }
+  };
   try {
     for (const h of node.before) await h();
   } catch (e) {
-    // node:test fails each of the suite's tests when its before hook does
+    // node:test fails each of the suite's tests when its before hook does, and still runs its after hooks
     for (const c of node.children) {
       results.push({ name: [...here, c.name].join(' > '), status: 'fail', error: `before hook: ${describeError(e)}` });
     }
+    await afterHooks();
     return;
   }
   for (const c of node.children) {
@@ -363,13 +377,7 @@ async function runSuite(node: SuiteNode, path: readonly string[], eachBefore: re
     t.resetMocks();
     results.push(outcome);
   }
-  for (const h of node.after) {
-    try {
-      await h();
-    } catch (e) {
-      results.push({ name: [...here, '<after>'].join(' > '), status: 'fail', error: describeError(e) });
-    }
-  }
+  await afterHooks();
 }
 
 /** Every test registered, run in order: each one's result. */

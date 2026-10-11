@@ -75,14 +75,17 @@ def answer(lib: Library, request: dict[str, Any]) -> dict[str, Any]:
 
 class Headless:
     """DataCube's non-screen code in one V8 context, with its planner and its database. One per process is the intent
-    (one state owner, as on screen); calls are serialized, one at a time. ``close()`` (or a ``with`` block) ends it."""
+    (one state owner, as on screen); its calls run one at a time, in the order they come. A call that runs V8 past its
+    memory cap fails, and the engine is then ``broken``: its owner makes another. ``close()`` (or a ``with`` block)
+    ends it."""
 
     def __init__(self, bundle: str, *, connection: Any = None, folder: str | Path | None = None,
                  memory_limit: int = DEFAULT_MEMORY_LIMIT, lib: Library | None = None) -> None:
         """``bundle`` is a headless bundle's script. ``connection`` the duckdb connection its queries run on (a Frames'
         one, whose tables a page's grids read; a new database of the engine's own when not given, closed with it).
         ``folder`` where the files DataCube registers are written (a temporary folder of the engine's own when not
-        given); a database of the engine's own reads relative names from it."""
+        given); a database of the engine's own reads relative names from it. A connection given is left as it is: a
+        file registered meanwhile is in ``folder``, which that database does not search (no grid registers one)."""
         import duckdb  # the database: the datacube extra's, never the compiler's
 
         self._lib = lib or library()
@@ -97,6 +100,10 @@ class Headless:
         self._thread.start()
         self._stack = contextlib.AsyncExitStack()
         self._mr: Any = None
+        self._memory_limit = memory_limit
+        # one call into the context at a time, made on the engine's loop
+        self._turn: asyncio.Lock | None = None
+        self.broken = False
         try:
             self._run(self._open(bundle, memory_limit))
         except BaseException:
@@ -138,6 +145,7 @@ class Headless:
         from py_mini_racer import MiniRacer
 
         # made on the engine's loop, so mini-racer runs on it (and never on a caller's)
+        self._turn = asyncio.Lock()
         self._mr = MiniRacer()
         self._mr.set_hard_memory_limit(memory_limit)
         # no WebAssembly in this process (the user's ruling, 2026-10-11): anything that reached for it fails here, loudly
@@ -161,28 +169,48 @@ class Headless:
         check_interface(json.loads(self._mr.eval('JSON.stringify(legendLiteHeadless.REQUEST_KINDS)')), self._lib)
         self._mr.eval('globalThis.legendLite = legendLiteHeadless.start();')
 
-    def _run(self, coroutine: Coroutine[Any, Any, Any]) -> Any:
+    def _run(self, coroutine: Coroutine[Any, Any, Any], timeout: float | None = None) -> Any:
         if threading.current_thread() is self._thread:
             raise RuntimeError("the engine's own thread cannot wait for the engine")
-        return asyncio.run_coroutine_threadsafe(coroutine, self._loop).result()
+        if self.broken:
+            coroutine.close()
+            raise RuntimeError('this engine ran out of its memory and is closed to calls: its owner makes another')
+        future = asyncio.run_coroutine_threadsafe(coroutine, self._loop)
+        try:
+            return future.result(timeout)
+        except TimeoutError:
+            future.cancel()
+            raise TimeoutError(f'DataCube did not answer within {timeout} s') from None
 
     async def _evaluate(self, expression: str) -> Any:
-        promise = self._mr.eval(f'Promise.resolve({expression}).then((v) => JSON.stringify(v === undefined ? null : v))')
-        return json.loads(await promise)
+        assert self._turn is not None
+        async with self._turn:
+            try:
+                promise = self._mr.eval(f'Promise.resolve({expression}).then((v) => JSON.stringify(v === undefined ? null : v))')
+                return json.loads(await promise)
+            except Exception as e:
+                if self._mr.was_hard_memory_limit_reached():
+                    # V8 stopped this call at the cap; what its context holds now is not to be trusted with another
+                    self.broken = True
+                    raise MemoryError(f"DataCube's engine reached its memory cap ({self._memory_limit} bytes)") from e
+                raise
 
-    def evaluate(self, expression: str) -> Any:
-        """A JavaScript expression's value, awaited when it is a Promise, as JSON gives it to Python."""
-        return self._run(self._evaluate(expression))
+    def evaluate(self, expression: str, timeout: float | None = None) -> Any:
+        """A JavaScript expression's value, awaited when it is a Promise, as JSON gives it to Python: within ``timeout``
+        seconds when given (it then raises TimeoutError), else as long as it takes."""
+        return self._run(self._evaluate(expression), timeout)
 
-    def call(self, function: str, *args: Any) -> Any:
+    def call(self, function: str, *args: Any, timeout: float | None = None) -> Any:
         """One of the bundle's functions (``legendLiteHeadless.<function>``) called with ``args`` as JSON gives them,
         awaited; its answer as JSON gives it to Python."""
-        return self.evaluate(f'legendLiteHeadless.{function}(...{json.dumps(list(args))})')
+        return self.evaluate(f'legendLiteHeadless.{function}(...{json.dumps(list(args))})', timeout)
 
     def execute(self, code: str) -> None:
         """JavaScript code run in the engine's context, for its effects."""
         async def run() -> None:
-            self._mr.eval(code)
+            assert self._turn is not None
+            async with self._turn:
+                self._mr.eval(code)
         self._run(run())
 
     def close(self) -> None:
