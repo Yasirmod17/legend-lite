@@ -2195,13 +2195,11 @@ public final class Snowflake extends AnsiSqlRenderer {
         if (isMarker(s)) {
             String alias = freshName("u");
             List<SqlSelect.Projection> ps = new ArrayList<>();
-            for (SqlSelect.Projection p : s.projections()) {
-                String name = markerColumn(p);
-                SqlType slot = scalarSlot(p);
-                SqlExpr read = slot != null
-                        ? SqlExpr.Column.of(alias, name, slot, true, com.legend.sql.OutputCol.Origin.DERIVED)
-                        : SqlExpr.Column.derived(alias, name);
-                ps.add(new SqlSelect.Projection(read, name, p.out()));
+            boolean aligned = s.outputs().size() == s.projections().size();
+            for (int i = 0; i < s.projections().size(); i++) {
+                SqlSelect.Projection p = s.projections().get(i);
+                SqlType slot = aligned ? s.outputs().get(i).type() : p.out() != null ? p.out().type() : null;
+                ps.add(new SqlSelect.Projection(explodedRead(alias, p, slot), markerColumn(p), p.out()));
             }
             return select(writer, new SqlSelect(ps, false, new SqlSource.Subselect(s, alias, null), null, List.of(),
                     null, null, List.of(), null, null, List.of()), depth);
@@ -2221,7 +2219,26 @@ public final class Snowflake extends AnsiSqlRenderer {
             } else if (s.projections().isEmpty()) {
                 writer.append("*");
             } else {
-                writer.join(s.projections(), ", ", this::projection);
+                // a list's min or max over the NULL list is NULL: written as its slot's NULL (ARRAY_MIN(NULL) is a
+                // VARIANT column under the label, measured)
+                boolean aligned = s.outputs().size() == s.projections().size();
+                for (int i = 0; i < s.projections().size(); i++) {
+                    SqlSelect.Projection p = s.projections().get(i);
+                    if (i > 0) {
+                        writer.append(", ");
+                    }
+                    if (p.expr() instanceof SqlExpr.Star st && !scope.isEmpty()) {
+                        // a star beside other columns, over a FROM holding a marker's FLATTEN: spelled out as well
+                        List<SqlWriter.Piece> star = new ArrayList<>();
+                        star(st.table() == null ? s.from() : sourceNamed(s.from(), st.table()), star);
+                        writer.join(star, ", ", SqlWriter::piece);
+                    } else if (aligned && extremeOfNullList(p.expr()) && typeOf(p.expr()) == null) {
+                        writer.append("CAST(NULL AS " + castTypeName(s.outputs().get(i).type()) + ")");
+                        writer.append(" AS ").append(aliasIdent(markerColumn(p)));
+                    } else {
+                        projection(writer, p);
+                    }
+                }
             }
             if (!(s.from() instanceof SqlSource.Dual)) {
                 nl(writer, depth).append("FROM ");
@@ -2265,15 +2282,29 @@ public final class Snowflake extends AnsiSqlRenderer {
         } else if (src instanceof SqlSource.Subselect sub && sub.inner() instanceof SqlSelect m && isMarker(m)) {
             for (SqlSelect.Projection p : m.projections()) {
                 String name = markerColumn(p);
-                SqlType element = p.expr().type() instanceof com.legend.sql.TypeFact.Typed t ? t.type()
-                        : scalarSlot(p);
-                SqlExpr.Column read = element == null ? SqlExpr.Column.derived(sub.alias(), name)
-                        : SqlExpr.Column.of(sub.alias(), name, element, true, com.legend.sql.OutputCol.Origin.DERIVED);
-                into.add(w -> column(w, read).append(" AS ").append(aliasIdent(name)));
+                SqlExpr read = explodedRead(sub.alias(), p, p.out() != null ? p.out().type() : null);
+                into.add(w -> w.expr(read, 0).append(" AS ").append(aliasIdent(name)));
             }
         } else if (!(src instanceof SqlSource.Dual)) {
             into.add(w -> w.append(aliasIdent(src.alias()) + ".*"));
         }
+    }
+
+    /** The source of a FROM bound to {@code alias}. */
+    private static SqlSource sourceNamed(SqlSource from, String alias) {
+        SqlSource s = sourceNamedOrNull(from, alias);
+        if (s == null) {
+            throw new DialectCapability("a star over '" + alias + "', which the FROM does not bind, reached Snowflake");
+        }
+        return s;
+    }
+
+    private static @com.legend.base.Nullable SqlSource sourceNamedOrNull(SqlSource from, String alias) {
+        if (from instanceof SqlSource.Join j) {
+            SqlSource l = sourceNamedOrNull(j.left(), alias);
+            return l != null ? l : sourceNamedOrNull(j.right(), alias);
+        }
+        return !(from instanceof SqlSource.Dual) && alias.equals(from.alias()) ? from : null;
     }
 
     /** The marker's exploded columns, by FLATTEN alias, anywhere in a FROM. */
@@ -2312,11 +2343,34 @@ public final class Snowflake extends AnsiSqlRenderer {
         }
     }
 
-    /** The scalar type an exploded column's slot declares, for an element of no known type (an exploded NULL list's:
-     *  its untyped read would be a VARIANT column under a scalar label); null for a composite slot, whose cell need
-     *  not be an OBJECT (a class value's slot holds the class's name, measured: "Failed to cast variant value"). */
-    static @com.legend.base.Nullable SqlType scalarSlot(SqlSelect.Projection p) {
-        return p.out() != null && p.out().type() instanceof SqlType.Scalar s ? s : null;
+    /**
+     * The read of an exploded column, as its slot wants it. Its element's type when known; else the slot's when the
+     * slot is scalar or the list is NULL (an exploded NULL list has no element type, and its untyped read is a
+     * VARIANT column under the label -- harmless to cast, it has no row), never a composite slot over a real list
+     * (a class value's slot holds the class's name, measured: "Failed to cast variant value"). A JSON element under
+     * a VARCHAR slot is its JSON text: DuckDB's JSON travels as VARCHAR, the label the plan carries.
+     */
+    static SqlExpr explodedRead(String alias, SqlSelect.Projection p, @com.legend.base.Nullable SqlType slot) {
+        String name = markerColumn(p);
+        SqlType element = p.expr().type() instanceof com.legend.sql.TypeFact.Typed t ? t.type() : null;
+        SqlExpr list = ((SqlExpr.Call) p.expr()).args().get(0);
+        SqlType type = element != null ? element
+                : slot instanceof SqlType.Scalar || nullList(list) ? slot : null;
+        SqlExpr read = type == null ? SqlExpr.Column.derived(alias, name)
+                : SqlExpr.Column.of(alias, name, type, true, com.legend.sql.OutputCol.Origin.DERIVED);
+        return type == SqlType.Scalar.JSON && slot == SqlType.Scalar.VARCHAR
+                ? new SqlExpr.Cast(read, SqlType.Scalar.VARCHAR) : read;
+    }
+
+    private static boolean extremeOfNullList(SqlExpr e) {
+        return e instanceof SqlExpr.Call c && (c.fn() == SqlFn.LIST_MIN || c.fn() == SqlFn.LIST_MAX)
+                && nullList(c.args().get(0))
+                || e instanceof SqlExpr.ReduceCollection rc && (rc.reducer() == SqlAgg.Fn.MIN
+                        || rc.reducer() == SqlAgg.Fn.MAX) && nullList(rc.collection());
+    }
+
+    private static boolean nullList(SqlExpr e) {
+        return e instanceof SqlExpr.NullLit || e instanceof SqlExpr.CompactList cl && nullList(cl.list());
     }
 
     /** A select that only explodes lists: every projection a one-list UNNEST, FROM nothing, no clause. */
@@ -2647,12 +2701,8 @@ public final class Snowflake extends AnsiSqlRenderer {
                 }
                 String name = markerColumn(p);
                 unnests.add(new SqlSelect.Projection(p.expr(), name, p.out()));
-                // the element's type, else the slot's when scalar (scalarSlot)
-                SqlType element = p.expr().type() instanceof com.legend.sql.TypeFact.Typed t ? t.type()
-                        : scalarSlot(p);
-                SqlExpr read = element == null ? SqlExpr.Column.derived(alias, name)
-                        : SqlExpr.Column.of(alias, name, element, true, com.legend.sql.OutputCol.Origin.DERIVED);
-                ps.add(new SqlSelect.Projection(read, p.alias(), p.out()));
+                ps.add(new SqlSelect.Projection(explodedRead(alias, p, p.out() != null ? p.out().type() : null),
+                        p.alias(), p.out()));
             }
             SqlSource marker = new SqlSource.Subselect(new SqlSelect(unnests, false, new SqlSource.Dual(), null,
                     List.of(), null, null, List.of(), null, null, List.of()), alias, null);

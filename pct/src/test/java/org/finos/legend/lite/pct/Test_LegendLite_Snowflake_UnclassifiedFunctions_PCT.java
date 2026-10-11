@@ -29,8 +29,13 @@ public class Test_LegendLite_Snowflake_UnclassifiedFunctions_PCT extends PCTRepo
     private static final String platform = "interpreted";
 
     // Pinned by a STABLE part of the message (the runner matches by containment): no per-run id.
+    // First measured 2026-10-11 on the account (Snowflake, 93 tests); burned down the same day: every
+    // row is the platform's own (pinned on the DuckDB lane too) or a measured limit of Snowflake.
     private static final MutableList<ExclusionSpecification> expectedFailures = Lists.mutable.with(
-            // first measured on the account: every row is pinned from the first run's report
+            // SNOWFLAKE'S OWN LIMIT: JAROWINKLER_SIMILARITY answers an integer percentage (96, measured), not the
+            // fraction, and the fraction cannot be recovered from it
+            one("meta::pure::functions::string::tests::jaroWinklerSimilarity::testJaroWinklerSimilarityEqual_Function_1__Boolean_1_", "\"JARO_WINKLER reached Snowflake: JAROWINKLER_SIMILARITY answers an integer percentage (96, measured), not DuckDB's fraction\""),
+            one("meta::pure::functions::string::tests::jaroWinklerSimilarity::testJaroWinklerSimilarityNotEqual_Function_1__Boolean_1_", "\"JARO_WINKLER reached Snowflake: JAROWINKLER_SIMILARITY answers an integer percentage (96, measured), not DuckDB's fraction\"")
     );
 
     public static Test suite() {

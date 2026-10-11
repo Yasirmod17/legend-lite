@@ -29,8 +29,12 @@ public class Test_LegendLite_Snowflake_RelationFunctions_PCT extends PCTReportCo
     private static final String platform = "interpreted";
 
     // Pinned by a STABLE part of the message (the runner matches by containment): no per-run id.
+    // First measured 2026-10-11 on the account (Snowflake, 469 tests); burned down the same day: every
+    // row is the platform's own (pinned on the DuckDB lane too) or a measured limit of Snowflake.
     private static final MutableList<ExclusionSpecification> expectedFailures = Lists.mutable.with(
-            // first measured on the account: every row is pinned from the first run's report
+            // THE PLATFORM'S OWN (each pinned on the DuckDB lane too, by the same cause): name resolution, lowering
+            // and harness limits, the 0-based indexOf, error positions and messages
+            one("meta::pure::functions::relation::tests::composition::testVariantArrayColumn_joinStrings_Function_1__Boolean_1_", "\"\nexpected: '#TDS\n   id,payload,joined\n   1,\'[1,2,3]\',1,2,3\n   2,\'[4,5,6]\',4,5,6\n   3,\'[7,8,9]\',7,8,9\n   4,\'null\',\n#'\nactual:   '#TDS\n   id,payload,joined\n   1,\'[1,2,3]\',1,2,3\n   2,\'[4,5,6]\',4,5,6\n   3,\'[7,8,9]\',7,8,9\n   4,\'null\',null\n#'\"")
     );
 
     public static Test suite() {

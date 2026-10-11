@@ -29,8 +29,9 @@ public class Test_LegendLite_Snowflake_StandardFunctions_PCT extends PCTReportCo
     private static final String platform = "interpreted";
 
     // Pinned by a STABLE part of the message (the runner matches by containment): no per-run id.
+    // First measured 2026-10-11 on the account (Snowflake, 205 tests); burned down the same day: every
+    // row is the platform's own (pinned on the DuckDB lane too) or a measured limit of Snowflake.
     private static final MutableList<ExclusionSpecification> expectedFailures = Lists.mutable.with(
-            // first measured on the account: every row is pinned from the first run's report
     );
 
     public static Test suite() {
