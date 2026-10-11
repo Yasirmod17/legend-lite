@@ -85,8 +85,14 @@ generated file, never a signature we typed ourselves.
   cadence: the plan's §6. Beside L4: the compile phase split over DataCube's model shape (mine: `model-scale.measure.ts`,
   `classModel(n)` at 10 and 200 through `//core:compile_latency` or the eager probe, offered 2026-10-10; input to
   DataCube's normalize-on-first-use design, the user's to schedule) and the Studio line's leg 8 typing changes to
-  review ((c) and (f) reviewed 2026-10-11; the step-2 records diff reviewed; (e) asked about). L4's homework
-  started 2026-10-11 (`runs/homework/phase6/NOTES.md` while it runs; the write-up goes to `evidence/phase6/`).
+  review ((c), (f) and the step-2 records diff reviewed 2026-10-11; (e), the infix slice, not yet cut, to review when it
+  is). **L4's homework measured 2026-10-11** (`evidence/phase6/HOMEWORK_2026_10_11.md`, 6-H1 to 6-H9; the DataCube
+  phase split there too: a 200-source page compiles in about 13 ms on the JVM, 56 % of it the normalizer). What it
+  decides: 27 repositories cover the corpus as well as 38 (6-O1 (a)); upstream's visibility rule changes no pick
+  (6-O10); the manifest world equals today's composition except for the 178 ownership-filtered functions, whose
+  admission refuses 60 corpus tests through the platform's `project` form, so **PARK-11 (the TDS rows by id) comes
+  before Phase 6 admits them: the user's ruling**; the scanRelations exclusion changes nothing any more (keep as a
+  design statement or delete: the user's call). Nothing of Phase 6 is coded before those rulings.
 - **Ruled 2026-10-10 (the user):** the default world is made by upstream's own compiler at bump time, every body
   followed (F2, F3; the plan's decision 6); the pre-built boot layer is part of Phase 4, sized on the numbers
   (decision 2 as amended); the typer's order is measured before the bump (decision 7). Nothing is pending from the
