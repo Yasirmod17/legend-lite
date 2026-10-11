@@ -8466,3 +8466,243 @@ anchor are deleted in this commit.
    the old pattern had gone blind to; the literal stays until step 5 spells it by the declaration); NAME_CUTTING
    106 → 107 and SIGNATURE_ID_CUTTING 1 → 2 (the bare id's base resolution moved into the resolver, once); the construction guard's rows re-pinned at the other protocol nodes'
    measured counts with `Calls` excluded.
+
+## 2026-10-11 — Create a Class…: a DataCube grid's rows made a class of the page's project (the DataCube + Python line)
+
+The DataCube model plan's step 2, its first landing (`docs/DATACUBE_MODEL_DESIGN_2026_10_10.md` §15; announced in
+IN_FLIGHT, a5a4eb7c4). A grid's rows become a Pure class with everything it needs to run, written to the page's project
+in the model home (the page's own SDLC, Studio's), so Studio opens it and Query reads it once a review commits it.
+Landed as one fast-forward, `a5a4eb7c4..0cee56761` (nine commits, four of them the design's):
+
+1. **core**: legend-lite's second route of its own, `/api/lite/v1/relational/promoteRelationToModel`, in
+   `PureV1Api.route` beside `/api/lite/v1/compilation/compile` (§15.6, agreed with the Studio line). The writer,
+   `com.legend.server.PromoteRelationToModel` (new, on `//core:pure_v1`; the server package's closed register), follows
+   legend-engine's REPL promotion: the relation's function typed as its own columns, a class (upstream's makeCamelCase,
+   made total), a `Relation { ~func }` mapping, key-only columns as local properties; and what the class needs to run:
+   ONE store for the place the rows are (`<pkg>::store::Browser`, a table per source -- lite plans over two stores only
+   when one connection serves both; the user's ruling), its connection (a path-less DuckDB written `':memory:'`, which
+   upstream's printer requires), the runtime naming `<pkg>::mapping::Model` alone (which includes each class's mapping
+   and will hold the associations), and the source's first rows as a `Data` element (named after its table as it is,
+   `trades_2` `Trades_2Sample`). Refused by name: a relation reading a store its place does not write, a class's or a
+   sample's name taken by another table's, a pivot, a name Pure reads as a word of its own. Answered as the SDLC's own
+   changes (`{type: CREATE|MODIFY, path, pureCode}`), each file printed by `ModelComposer` and read back as itself, the
+   model they make compiled whole and the class planned before answering. The mapping test waits for a mapping-test
+   runner (none in lite; the user's ruling).
+2. **The tab**: a grid's menu offers Create a Class… (the window: names, each column a property, a key only or left
+   out, the files shown); `WasmPlanner.promoteRelationToModel` asks the route through pure/v1's routing; the page's
+   project (`page-model.ts`) is made with its first class, saved over the revision read (a stale save made again
+   once), its workspace made again when a commit in Studio closed it; the page document's version 4 keeps it, and each
+   grid's table name, written for the grids the page holds, reserved while the page opens (Python's page at version 4
+   too: its reader reads its own version only); a page file is refused while its classes are only in this browser
+   (§15.3, until the Studio line's S23). **A new edge between two lines' modules: `datacube` depends on
+   `//sdlc-client:sdlc_client`** (`:src_base`; the Compiler Rewrite line's review).
+
+**Budget decision**: the grid-only page's startup script 383,000 -> 386,000 bytes gzipped (`bundle-budget.test.ts`),
+measured 385,251, main before it 381,890 (+3,361): the menu entry and its checks, the route call, the page's model in
+the page document, the kept and reserved table names and the page file's refusal at startup; the window, the page's model and the SDLC client are a chunk
+fetched the first time a class is made (`create-class.ts` imports nothing the page loads at startup, so no startup
+module moves into a shared chunk).
+
+What judges it: `//core:core_tests_server` (PromoteRelationToModelTest: the files pinned; the project alone compiles and
+plans; the sample loads as a service test's data through `ServiceTestRunner` on DuckDB and the class reads it; a second
+source joins the store; made again changes nothing; the refusals; four mutations each caught), `//core:guardrails`,
+`//core:census`, `//tools/deps:core_layering_test` (`pure_v1` reaches `compiler`, dated), `//parser-equivalence/...`
+(ratchet 2804 -> 2813, the test's snippets), `//datacube:create_class_test` (names, the class's query, the source's
+table, the page's model: a stale save made again once then said, the workspace made again),
+`//datacube:promote_route_test` (WASM: the route through the tab's module; the planner's model under its own section
+header -- the Plan Gen line's review, the test failing without the fix), `//datacube:verify_class_test` (Chromium: two
+classes of two grids, the first read back by the second; the page file refused, the share link saying so; saved,
+reloaded and reopened, each grid's table under its kept name), `//datacube:class_dialog_test` (a create the window's
+last word), `//datacube:page_document_test`, `//python:all`. Tried end
+to end on the one-origin site: DataCube writes the project; Studio opens it (0 errors), its review committed; Query
+opens the class by name at HEAD and runs it over the sample. Reviewed by the Compiler Rewrite line (the BUILD lines:
+`pure_v1`'s `:compiler` dep named, not dodged) and Plan Gen / Exec Split (the route call; one fix, made); audited (1 blocker -- a page keeping a removed grid's table name could never open again -- 9 should-fix and 7 notes, each fixed with a test or answered).
+Local gate: 338 of 338 before the audit's fixes; after them 339 of 340, the bundle budget 251 bytes over (the fixes' startup code), re-set to 386,000 and green. CI run 38109599876 on `ci/datacube-m2` (the
+final commit; a run on the commit before the audit's fixes, 38108046487, was green too), green on the lanes with a
+path to the change -- product, core, checks, parser_equivalence, warehouse, datacube, ui -- on every platform (27
+jobs); the PCT, corpus, stress and sdlc lanes not run: the change adds a route and its writer on `pure_v1` and
+DataCube's own code, and alters no compile path they use. Pushed to main as `0cee56761`, a fast-forward (main unmoved
+since the run), on the user's "do the audit and everything else".
+
+## 2026-10-11 — the protocol program's leg 8, step 1 and step 2's first part: one parser, the records as the JSON has them (the Studio / SDLC / Depot line)
+
+`docs/PROTOCOL_PROGRAM_2026_10_05.md` leg 8, its "Reordered" steps and as-built note. **One parser:** the compiler's
+text goes text → records (`PmcdParser.parse(text, dialect)`, the engine's section walk and import scoping at every
+dialect) → `ModelFromProtocol` → the compiler, and `ElementParser.parse` is the door over it; its own top-level
+assembly is deleted. Lite-only records (`PNativeFunction`, `PPrimitive`, `POpaqueElement`, `PAssociationProjection`)
+carry what the compiler parsed with no record, and the emitter refuses each by name. An element's error position is
+`ParsedModel.position(key)`. Behaviour changes, each reviewed by the Compiler Rewrite line: imports bound to their
+section (the bazel_smoke trading fixture relied on the leak); the engine's dialect refuses a stray `)`; a
+non-wildcard import and an unknown top-level keyword say "Unexpected token"; a plain string before a declaration
+names the multi-line documentation literal. **Step 2 so far** (each its own commit): the records mirror the engine's
+JSON -- where the compiler's input does not change (a view's groupBy, plain booleans, persistence entries and stub
+params by key, a flat target's defaults, a bare service query a lambda, spans no JSON carries, the mapping's raw
+test-suite text deleted from the record and the model), and where it does, at the engine's and lite's dialects only
+(the platform dialect keeps legend-pure's meaning): `$x.f()` is `$x.f` (the typer's zero-argument qualified-property
+lift takes a parameterized class, as the call route did); a graph-fetch `prop()` is `prop` (no `qualified` mark;
+`GraphEmission.childKey` spells a milestoned child's date either way -- inferred from the engine's JSON having no
+mark for the parentheses, not probed); `^Pair`, `^BasicColumnSpecification`, `^TdsOlapRank` are the calls the engine
+writes. Recorded, not changed: a persistence node is validated in its entries' key order, so which of several errors
+in one node is reported can differ (the parity lane's message and position tiers did not move).
+
+**Measured.** The new oracle (`JsonModelDoorTest`, in `//parser-equivalence:round_trip_proof`; pinned: matched up,
+failed down): the JSON round trip loses 401 of the engine collection's texts (821 before step 2; the rest is step 2's
+work list), none of lite's 166 project files or the showcase's 123. Against main's baseline at every change, rebuilt
+after L7 landed (430ff7420): the six corpus passes identical, the census within its ceilings (27 walls, 1,120
+failing bodies), the shadow probe's candidate rows identical, the reference lane byte-identical, PCT 17 of 17. Two
+of the judges' findings were fixed before their commits: legend-pure's `$s.toString()` beside a function-valued
+`toString` (router_routing.pure; hence the platform dialect's own meaning) and `Pair<A,B>.toString()` (PCT
+essential). Ledgers, shrink only: DropInSurfaceTextRuleTest's `ElementParser` 6 → 3 and `MappingProtocolParser` 3 → 2;
+`REFUSAL_ALLOW_TOTAL` 8 → 7 (a row of `docs/refusal-allowlist.tsv` removed); `MAX_MSG_GENUINE_MISMATCH` 254 → 205;
+`MSG_RICHER_FLOOR` 1240 → 1150, rows that moved to verbatim (main and branch measured, in its note).
+
+**Checked.** Audited (no blocker; 4 should-fix -- the oracle unpinned, an element its model's section index does not
+list given every section's imports, a skip of any spanless node, the validation order above -- and 6 notes, each
+fixed or recorded here). //core/... and //parser-equivalence/... 69 of 69; local gate: //gates:local green (328
+tests). CI run 38113792128 on `ci/leg8-land` (da876129d), the full gate.yml on every platform: green on every job, 50
+of 50 (2026-10-11, 05:07 to 05:37 UTC). Pushed to main with this record, the user's "Land it now".
+
+## 2026-10-11 — Create an Association…, Create a Data Space…: the page's model in one go, checked against legend-engine (the DataCube + Python line)
+
+The DataCube model plan's step 2, its second landing (`docs/DATACUBE_MODEL_DESIGN_2026_10_10.md` §15.6a, §15.7;
+announced in IN_FLIGHT, 23df2d588). Landed as one fast-forward, `741f24f9a..6e57d350c` (seven commits, one of them the
+design's, one the Studio line's site test):
+
+1. **core**: the routes named after Legend's actions, each atomic (the user's rulings, 2026-10-11):
+   `/api/lite/v1/model/createClass` (was `/api/lite/v1/relational/promoteRelationToModel`), `createAssociation`,
+   `createDataSpace`, in `PureV1Api.route`. One writer, `com.legend.server.ModelChanges` (new, on `//core:pure_v1`),
+   applies the actions to the project in memory -- each class (`CreateClass`, the old writer renamed and split; each
+   class over its grid's own source), then each association (`CreateAssociation`: Pure's own shape, its ModelJoin in
+   `<pkg>::mapping::Model`, a key-only column joined on, how many from the facts the tab reads), then the data space
+   (`CreateDataSpace`: the place's one execution context) -- checks the whole ONCE (the project and the changes alone
+   compile; each class and each association walked both ways plan), and answers the net changes, the associations the
+   model suggests, and what each class can be joined on. All or nothing; the writer writes over only what it made (a
+   class written in Studio, an association its mapping does not join, a data space over another mapping, an element of
+   another kind, a path that is also a package: each refused by name).
+2. **The engine's own check**: `ModelWriterUpstreamTest` pins the files one request writes (two classes with their
+   sample rows, their association, the data space) with legend-engine 4.145.0's recorded answers, each carrying its
+   pinned file's SHA-256 (`docs/datacube-model-homework-2026-10-11/record-upstream.sh`, run by hand): the project
+   compiled; each class's query and both walks planned. It caught one difference, fixed here: a `~func` descriptor's
+   types take no package (legend-pure's `FunctionDescriptor`), so the engine could not find
+   `TradeFn():meta::pure::...::Relation<...>[1]`; the writer writes `TradeFn():Relation<Any>[1]`, upstream's tests'
+   and Studio's form. Lite's compiler taking the qualified form is the Compiler Rewrite line's next landing (it lands
+   after this one: main's writer wrote that form); a path that is also a package joins their PARK-25.
+3. **The tab**: the page's menu has a Model group -- Create an Association… (the suggested pair, each end's class and
+   key, how many preset from the facts read in the tab, asked when its rows are not here) and Create a Data Space…
+   (the whole page in one go: the grids not yet classes made classes in the same window, suggested associations as
+   checkboxes); a grid's menu offers Create an Association… too. `WasmPlanner` is the model's writer
+   (`model-writer.ts`) on every plane: a grid planned on a server still makes its class through the tab's module
+   (`Planner.source()`). `site/verify.mjs` (the Studio line's file, its change reviewed by it): the one origin's chain
+   -- a DataCube class, committed in Studio, read in Query.
+
+**Budget decision**: the grid-only page's startup script 386,000 -> 387,000 bytes gzipped (`bundle-budget.test.ts`),
+measured 386,448, main before it 385,251 (+1,197): the Model menu and a grid's entry and their handlers, the routes'
+request, the facts' query and each grid's class in the page document, at startup; the windows, the actions, the names
+and the SDLC client are chunks fetched the first time one is asked for.
+
+What judges it: `//core:core_tests_server` (CreateClassTest; ModelChangesTest -- an association pinned and walked both
+ways, the suggestions, the window's start, the whole page in one go, all or nothing, the refusals, not written over,
+made again over its own files; ModelWriterUpstreamTest), `//core:guardrails`, `//parser-equivalence/...` (ratchet
+own_corpus.matched 2814 -> 2823 on 2026-10-11: the new tests' embedded Pure, measured by `update_ratchets` after the
+rebase), `//datacube:model_route_test` (WASM: the three routes through the tab's module), `//datacube:verify_class_test`
+(Chromium: two classes, the association from the Model menu with [0..1] and [*] from the facts, the data space, the
+export refused, saved and reopened, and the whole page in one go in a fresh tab), `//datacube:association_dialog_test`, `//datacube:class_dialog_test`,
+`//datacube:create_class_test`, `//datacube:page_document_test`, `//site:verify_test`, `//python:all`. Reviewed by the
+Compiler Rewrite line (the BUILD lines; OK) and Plan Gen / Exec Split (the planner boundary; one fix, made); audited
+(0 blockers, 7 should-fix and 7 notes, each fixed with a test or answered). Local gate: 339 of 341 before the audit's fixes, 337 of 341 after them; every miss a timeout under machine load
+(12 to 26, a second line's judges sharing the box), not a failure: each passed run again or with a longer limit, and
+`//studio:demo_test` and `//query:build_test` on the branch with the machine quiet took 7.9 s and 5.4 s (main, measured
+by the Studio line: 16.2 s and 9.1 s; leg 8 made neither slower). The lane query empty. CI run 38118975945 on
+`ci/datacube-m3`, green on the lanes with a path to the change -- product, core, checks, parser_equivalence,
+warehouse, datacube, ui -- on every platform (26 jobs); the PCT, corpus, stress and sdlc lanes not run: the change is the
+writer on `pure_v1` and DataCube's own code, and alters no compile path they use. Pushed to main as `6e57d350c`, a
+fast-forward (main unmoved since the run), on the user's "Push it", after their question whether the tests had got
+slower (answered by the measures above).
+
+## 2026-10-11 — A duplicate mapping is refused, never an index error (the Bazel program)
+
+**Landed 2026-10-11 as 0b29453e1** (branch `build/dup-mapping`; run 38145210104, full gate.yml on all platforms: green on every job after one re-run of windows / warehouse (a runner filesystem error in the Node module tree during analysis of `//datacube:jupyterlab_test`, which the change does not touch; the same error L7 step 3's run met once); the first run on the tree before the rebase onto datacube-m3, 38122177071, green on every job).
+Announced in `docs/IN_FLIGHT.md` the same day (37a3edb2c). The DataCube line reported it while writing tests: a model
+holding two mappings of one name, one including another, crashed `compileModel` with an `IndexOutOfBoundsException`
+from the normalizer's include ordering instead of a refusal.
+
+1. **The cause, two halves.** `StoreSubstitutionRewrite.resolveAllStores` counted the parsed mappings (a duplicate
+   twice) against the names it had ordered (once), read the difference as an include cycle, and indexed the cycle's
+   members — none, since every name was ordered. And a parsed mapping never took its slot in the shared element
+   namespace: the D6b batch (`docs/STAMP_DISCIPLINE_PROGRAM.md`) covered classes, enums, associations, profiles,
+   measures and databases, and mappings slotted last-wins by plain `intern`, so only the cycle check noticed.
+2. **The fix.** The cycle check counts the graph's names (`byFqn`): the ordered names are always among them, so a
+   difference names a member. `ModelBuilder.ingestLegacyMapping` registers the DSL mapping through `internElement`,
+   and the duplicate is refused as a class's is — and BEFORE Phase E reads the index (`ModelIntegrity.refuseDuplicates`,
+   called by `Compiler.normalizeLayer`; the engine's order, D6b's "element-identity first"), so a second copy's own
+   shape (a self-include, a repeated include) never speaks first: `compileModel` throws "Duplicated element 'w::M'";
+   the module path (`parseSources`) drops a same-kind duplicate at parse and reports it, as before, and walls a
+   cross-kind collision (a class and a mapping of one name) under the name. The gate's check keeps the arm for a
+   graph element shadowing a boot FQN. The normalized product still registers by plain `intern` under the same name.
+3. **Not fixed, recorded:** services, `###Data`, connections (a runtime's inline ones too), runtimes and clean-sheet
+   mappings still slot last-wins (`docs/PARKED_WORK_LEDGER.md` PARK-25, anchored on the services slot); two include
+   spellings of one mapping are refused as a cycle (PARK-26, anchored on the resolved names' count; the audit's find);
+   PARK-25 also records a path that is also a package, which the engine refuses ("An element named 'domain' already
+   exists in the package 'trades'"; the DataCube line's audit the same day) and lite, registering no package, does not.
+4. **Judges.** the six corpus passes against the baseline built from main 741f24f9a the same day: 22 result files identical, 0 differing (`evidence/dup-mapping/corpus_passes_compare.txt`); the render census, main's tree against the change, every JVM lane with the probe: 52543 (lane, dialect, kind, text) entries; 0 differ (`evidence/dup-mapping/render_census_compare.txt`); the local gate 328 targets green on the final tree (`bazel test --lockfile_mode=error //gates:local`); `//parser-equivalence/...` 6 targets green; the lane-membership query empty. The judges' one find: `RelationalMappingIntegrationTest.testDataMutations` named its class
+   `model::M`, as its mapping; the engine refuses the pair (one namespace), and so does lite now; the class is `model::Mut`
+   and the `//gates:core` lane's census was run again on the fixed tree (the only lane holding the test). The
+   parser-equivalence ratchet `own_corpus.matched` moves 2823 → 2832 (the nine elements of the new test models in
+   `IncludeRulesTest` joined the own corpus and matched; measured on the tree rebased onto 6e57d350c, whose own models had
+   moved it 2814 → 2823).
+5. **The parsed model's side maps key by path alone** (`ParsedModel.keyOf`), so a class and a mapping of one name
+   share one offset, imports and span entry; parser-equivalence's conformance ratchet caught it on the refusal's own
+   test (the planner placed the mapping at the class's offset and asked for a `###Mapping` header). `Sectionize.plan`
+   declines such a snippet as not sectionizable, as it declines one that does not parse; the keying, and the
+   refusal's position (the recorded element's, where the engine points at the second), are in PARK-25.
+6. **The audit** (`evidence/dup-mapping/AUDIT.md`: ready after fixes, 0 blockers, 5 should-fix, 3 nits, every one
+   answered): the refusal moved before Phase E (it had reported a self-include as a cycle); the cross-kind and
+   self-include cases tested; the wording narrowed to the DSL's mappings and clean-sheet mappings parked; a dangling
+   citation and a "below" fixed.
+
+## 2026-10-11 — A `~func` descriptor spelling a type by its package path is refused, as the engine refuses it (the Bazel program)
+
+**Landed 2026-10-11 as eabda91b8** (branch `build/func-descriptor`; run 38152032814, full gate.yml on all platforms: green on every job, 50 of 50, no re-run; main's own run of the previous landing (38147522593, on 0b29453e1) had timed out once in `//warehouse:tests_native` on linux / warehouse (300 s), a job the same commit passed in 38145210104 and again in this run, so its failed job was re-run rather than rolled back).
+Announced in `docs/IN_FLIGHT.md` the same day (9a6873d07). The DataCube line's find against legend-engine 4.145.0,
+writing the model writer's tests: a relation class mapping's `~func f():meta::pure::metamodel::relation::Relation<Any>[1]`
+compiled in lite and failed in the engine.
+
+1. **The engine's rule.** legend-pure's `FunctionDescriptor.validateType` (m3-core, `navigation/function/FunctionDescriptor.java`),
+   run by `functionDescriptorToId` on every descriptor the compiler resolves (`compiler/toPureGraph/PureModel.java`,
+   the prerequisite pass), allows no package path in a parameter or return type ("Package path not allowed in types:
+   <type>") and no function type ("Unsupported type"); a type's arguments are not read (the id keeps the head name).
+   The id conversion failing, the compiler looks the raw text up as an element and reports "Can't find the packageable
+   element".
+2. **Lite.** `MappingFromProtocol.relationFunction` cut the descriptor at its signature and resolved the name alone, so
+   the signature's spelling was never read. Now `refuseDescriptorTypes` reads each parameter type's and the return
+   type's head name (the multiplicity stripped, the arguments skipped, as the engine does) and refuses a package path
+   or a function type through the model door's own channel (`UnsupportedMappingShape`): the text door reports it at
+   the element with the descriptor's position, the JSON door as the element's `Unrepresentable`, the module path walls
+   the mapping. At every dialect: the signature means nothing in lite beyond the engine's id format, and a model written
+   so compiles nowhere. Not touched: the parser's descriptor scan, the activator's `function:` descriptor (parse-only in
+   lite), the wire.
+3. **Tests.** `RelationFunctionDescriptorTest` (the return type, a parameter type, a function type refused; the
+   simple-name form with and without the signature, and a package path inside a type argument, compile); the two
+   fixtures that spelled the long form (`RelationMappingWindowSeamTest`, `StackDesignWitnessTest`) rewritten to the
+   simple name, the only such texts in the repository (no corpus text uses the form). The parser-equivalence ratchet is unchanged (`own_corpus.matched` 2832) and the
+   lane green.
+4. **Judges.** the six corpus passes against the baseline built from main 9a6873d07 the same day: 22 result files identical, 0 differing (`evidence/func-descriptor/corpus_passes_compare.txt`); the render census, main's tree against the change, every JVM lane with the probe: 52550 (lane, dialect, kind, text) entries; 0 differ (`evidence/func-descriptor/render_census_compare.txt`); the local gate 329 targets green on the final tree (`bazel test --lockfile_mode=error //gates:local`); `//parser-equivalence/...` 6 targets green; the lane-membership query empty. The main-side census was run twice: the first run's swap to main's
+   source left the branch's new test file in place, so main's test library did not build and the core lane's records were
+   missing on that side (3384 entries "differ", all absent on main); the chain scripts now remove branch-only files
+   during the swap, and the second run is the one compared.
+5. **The audit** (`evidence/func-descriptor/AUDIT.md`: ready after fixes, 0 blockers, 5 should-fix, 6 notes, every one
+   answered): the JSON door tested (the text's protocol JSON read back and compiled, refused with the engine's phrase);
+   a JSON-carried descriptor's spaces removed outside quotes before the scan, as the engine's lexer drops them; PARK-28
+   records that the signature itself is never matched against the function's (the engine resolves by the full id
+   `f__Relation_1_`, lite by the name alone; the `~src f():R[1]` form drops its tail at parse; the activator's
+   `function:` descriptor is parse-only), anchored on the signature cut and pinned in `ParkedWorkLedgerTest`; the
+   identity guard's NAME_AFFIX_TEST re-pinned 51 → 52 with the reason (a descriptor TYPE's spelling tested for a package
+   path: the engine's rule on text never resolved into a declaration, not a name's affix); a unit type and a type
+   variable tested as accepted; the handoff note of 2026-09-02 corrected.
+6. **Two differences from the announcement, and one from the engine.** The refusal rides the model door's own channel
+   (`UnsupportedMappingShape`): a positioned `ParseException` from text, `Unrepresentable` from JSON, which
+   `Compiler.compileModel` reports as `NotImplementedException` (the channel's wording, not this rule's), not the
+   `ModelException` the announcement named; and a function type in a parameter or return position is refused too
+   ("Unsupported type"), the same `validateType`. Lite's message names the rule and the type where the engine reports
+   "Can't find the packageable element '<descriptor>'" at the class mapping (its id conversion fails and the raw text is
+   looked up): a deliberate difference, so an engine-fixture comparison of this case sees two messages.

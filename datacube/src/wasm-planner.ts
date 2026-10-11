@@ -28,6 +28,7 @@ import { element, fn, fromJson, lambda, readLambda, readValueSpecification, toJs
 import type { Planner } from './cube.ts';
 import type { CatalogColumn, InferOptions, InferredModel, TableModels } from './infer.ts';
 import { PlanError, type ModelOptions } from './planner.ts';
+import { modelRequestBody, type AssociationAction, type ClassAction, type DataSpaceAction, type GridSource, type ModelAnswer, type ModelWriter } from './model-writer.ts';
 import type { PrintStyle } from '../../engine-client/src/pure-v1.ts';
 import { relationColumns, type Plan, type PlanColumn } from '../../engine-client/src/relation-type.ts';
 import type { SeedTable, TableSeed } from '../../engine-client/src/model-data.ts';
@@ -125,7 +126,7 @@ interface Transport {
   generation: number;
 }
 
-export class WasmPlanner implements Planner, TableModels {
+export class WasmPlanner implements Planner, TableModels, ModelWriter {
   #options: WasmPlannerOptions;
   readonly #cache = new Map<string, Plan>();
   readonly #types = new Map<string, PlanColumn[]>();
@@ -491,6 +492,37 @@ export class WasmPlanner implements Planner, TableModels {
       ? await this.#ask({ kind: 'pureV1', path, query, body })
       : (await this.#load()).exports.pureV1OrError(path, query, body);
     return pureV1Body(decode(answer, subject), subject);
+  }
+
+  /**
+   * THE MODEL'S WRITER (model-writer.ts; docs/DATACUBE_MODEL_DESIGN_2026_10_10.md §15.6a): legend-lite's createClass,
+   * createAssociation and createDataSpace, asked through pure/v1's routing as every compiler question is -- each one
+   * call, atomic, over the project's files (`project`), each class over its grid's own source. Nothing is held: a model
+   * is written once, against the project as it is then. This module writes on every plane: beside a server's planner,
+   * too (demo/planners.ts).
+   */
+  createClass(project: string, pkg: string, cls: ClassAction): Promise<ModelAnswer> {
+    return this.#writeModel('createClass', modelRequestBody(toJson, project, pkg, { class: cls }));
+  }
+
+  createAssociation(project: string, pkg: string, association: AssociationAction | undefined,
+    classes: readonly ClassAction[] = []): Promise<ModelAnswer> {
+    return this.#writeModel('createAssociation', modelRequestBody(toJson, project, pkg,
+      association === undefined ? { classes } : { classes, association }));
+  }
+
+  createDataSpace(project: string, pkg: string, dataSpace: DataSpaceAction, classes: readonly ClassAction[] = [],
+    associations: readonly AssociationAction[] = []): Promise<ModelAnswer> {
+    return this.#writeModel('createDataSpace', modelRequestBody(toJson, project, pkg, { classes, associations, dataSpace }));
+  }
+
+  async #writeModel(route: string, body: string): Promise<ModelAnswer> {
+    return JSON.parse(await this.#pureV1(`/api/lite/v1/model/${route}`, '', body, body)) as ModelAnswer;
+  }
+
+  /** Where this planner's queries are planned from: its model, and the runtime they run on. */
+  source(): GridSource {
+    return { model: this.#options.model, runtime: this.#options.runtime };
   }
 
   /** E4 (`grammar/jsonToGrammar/lambda`): a query as Pure text, as upstream prints it. */

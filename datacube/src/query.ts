@@ -359,7 +359,60 @@ export function levelLambda(snapshot: CubeSnapshot, scope?: LevelScope, pivot?: 
   return levelRelation(snapshot, scope, pivot).lambda();
 }
 
-function levelRelation(snapshot: CubeSnapshot, scope?: LevelScope, pivot?: PivotFacts): Relation {
+/**
+ * A CLASS'S ROWS (docs/DATACUBE_MODEL_DESIGN_2026_10_10.md §15.1, Create a Class…): the cube's rows at its finest
+ * level, as the grid shows them -- a flat cube's rows (its calculated columns, its filter, the columns it shows), a
+ * grouped cube's groups (one row per group, its measures beside its keys) -- in no order and uncapped: a class's
+ * instances have neither. Refused in words: a pivot (its columns are its values, and a class's properties are fixed),
+ * and a total with no group (one row, of no name).
+ */
+export function classLambda(snapshot: CubeSnapshot): Lambda {
+  if (snapshot.pivotOn.length > 0) throw new Error('a class has fixed properties: take the pivot off first');
+  if (snapshot.rows.length === 0 && snapshot.measures.length > 0) {
+    throw new Error('a total alone is one row: group by a column first, or take the measures off');
+  }
+  return levelRelation(snapshot, undefined, undefined, false).lambda();
+}
+
+/**
+ * The table a source reads, when it reads one straight from its store (`#>{local::DB.trades}#`, a table model's
+ * accessor): its Database's path, its schema (`default` when it names none) and its name. Undefined for any other
+ * source (a query, a class, a join).
+ */
+export function storeTableOf(source: ValueSpecification): { readonly database: string; readonly schema: string; readonly table: string } | undefined {
+  const node = source as { readonly _type?: string; readonly type?: string; readonly value?: { readonly path?: unknown } };
+  if (node._type !== 'classInstance' || node.type !== '>') return undefined;
+  const path = node.value?.path;
+  if (!Array.isArray(path) || !path.every((p) => typeof p === 'string') || path.length < 2 || path.length > 3) return undefined;
+  const [database, ...rest] = path as string[];
+  return rest.length === 2
+    ? { database: database!, schema: rest[0]!, table: rest[1]! }
+    : { database: database!, schema: 'default', table: rest[0]! };
+}
+
+/** How many of a source's rows a class's sample holds (docs/DATACUBE_MODEL_DESIGN_2026_10_10.md §15.2: the first 100). */
+export const SAMPLE_ROWS = 100;
+
+/** A source's first `n` rows, as they are: a class's sample (its Data element). */
+export function sampleLambda(source: ValueSpecification, n: number = SAMPLE_ROWS): Lambda {
+  return from(source).limit(n).lambda();
+}
+
+/**
+ * A FACT FOR AN ASSOCIATION (docs/DATACUBE_MODEL_DESIGN_2026_10_10.md §15.6a): the first value of `column` that
+ * `relation` holds more than once -- no row, and the column is unique over the relation's rows (an association's end
+ * on it is to one).
+ */
+export function duplicateLambda(relation: ValueSpecification, column: string): Lambda {
+  return from(relation)
+    .groupBy([column], [agg('rows', lambda(['x'], lit.integer(1)), lambda(['y'], fn('count', variable('y'))))])
+    .filter(lambda(['x'], fn('greaterThan', { _type: 'property', property: 'rows', parameters: [variable('x')] }, lit.integer(1))))
+    .limit(1)
+    .lambda();
+}
+
+/** `ordered`: a level's rows sorted and capped as the grid reads them; a class's, neither. */
+function levelRelation(snapshot: CubeSnapshot, scope?: LevelScope, pivot?: PivotFacts, ordered = true): Relation {
   let rel = from(snapshot.source.query);
   const groupCols = scope ? snapshot.rows.slice(0, Math.max(0, scope.level)) : snapshot.rows;
   const grandTotal = scope !== undefined && scope.level === 0 && snapshot.rows.length > 0;
@@ -468,7 +521,7 @@ function levelRelation(snapshot: CubeSnapshot, scope?: LevelScope, pivot?: Pivot
     if (!d.childAggregate) rel = extendDerived(rel, d, levelWindow);
   }
 
-  if (!isSingleRow(snapshot, groupCols, grandTotal)) {
+  if (ordered && !isSingleRow(snapshot, groupCols, grandTotal)) {
     const sorts = totalOrderSorts(snapshot, groupCols).filter((x) => produced === null || produced.has(x.column));
     if (sorts.length > 0) rel = rel.sort(sorts.map(sortKey));
     if (scope?.limit !== undefined) {
