@@ -370,7 +370,12 @@ The tab's module and Python's native library are adapters: each export a one-lin
   library (GraalVM) holds the 200-class page in 30 ms, against the module's 3,975 ms. So the 4 s comes from how the
   module (TeaVM) runs this compile, about 130x, not from the compile's own work (the JVM: about 13 ms, e56d802c4). Four
   functions take 85% of a profiled hold; naming them needs an unobfuscated build, the owners' step (the Compiler Rewrite
-  and Plan Gen / Exec Split lines).
+  and Plan Gen / Exec Split lines). **Named the same day by the Compiler Rewrite line**
+  (docs/build-inventory/program/TEAVM_UNMODIFIABLE_DESIGN_2026_10_11.md, on its branch): TeaVM 0.15.0's unmodifiable set
+  and map scan the whole collection on every lookup, and the compiler's name resolution asks them for every candidate
+  package of every name. With upstream's fix (TeaVM 0.16.0) ported, measured on this harness: the boot 3,618 to 299 ms,
+  a 200-class page 4,239 to 73 ms. Not landed; the user rules between the port and the TeaVM bump. After it lands,
+  `//datacube:model_scale_measure` reruns on the module as the receipt.
 
 ## 12. Withdrawn from revision 2
 
