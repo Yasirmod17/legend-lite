@@ -48,7 +48,7 @@ switches (`Databases.dialect`, `.servers`, `.loadsRowsInBulk`, `Sessions.jdbcPro
 measured on the account before it is trusted (execution beats documentation).
 
 4. **Then, after the three clouds, the open ones first (the user's order, 2026-10-11): SQLite, MariaDB/MySQL,
-   Trino, MongoDB, Elasticsearch, then SingleStore.** Each runs locally with no account (embedded, or a Docker
+   Trino, ClickHouse, MongoDB, Elasticsearch, then SingleStore.** Each runs locally with no account (embedded, or a Docker
    image: this container has Docker):
    - **SQLite**: today it is no dialect class, only `Lexicon.SQLITE` handed to `AnsiSqlRenderer`, with the gaps
      that lexicon row's comment lists (no aliased `VALUES`, typed date literals, lists, `QUALIFY`, as-of, pivot). Make
@@ -60,6 +60,10 @@ measured on the account before it is trusted (execution beats documentation).
      an array type), and neither has `FULL OUTER JOIN` or `QUALIFY`.
    - **Trino**: the `trinodb/trino` image with the memory connector; typed arrays, lambdas and maps, so much of
      `Databricks` carries over. One dialect covers Presto, Starburst and Athena.
+   - **ClickHouse** (Apache-2.0): the `clickhouse/clickhouse-server` image; typed arrays, lambdas (`arrayMap`,
+     `arrayFilter`, `arrayFold`), maps and tuples, so it builds on the Trino and Databricks work. Not in
+     legend-engine, so no reference dialect to compare against; its own quirks first (a column is non-NULL unless
+     `Nullable(T)`, `join_use_nulls` for SQL's outer-join NULLs, case-sensitive function names).
    - **MongoDB** and **Elasticsearch**: stores that are not SQL, translated from the same `SqlQuery` IR (§9).
    - **SingleStore**: its Dev Image (`ghcr.io/singlestore-labs/singlestoredb-dev`) runs one aggregator and one leaf
      with no licence key, for development and functional testing only, under SingleStore's Free Tier licence (not
@@ -266,7 +270,6 @@ Spanner, Trino), ordered by how much an existing dialect carries over and by wha
 | Oracle | none | the `gvenzl/oracle-free` image (23ai) | `''` is NULL, a deep divergence that will pin many tests; BOOLEAN only since 23ai |
 | SingleStore (MemSQL) | MySQL | its free developer image | follows the MySQL dialect |
 | Spanner | `BigQuery` (GoogleSQL) | Google's Spanner emulator | |
-| ClickHouse | `Databricks`/`Trino` (arrays, lambdas) | the `clickhouse/clickhouse-server` image | not in legend-engine; popular for analytics |
 | DB2, Sybase ASE/IQ | the engine-text printers (`EngineStyleDB2`) are text only, not an execution dialect | licences make a lane hard | low priority |
 
 The images need Docker, which this cloud container has (`/usr/bin/docker`); CI would need it too, or the engines' own
