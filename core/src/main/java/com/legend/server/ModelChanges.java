@@ -56,9 +56,14 @@ public final class ModelChanges {
         return made(request, List.of(request.getObj("class")), List.of(), null);
     }
 
-    /** {@code createAssociation}: {@code {"project", "package", "classes"?, "association"}}. */
+    /**
+     * {@code createAssociation}: {@code {"project", "package", "classes"?, "association"?}} -- with no association,
+     * nothing is made: the answer says what the model suggests, and what each class can be joined on (the window's
+     * start).
+     */
     public static Map<String, Object> createAssociation(Json.Obj request) {
-        return made(request, items(request, "classes"), List.of(request.getObj("association")), null);
+        Json.Obj association = request.getObjOr("association", null);
+        return made(request, items(request, "classes"), association == null ? List.of() : List.of(association), null);
     }
 
     /** {@code createDataSpace}: {@code {"project", "package", "classes"?, "associations"?, "dataSpace"}}. */
@@ -106,6 +111,7 @@ public final class ModelChanges {
             out.put("dataSpace", space);
         }
         out.put("suggestions", m.suggestions(pkg));
+        out.put("joinable", m.joinable(pkg));
         out.put("notes", m.notes);
         return out;
     }
@@ -248,6 +254,62 @@ public final class ModelChanges {
         return out;
     }
 
+    /**
+     * WHAT EACH CLASS CAN BE JOINED ON: each class of {@code pkg}'s domain, each property and key only of it, its type,
+     * whether the class shows it, and the column of the relation function it is read from -- what the caller asks
+     * whether it is unique over the class's rows ({@code query.ts duplicateLambda}), DataCube in its tab.
+     */
+    List<Map<String, Object>> joinable(String pkg) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (String cls : classesOf(pkg)) {
+            Set<String> shown = new HashSet<>();
+            Json.Obj c = elements.get(cls);
+            for (Json.Node n : arrOf(c == null ? Json.obj() : c, "properties").items()) {
+                shown.add(((Json.Obj) n).getString("name"));
+            }
+            String function = "";
+            Map<String, String> columns = new LinkedHashMap<>();
+            for (Json.Obj e : elements.values()) {
+                if (!"mapping".equals(e.getStringOr("_type", ""))) {
+                    continue;
+                }
+                for (Json.Node n : arrOf(e, "classMappings").items()) {
+                    Json.Obj cm = (Json.Obj) n;
+                    if (!"relation".equals(cm.getStringOr("_type", "")) || !cls.equals(cm.getStringOr("class", ""))) {
+                        continue;
+                    }
+                    String descriptor = textOf(objOf(cm, "relationFunction"), "path");
+                    int open = descriptor.indexOf('(');
+                    function = open < 0 ? descriptor : descriptor.substring(0, open);
+                    for (Json.Node pm : arrOf(cm, "propertyMappings").items()) {
+                        Json.Obj p = (Json.Obj) pm;
+                        columns.put(textOf(objOf(p, "property"), "property"), textOf(p, "column"));
+                    }
+                }
+            }
+            List<Map<String, Object>> keys = new ArrayList<>();
+            for (Map.Entry<String, String> k : keysOf(cls).entrySet()) {
+                Map<String, Object> key = new LinkedHashMap<>();
+                key.put("name", k.getKey());
+                key.put("type", k.getValue());
+                key.put("shown", shown.contains(k.getKey()));
+                String column = columns.get(k.getKey());
+                if (column != null && !column.isEmpty()) {
+                    key.put("column", column);
+                }
+                keys.add(key);
+            }
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("class", cls);
+            if (!function.isEmpty()) {
+                entry.put("function", function);
+            }
+            entry.put("keys", keys);
+            out.add(entry);
+        }
+        return out;
+    }
+
     /** The classes of {@code pkg}'s domain the project holds, by path. */
     List<String> classesOf(String pkg) {
         List<String> out = new ArrayList<>();
@@ -278,8 +340,8 @@ public final class ModelChanges {
 
     /**
      * THE ASSOCIATIONS THE MODEL SUGGESTS (§15.6a): each key or property of a class named after another class and one
-     * of its properties, of its type ({@code Trade.customerId}, {@code Customer.id}), between two classes no association
-     * relates yet -- offered, never made.
+     * of its properties, of its type ({@code Trade.customerId}: {@code Customer.id}, or {@code Customer.customerId}, the
+     * same name), between two classes no association relates yet -- offered, never made.
      */
     private List<Map<String, Object>> suggestions(String pkg) {
         List<Map<String, Object>> out = new ArrayList<>();
@@ -294,7 +356,11 @@ public final class ModelChanges {
                 Map<String, String> bKeys = keysOf(b);
                 for (Map.Entry<String, String> k : keysOf(a).entrySet()) {
                     for (Map.Entry<String, String> p : bKeys.entrySet()) {
-                        if (k.getKey().equals(named + upperFirst(p.getKey())) && k.getValue().equals(p.getValue())) {
+                        // `Trade.customerId` names `Customer.id` (the class and its property), or `Customer.customerId`
+                        // (the same name, the other class's: its own key, named after it)
+                        boolean names = k.getKey().equals(named + upperFirst(p.getKey()))
+                                || (k.getKey().equals(p.getKey()) && k.getKey().startsWith(named) && !k.getKey().equals(named));
+                        if (names && k.getValue().equals(p.getValue())) {
                             Map<String, Object> s = new LinkedHashMap<>();
                             s.put("ends", List.of(Map.of("class", b, "on", p.getKey()), Map.of("class", a, "on", k.getKey())));
                             out.add(s);

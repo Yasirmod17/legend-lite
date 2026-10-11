@@ -10,7 +10,8 @@ import type { SdlcClient } from '../../sdlc-client/src/client.ts';
 import type { QueryEngine } from '../../engine-client/src/engine.ts';
 import type { Planner } from './cube.ts';
 import { PageModel, saveFresh, type PageModelRef } from './page-model.ts';
-import { BROWSER_PLACE, suggestedClassName, suggestedPackage, type ClassAction, type GridSource, type ModelWriter } from './model-writer.ts';
+import type { ClassAction, GridSource, ModelWriter } from './model-writer.ts';
+import { BROWSER_PLACE, suggestedClassName, suggestedPackage } from './model-names.ts';
 import { classDialog, type ClassChoice, type ClassPreview, type CreatedClass } from './ui/class-dialog.ts';
 import type { ModelAnswer } from './model-writer.ts';
 
@@ -85,7 +86,11 @@ export async function createClassOf(o: CreateClassOf): Promise<PageModelRef | un
       const made = await saveFresh(model, `Create a Class: ${c.className}`,
         (project) => o.writer.createClass(project, ref.package, action(c)));
       // the grid's table keeps its name from now: the project's store reads it by that name
-      if (o.cube !== undefined) model.keepTable(o.cube, table.table);
+      if (o.cube !== undefined) {
+        model.keepTable(o.cube, table.table);
+        const cls = made.classes[0]?.class;
+        if (cls !== undefined) model.keepClass(o.cube, cls);
+      }
       const after = model.ref ?? ref;
       const kept = await o.persist();
       return {

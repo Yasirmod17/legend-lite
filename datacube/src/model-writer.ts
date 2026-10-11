@@ -5,6 +5,7 @@
 
 import type { Lambda } from '../../pure-protocol/src/index.ts';
 import type { PureChange } from '../../sdlc-client/src/wire.ts';
+import type { Planner } from './cube.ts';
 
 /** How a column of the relation is taken: a property of the class, a key only (a local property of the mapping, for an
  *  association to join on), or left out. */
@@ -100,6 +101,14 @@ export interface Suggestion {
   readonly ends: readonly [{ readonly class: string; readonly on: string }, { readonly class: string; readonly on: string }];
 }
 
+/** What a class of the project can be joined on: each property and key only, whether the class shows it, its column. */
+export interface Joinable {
+  readonly class: string;
+  /** The relation function its rows are read from (its mapping's `~func`). */
+  readonly function?: string;
+  readonly keys: readonly { readonly name: string; readonly type: string; readonly shown: boolean; readonly column?: string }[];
+}
+
 /** A route's answer: the files to write, what was made, the associations suggested. */
 export interface ModelAnswer {
   /** `CREATE` for an element the project does not hold, `MODIFY` for one it does. */
@@ -108,21 +117,26 @@ export interface ModelAnswer {
   readonly associations: readonly MadeAssociation[];
   readonly dataSpace?: string;
   readonly suggestions: readonly Suggestion[];
+  /** Each class of the package, after the changes: what it can be joined on. */
+  readonly joinable: readonly Joinable[];
   readonly notes: readonly string[];
 }
 
 /** The model's writer: the tab's module (WasmPlanner), asked on every plane. */
 export interface ModelWriter {
   createClass(project: string, pkg: string, cls: ClassAction): Promise<ModelAnswer>;
-  createAssociation(project: string, pkg: string, association: AssociationAction,
+  /** With no association, nothing is made: the answer's suggestions and joinable classes start the window. */
+  createAssociation(project: string, pkg: string, association: AssociationAction | undefined,
     classes?: readonly ClassAction[]): Promise<ModelAnswer>;
   createDataSpace(project: string, pkg: string, dataSpace: DataSpaceAction, classes?: readonly ClassAction[],
     associations?: readonly AssociationAction[]): Promise<ModelAnswer>;
+  /** A planner over the project's files: the facts an association's how-many is preset from are planned there. */
+  withModel(model: string, runtime: string): Planner;
 }
 
 /** Whether `x` writes the model. */
 export function writesModels(x: object): x is ModelWriter {
-  return 'createClass' in x && 'createAssociation' in x && 'createDataSpace' in x;
+  return 'createClass' in x && 'createAssociation' in x && 'createDataSpace' in x && 'withModel' in x;
 }
 
 /**
@@ -145,64 +159,8 @@ export function modelRequestBody(lambdaJson: (query: Lambda) => string, project:
   const fields = [`"project":${JSON.stringify({ _type: 'text', code: project })}`, `"package":${JSON.stringify(pkg)}`];
   if (parts.class) fields.push(`"class":${cls(parts.class)}`);
   if (parts.classes) fields.push(`"classes":[${parts.classes.map(cls).join(',')}]`);
-  if (parts.association) fields.push(`"association":${JSON.stringify(parts.association)}`);
+  if (parts.association !== undefined) fields.push(`"association":${JSON.stringify(parts.association)}`);
   if (parts.associations) fields.push(`"associations":${JSON.stringify(parts.associations)}`);
   if (parts.dataSpace) fields.push(`"dataSpace":${JSON.stringify(parts.dataSpace)}`);
   return `{${fields.join(',')}}`;
-}
-
-/** The place DataCube's tab is, in a project: the tab's DuckDB. */
-export const BROWSER_PLACE = 'Browser';
-
-/**
- * The class a source's name suggests: its file's name without the extension, in upper camel case, singular --
- * `trades.csv` a `Trade`, `order_lines.parquet` an `OrderLine`. A suggestion only: the person names it.
- */
-export function suggestedClassName(sourceName: string): string {
-  const base = sourceName.replace(/\.[A-Za-z0-9]+$/, '');
-  const words = base.split(/[^A-Za-z0-9]+/).filter((w) => w !== '');
-  if (words.length > 0) words[words.length - 1] = singular(words[words.length - 1]!);
-  const name = words.map((w) => w.charAt(0).toUpperCase() + (w === w.toUpperCase() ? w.slice(1).toLowerCase() : w.slice(1))).join('');
-  if (name === '') return 'Item';
-  return /^[0-9]/.test(name) ? `_${name}` : name;
-}
-
-/** An English plural's singular, for the common endings; anything else as it is. */
-function singular(word: string): string {
-  const lower = word.toLowerCase();
-  if (/(ss|us|is)$/.test(lower)) return word;
-  if (lower.endsWith('ies') && word.length > 3) return `${word.slice(0, -3)}${word.slice(-3) === 'IES' ? 'Y' : 'y'}`;
-  if (/(xes|ches|shes|sses)$/.test(lower)) return word.slice(0, -2);
-  if (lower.endsWith('s') && word.length > 1) return word.slice(0, -1);
-  return word;
-}
-
-/**
- * The package a page's name suggests for its project's elements: its words in lower camel case (`Trades by desk`
- * `tradesByDesk`), a Pure name; `datacube` when the name has none.
- */
-export function suggestedPackage(pageName: string): string {
-  const words = pageName.split(/[^A-Za-z0-9]+/).filter((w) => w !== '');
-  const name = words.map((w, i) => {
-    const rest = w === w.toUpperCase() ? w.slice(1).toLowerCase() : w.slice(1);
-    return (i === 0 ? w.charAt(0).toLowerCase() : w.charAt(0).toUpperCase()) + rest;
-  }).join('');
-  if (name === '') return 'datacube';
-  return /^[0-9]/.test(name) ? `_${name}` : name;
-}
-
-/** The data space a page's name suggests: its words in upper camel case (`Trades by desk` `TradesByDesk`). */
-export function suggestedDataSpaceName(pageName: string): string {
-  const pkg = suggestedPackage(pageName);
-  return pkg.charAt(0).toUpperCase() + pkg.slice(1);
-}
-
-/** A Pure name: letters, digits and `_`, not led by a digit, and no word Pure reads as a literal. */
-export function isPureName(name: string): boolean {
-  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && name !== 'true' && name !== 'false';
-}
-
-/** A package: Pure names joined by `::`. */
-export function isPackage(name: string): boolean {
-  return name.split('::').every(isPureName);
 }

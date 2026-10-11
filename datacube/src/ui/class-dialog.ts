@@ -5,7 +5,8 @@
 // planner and the model home); this window asks and shows, and asks the route again as the choices change.
 
 import { focusedElement } from '../focus.ts';
-import { isPackage, isPureName, type ColumnChoice, type ColumnRole, type MadeProperty } from '../model-writer.ts';
+import type { ColumnChoice, ColumnRole, MadeProperty } from '../model-writer.ts';
+import { isPackage, isPureName } from '../model-names.ts';
 import type { PureChange } from '../../../sdlc-client/src/wire.ts';
 
 /** What a person chose: the request's names and each column's choice. */

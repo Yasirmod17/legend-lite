@@ -505,9 +505,10 @@ export class WasmPlanner implements Planner, TableModels, ModelWriter {
     return this.#writeModel('createClass', modelRequestBody(toJson, project, pkg, { class: cls }));
   }
 
-  createAssociation(project: string, pkg: string, association: AssociationAction,
+  createAssociation(project: string, pkg: string, association: AssociationAction | undefined,
     classes: readonly ClassAction[] = []): Promise<ModelAnswer> {
-    return this.#writeModel('createAssociation', modelRequestBody(toJson, project, pkg, { classes, association }));
+    return this.#writeModel('createAssociation', modelRequestBody(toJson, project, pkg,
+      association === undefined ? { classes } : { classes, association }));
   }
 
   createDataSpace(project: string, pkg: string, dataSpace: DataSpaceAction, classes: readonly ClassAction[] = [],

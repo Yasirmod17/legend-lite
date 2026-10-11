@@ -157,6 +157,34 @@ class ModelChangesTest {
     }
 
     @Test
+    @DisplayName("suggested by the same name too: Trade.customerId names Customer.customerId, the other class's own key")
+    void suggestedByTheSameName() {
+        String customers = TRADES.replace(
+                "Table trades ( trade_id INTEGER NOT NULL, customer_id INTEGER, notional DOUBLE )",
+                "Table customers ( customer_id INTEGER NOT NULL, name VARCHAR(20) )");
+        Map<String, Object> trade = ModelChanges.createClass(Json.parseObject(request("", "\"class\": " + TRADE)));
+        Map<String, Object> both = ModelChanges.createClass(Json.parseObject(request(project(trade),
+                "\"class\": " + cls(customers, "customers", "Customer", "{}"))));
+        assertEquals(List.of(Map.of("ends", List.of(Map.of("class", "trades::domain::Customer", "on", "customerId"),
+                Map.of("class", "trades::domain::Trade", "on", "customerId")))), both.get("suggestions"));
+    }
+
+    @Test
+    @DisplayName("an association of nothing makes nothing: what is suggested, and what each class is joined on, from what")
+    void theWindowsStart() {
+        Map<String, Object> start = ModelChanges.createAssociation(Json.parseObject(request(twoClasses(), "\"classes\": []")));
+        assertEquals(List.of(), start.get("changes"));
+        assertEquals(1, ((List<?>) start.get("suggestions")).size());
+        Map<?, ?> trade = (Map<?, ?>) ((List<?>) start.get("joinable")).stream()
+                .filter(c -> "trades::domain::Trade".equals(((Map<?, ?>) c).get("class"))).findFirst().orElseThrow();
+        assertEquals("trades::function::TradeFn", trade.get("function"));
+        assertEquals(List.of(
+                Map.of("name", "tradeId", "type", "Integer", "shown", true, "column", "trade_id"),
+                Map.of("name", "notional", "type", "Float", "shown", true, "column", "notional"),
+                Map.of("name", "customerId", "type", "Integer", "shown", false, "column", "customer_id")), trade.get("keys"));
+    }
+
+    @Test
     @DisplayName("the whole page in one go: two classes, their association and the data space, one request, all new")
     void inOneGo() {
         Map<String, Object> all = ModelChanges.createDataSpace(Json.parseObject(request("",

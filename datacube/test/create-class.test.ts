@@ -9,7 +9,8 @@ import { accessor, toJson } from '../../pure-protocol/src/index.ts';
 import { SdlcError, type SdlcClient } from '../../sdlc-client/src/client.ts';
 import type { PureChange } from '../../sdlc-client/src/wire.ts';
 import { PageModel, artifactIdOf, projectText, saveFresh } from '../src/page-model.ts';
-import { isPackage, isPureName, suggestedClassName, suggestedDataSpaceName, suggestedPackage, writesModels } from '../src/model-writer.ts';
+import { writesModels } from '../src/model-writer.ts';
+import { isPackage, isPureName, suggestedClassName, suggestedDataSpaceName, suggestedPackage } from '../src/model-names.ts';
 import { classLambda, duplicateLambda, sampleLambda, storeTableOf } from '../src/query.ts';
 import type { CubeSnapshot } from '../src/snapshot.ts';
 
@@ -81,7 +82,8 @@ describe("the grid's rows, as a class's", () => {
   });
 
   it('the model\'s writer is the one that answers the three routes', () => {
-    assert.ok(writesModels({ createClass: () => undefined, createAssociation: () => undefined, createDataSpace: () => undefined }));
+    assert.ok(writesModels({ createClass: () => undefined, createAssociation: () => undefined, createDataSpace: () => undefined,
+      withModel: () => undefined }));
     assert.ok(!writesModels({ plan: () => undefined }));
   });
 
