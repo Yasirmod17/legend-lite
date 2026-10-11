@@ -91,9 +91,38 @@ describe('the stand-in runs a suite as node:test runs it', () => {
     ]);
   });
 
+  it("runs mock timers as node:test's own do", (t) => {
+    // one scenario through Node's t.mock.timers and through the stand-in's: the same timers fire, in the same order
+    const scenario = (timers: { enable(o?: { apis?: string[] }): void; tick(ms?: number): void }): string[] => {
+      const order: string[] = [];
+      timers.enable({ apis: ['setTimeout', 'setInterval'] });
+      setTimeout(() => order.push('t10'), 10);
+      setTimeout(() => order.push('t0'), 0);
+      const cleared = setTimeout(() => order.push('cleared'), 5);
+      clearTimeout(cleared);
+      setTimeout(() => { order.push('t5'); setTimeout(() => order.push('t5+3'), 3); }, 5);
+      let runs = 0;
+      const every = setInterval(() => { runs += 1; order.push(`i7#${runs}`); }, 7);
+      // cleared by another timer: Node's mock runs an interval cleared inside its own callback again (node-test.ts)
+      setTimeout(() => clearInterval(every), 22);
+      timers.tick(0); order.push('|0');
+      timers.tick(9); order.push('|9');
+      timers.tick(30); order.push('|39');
+      return order;
+    };
+    const theirs = scenario(t.mock.timers as never);
+    t.mock.timers.reset();
+    const standIn = new T.TestContext('x');
+    const ours = scenario(standIn.mock.timers);
+    standIn.resetMocks();
+    assert.deepEqual(ours, theirs);
+    assert.throws(() => new T.TestContext('y').mock.timers.enable({ apis: ['Date'] }), /mock\.timers for Date is not in the headless lane's stand-in/);
+  });
+
   it('refuses what it does not stand in for, by name', () => {
     assert.throws(() => T.it.only(), /\.only is not run by the headless lane/);
     assert.throws(() => (T.mock as unknown as { timers: unknown }).timers, /mock\.timers is not in the headless lane's stand-in/);
+    assert.throws(() => (new T.TestContext('t').mock as unknown as { fn: unknown }).fn, /t\.mock\.fn is not in the headless lane's stand-in/);
     assert.throws(() => new T.TestContext('t').test(), /subtests/);
     assert.throws(() => T.it('x', { plan: 1 } as never, () => undefined), /option 'plan' is not in the headless lane's stand-in/);
   });

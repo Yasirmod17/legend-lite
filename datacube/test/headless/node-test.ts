@@ -3,7 +3,7 @@
 // them in order and answers each test's result. It decides what ran, so it follows node:test's rules where the tests
 // rely on them -- hooks outer to inner (beforeEach) and inner to outer (afterEach, which runs after a failing test
 // too), a suite whose `before` fails fails its tests, an async describe's tests in that describe -- and is held to them
-// by headless-test-runner.test.ts. What it does not stand in for (only, mocks, subtests) is refused.
+// by headless-test-runner.test.ts. What it does not stand in for (only, mocks but the timers, subtests) is refused.
 //
 // One difference, of when, not what: node:test starts an async describe's function as it is registered and tells its
 // later registrations apart by their async context, which V8 alone does not keep. Here an async describe's function
@@ -159,13 +159,110 @@ export const mock = new Proxy({}, {
   },
 });
 
+interface Timer {
+  readonly id: number;
+  at: number;
+  readonly every: number | undefined;
+  readonly fn: (...a: unknown[]) => void;
+  readonly args: unknown[];
+}
+
+const TIMER_APIS = new Set(['setTimeout', 'setInterval']);
+
+/**
+ * node:test's mock timers (`t.mock.timers`), for the APIs the lane's tests mock: setTimeout and setInterval (with
+ * their clears), on a clock that moves only by `tick`, as Node's does (held to it by headless-test-runner.test.ts):
+ * the clock moves to the tick's end first, then what falls due by then runs in order, so a timer a callback schedules
+ * counts from the tick's end. One difference: an interval cleared from inside its own callback stops here, where
+ * Node's mock runs it again (it puts the interval back after the callback). Reset after each test, as Node's are.
+ * Another API (Date, setImmediate) is refused by name.
+ */
+export class MockTimers {
+  #enabled = false;
+  #now = 0;
+  #next = 1;
+  #queue: Timer[] = [];
+  #cleared = new Set<number>();
+  #saved: Record<string, unknown> = {};
+
+  enable(options: { apis?: readonly string[]; now?: number } = {}): void {
+    if (this.#enabled) throw new Error('mock.timers is enabled already (node:test refuses enabling twice)');
+    const apis = options.apis ?? ['setTimeout', 'setInterval'];
+    for (const api of apis) {
+      if (!TIMER_APIS.has(api)) throw new Error(`mock.timers for ${api} is not in the headless lane's stand-in (test/headless/node-test.ts)`);
+    }
+    this.#enabled = true;
+    this.#now = options.now ?? 0;
+    const g = globalThis as unknown as Record<string, unknown>;
+    const add = (fn: (...a: unknown[]) => void, ms: unknown, args: unknown[], every: boolean): number => {
+      const delay = Math.max(0, Number(ms) || 0);
+      const timer: Timer = { id: this.#next++, at: this.#now + delay, every: every ? Math.max(1, delay) : undefined, fn, args };
+      this.#queue.push(timer);
+      return timer.id;
+    };
+    const clear = (id: unknown): void => {
+      this.#queue = this.#queue.filter((t) => t.id !== id);
+      if (typeof id === 'number') this.#cleared.add(id);
+    };
+    for (const api of apis) {
+      const clearName = api === 'setTimeout' ? 'clearTimeout' : 'clearInterval';
+      this.#saved[api] = g[api];
+      this.#saved[clearName] = g[clearName];
+      g[api] = (fn: (...a: unknown[]) => void, ms?: unknown, ...args: unknown[]) => add(fn, ms, args, api === 'setInterval');
+      g[clearName] = clear;
+    }
+  }
+
+  tick(ms: number = 1): void {
+    if (!this.#enabled) throw new Error('mock.timers.tick before enable');
+    this.#now += ms;
+    for (;;) {
+      this.#queue.sort((a, b) => a.at - b.at || a.id - b.id);
+      const due = this.#queue[0];
+      if (due === undefined || due.at > this.#now) break;
+      this.#queue.shift();
+      due.fn(...due.args);
+      if (due.every !== undefined && !this.#cleared.has(due.id)) {
+        due.at += due.every;
+        this.#queue.push(due);
+      }
+    }
+  }
+
+  reset(): void {
+    if (!this.#enabled) return;
+    Object.assign(globalThis as unknown as Record<string, unknown>, this.#saved);
+    this.#saved = {};
+    this.#queue = [];
+    this.#cleared.clear();
+    this.#enabled = false;
+  }
+}
+
 /** What a test's function is given. */
 export class TestContext {
   readonly name: string;
   readonly diagnostics: string[] = [];
+  readonly #timers = new MockTimers();
 
   constructor(name: string) {
     this.name = name;
+  }
+
+  /** node:test's mocks: the timers alone (`t.mock.timers`); a mock of a function or a method is refused. */
+  get mock(): { readonly timers: MockTimers } {
+    const timers = this.#timers;
+    return new Proxy({ timers }, {
+      get(target, k) {
+        if (k === 'timers') return target.timers;
+        throw new Error(`t.mock.${String(k)} is not in the headless lane's stand-in (test/headless/node-test.ts)`);
+      },
+    });
+  }
+
+  /** @internal after the test, as node:test resets its mocks */
+  resetMocks(): void {
+    this.#timers.reset();
   }
 
   diagnostic(message: string): void {
@@ -182,10 +279,6 @@ export class TestContext {
 
   test(): never {
     throw new Error("subtests (t.test) are not in the headless lane's stand-in (test/headless/node-test.ts)");
-  }
-
-  get mock(): never {
-    throw new Error("t.mock is not in the headless lane's stand-in (test/headless/node-test.ts)");
   }
 }
 
@@ -267,6 +360,7 @@ async function runSuite(node: SuiteNode, path: readonly string[], eachBefore: re
         if (outcome.status !== 'fail') outcome = { name, status: 'fail', error: `afterEach hook: ${describeError(e)}` };
       }
     }
+    t.resetMocks();
     results.push(outcome);
   }
   for (const h of node.after) {

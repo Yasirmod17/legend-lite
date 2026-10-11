@@ -160,7 +160,7 @@ _EXTRA_ENV = {
     },
     # every dictionary version in the tree, and the next one's name: each version needs its hash pinned, and the
     # next one is not cut yet
-    "share-link": {
+    "share-link-node": {
         "LINK_VERSIONS": " ".join([f[len("src/share/link-"):-len(".ts")] for f in glob(["src/share/link-*.ts"])]),
         "NEXT_LINK_VERSION": _NEXT_LINK_VERSION,
     },
@@ -192,6 +192,7 @@ _EXTRA_DATA = {
     "adhoc-session": ["test/adhoc-fixture.ts"],
     "adhoc-mode": ["test/adhoc-fixture.ts"],
     "adhoc-transactions": ["test/adhoc-fixture.ts", "test/gate.ts"],
+    "adhoc-transactions-dom": ["test/adhoc-fixture.ts", "test/gate.ts"],
     # the cube as a person meets it, over a gated engine (Leg B's app-level tests)
     "cube-transactions": ["test/cube-fixture.ts", "test/gate.ts"],
     "cube-lifecycle": ["test/cube-fixture.ts", "test/gate.ts"],
@@ -299,11 +300,15 @@ _HEADLESS_TESTS = [
     "adhoc-query",
     "adhoc-session",
     "adhoc-state",
+    "adhoc-transactions",
+    "app",
     "bands",
     "calc",
     "calc-fix",
+    "cancel",
     "child-groups",
     "column-kind",
+    "columns-selector",
     "config",
     "create-class",
     "cube-document",
@@ -313,11 +318,15 @@ _HEADLESS_TESTS = [
     "drill",
     "duckdb",
     "duckdb-cancel",
+    "editor",
+    "engine-remote",
     "epoch",
     "escaping",
     "export",
     "export-doc",
     "export-model",
+    "export-rich",
+    "filter-editor",
     "format",
     "format-scale",
     "fuzz",
@@ -326,14 +335,17 @@ _HEADLESS_TESTS = [
     "host",
     "infer",
     "json-shape",
+    "lite-planner",
     "menu",
     "model-join",
     "model-route",
     "offer-facts",
     "page-document",
+    "pivot-panel",
     "pivot-total",
     "pivot-values",
     "plane",
+    "planner",
     "query",
     "relation-type",
     "remote",
@@ -341,6 +353,7 @@ _HEADLESS_TESTS = [
     "sample",
     "screen-colours",
     "selection",
+    "share-link",
     "sorting",
     "style",
     "tree",
@@ -348,29 +361,21 @@ _HEADLESS_TESTS = [
     "type-columns",
     "upload",
     "values",
+    "warehouse-session",
+    "window",
     "window-columns",
 ]
 
-# Non-screen test files the lane leaves out, and why (each still runs in Node's lane)
+# Test files the lane leaves out though they import nothing of Node, and why (each runs in Node's lane). A screen test
+# (jsdom) or one that takes Node as its reference (node:url, node:crypto) is left out by what it imports, which
+# headless_roster_test reads. A file that mixed them is split in two: its screen or Node half `<name>-dom` or
+# `<name>-node`, the rest in the lane under its own name.
 _HEADLESS_LEFT_OUT = {
-    # they test DataCube's HTTP clients against a stubbed fetch, and the host has no fetch API (nothing headless speaks
-    # HTTP: the design's §3)
-    "cancel": "the planner client's HTTP",
-    "engine-remote": "the engine executor's HTTP",
-    "planner": "the remote planner's HTTP",
-    "warehouse-session": "the warehouse sign-in's HTTP",
-    # each mixes screen tests (jsdom) or Node's own as a reference (node:url, node:crypto) with non-screen ones: split
-    # into a screen file and a non-screen file, the non-screen half joins the lane (the design's §6, a follow-up)
-    "adhoc-transactions": "screen tests beside non-screen ones",
-    "app": "screen tests beside non-screen ones",
-    "columns-selector": "screen tests beside non-screen ones",
-    "editor": "screen tests beside non-screen ones",
-    "export-rich": "screen tests beside non-screen ones",
-    "filter-editor": "screen tests beside non-screen ones",
-    "lite-planner": "Node's fileURLToPath as its reference, and the module's in-thread transport",
-    "pivot-panel": "screen tests beside non-screen ones",
-    "share-link": "node:crypto as its reference",
-    "window": "screen tests beside non-screen ones",
+    # DataCube's HTTP clients against a stubbed fetch: the host has no fetch API (nothing headless speaks HTTP: §3)
+    "cancel-http": "the planner client's HTTP",
+    "engine-remote-http": "the engine executor's HTTP",
+    "planner-http": "the remote planner's HTTP",
+    "warehouse-session-http": "the warehouse sign-in's HTTP",
     # the chart renderer (ECharts) draws on a DOM canvas: a screen test, though it imports no jsdom itself
     "chart-echarts": "ECharts draws on a DOM canvas",
     # the lane's own stand-ins and web layer, held to Node's built-ins: they need the Node they compare against
@@ -516,7 +521,7 @@ js_binary(
 )
 
 # THE SHARE LINK'S DICTIONARY (milestone 1b): made ONCE per version from the product's own
-# vocabulary, then frozen in src/share/link-<version>.ts, pinned by its hash in test/share-link.test.ts
+# vocabulary, then frozen in src/share/link-<version>.ts, pinned by its hash in test/share-link-node.test.ts
 # (links made with it must open forever). The tool reads the LIVE vocabulary, which grows (p1 has no
 # treemap mark), so a frozen version is held by its hash, never by re-running the tool (P2-08).
 js_binary(
@@ -537,8 +542,8 @@ js_binary(
 # The next version, from today's vocabulary: a tool run on demand, so not part of //... (manual; the build only
 # compiles, docs/BUILD_REBUILD_DESIGN_2026_10_05.md). To ship it, `bazel run //datacube:cut_link_dictionary` writes
 # src/share/link-<version>.ts once (a DRAFT, the docs:draft_own_corpus_ledger pattern: no diff test, the hash pin is
-# the freeze); then pin its hash in test/share-link.test.ts and move _NEXT_LINK_VERSION (above) on. share_link_test
-# fails until both are done.
+# the freeze); then pin its hash in test/share-link-node.test.ts and move _NEXT_LINK_VERSION (above) on.
+# share_link_node_test fails until both are done.
 js_run_binary(
     name = "link_dictionary_next",
     args = [_NEXT_LINK_VERSION],
