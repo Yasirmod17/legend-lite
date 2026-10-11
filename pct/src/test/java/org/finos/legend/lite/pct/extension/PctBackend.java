@@ -34,8 +34,11 @@ import java.sql.SQLException;
  * database for that engine lives (a query reading the metamodel store runs there, apart from the user's session;
  * exec.SystemDatabase). This harness gives it the lane's own server and credentials, as its choice; a host
  * configures it apart. An in-process lane needs none (the platform opens its own private instance).
+ *
+ * <p>Both channels run on it (2026-10-11, the user's ask): channel A's adapter ({@link PctExecuteNative}) and channel
+ * B's runner (channelb.ChannelB), so a lane's two verdicts come from the same database.
  */
-final class PctBackend {
+public final class PctBackend {
 
     private PctBackend() {
     }
@@ -167,6 +170,21 @@ final class PctBackend {
         };
     }
 
+    /** The lane's name, as {@code LEGENDLITE_PCT_BACKEND} spells it ({@code duckdb} when unset). */
+    public static String name() {
+        return lane().name().toLowerCase(java.util.Locale.ROOT);
+    }
+
+    /** Whether this lane is the reference lane, an in-memory DuckDB. */
+    public static boolean isDuckDb() {
+        return lane() == Lane.DUCKDB;
+    }
+
+    /** This lane's storeless runtime declared alone: the session {@link #connect} opens. */
+    public static String storelessRuntime() {
+        return withStorelessRuntime("");
+    }
+
     /** {@code model} with this lane's storeless runtime declared beside it: the session {@link #connect} opens. */
     static String withStorelessRuntime(String model) {
         Lane lane = lane();
@@ -185,13 +203,13 @@ final class PctBackend {
     }
 
     /** A session on this lane's database. */
-    static Connection connect() throws SQLException {
+    public static Connection connect() throws SQLException {
         return lane().open();
     }
 
     /** The host's system connections: a server lane's own engine, opened by {@link Lane#openSystem}; none for an
      *  in-process lane. */
-    static java.util.Map<DatabaseType, com.legend.exec.Sessions.Opener> systemConnections() {
+    public static java.util.Map<DatabaseType, com.legend.exec.Sessions.Opener> systemConnections() {
         Lane lane = lane();
         return lane.inProcess() ? java.util.Map.of() : java.util.Map.of(lane.type, lane::openSystem);
     }

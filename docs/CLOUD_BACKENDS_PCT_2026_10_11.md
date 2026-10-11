@@ -620,3 +620,62 @@ column), never by value: the executor's rule (`Executor.fetch`: "one carrier, ch
 **What it gains:** the one pin on Snowflake (35 -> 34, the DuckDB lane's count) and one on Databricks; and outside
 PCT, every query reading a date-time before year 1 from these warehouses, which today reads wrong silently (a year
 past 9999 is not measured).
+
+## 16. Channel B on every lane (2026-10-11)
+
+The user's ask: run each backend through channel B too. Channel B (gate 9) is the second referee: our own compiler
+runs the PCT sources straight from the pinned legend-pure and legend-engine trees, the test's WHOLE body (its asserts
+too) compiled and run in the database, where channel A runs the test in legend-pure's interpreter and sends only the
+evaluated expression to us. Until now it ran on DuckDB only.
+
+**What changed:** channel B runs on the lane's own database (`PctBackend`, now public: the same connection, storeless
+runtime and system connection channel A's adapter uses), and each lane's verdicts are diffed against THAT lane's
+channel A ledger (`Test_LegendLite_<Lane>_<Suite>Functions_PCT`) and, where legend-engine publishes one, its PCT
+manifest for the same database (Postgres, H2, Snowflake, Databricks; none for SQLite, MariaDB, MySQL or BigQuery, so
+there every wire bug is a true one). DuckDB keeps its own pins in each suite's test; every other lane is judged by
+`channelb.ChannelBLane`, by its own measured numbers: PASS may only grow, WIRE-BUG (channel B fails where channel A
+passes) and TRUE-WIRE-BUG (and the engine passes too) may only shrink, and the never-happens invariants hold (no label
+lie, no dual-verdict disagreement). The targets are `//pct:pct_channel_b_<lane>_<suite>` and `//pct:pct_channel_b_<lane>`,
+manual as their channel A lanes, all in `//gates:heavy`.
+
+**Measured (2026-10-11), PASS / WIRE-BUG / TRUE-WIRE-BUG:**
+
+| Lane | Essential (345) | Grammar (137) | Relation (469) | Standard (205) | Unclassified (93) |
+|---|---|---|---|---|---|
+| DuckDB (reference) | 336 / 0 / 0 | 137 / 0 / 0 | 469 / 0 / 0 | 205 / 0 / 0 | 93 / 0 / 0 |
+| H2 | -- | -- | 429 / 14 / 12 | -- | -- |
+| Postgres | 285 / 2 / 0 | 128 / 3 / 0 | 464 / 3 / 1 | 186 / 1 / 0 | 83 / 0 / 0 |
+| SQLite | 332 / 1 / 1 | 133 / 0 / 0 | 456 / 12 / 12 | 203 / 0 / 0 | 87 / 0 / 0 |
+| MariaDB | 325 / 2 / 2 | 135 / 0 / 0 | 440 / 17 / 17 | 201 / 1 / 1 | 91 / 0 / 0 |
+| Databricks | 334 / 2 / 1 | 135 / 2 / 0 | 459 / 10 / 10 | 205 / 0 / 0 | 93 / 0 / 0 |
+| Snowflake | 334 / 1 / 0 | 133 / 2 / 0 | 467 / 2 / 2 | 204 / 1 / 0 | 93 / 0 / 0 |
+| BigQuery | 330 / 2 / 2 | 135 / 0 / 0 | 455 / 13 / 13 | 205 / 0 / 0 | 91 / 0 / 0 |
+
+(H2's channel A lane runs the Relation suite only, so channel B's does too. MySQL's waits for its channel A pins.)
+
+**What the disagreements are.** Every one is a test channel A passes because the interpreter evaluates part of its
+body in Java, which channel B sends to the database:
+
+- **A Float printed in the query (Postgres, found and fixed the same day):** Postgres writes a whole double as `41`
+  where Pure and DuckDB write `41.0`; channel A never saw it (the interpreter re-reads `41` into a Float column and
+  prints `41.0`). Postgres's text of a double now keeps its `.0`, as Snowflake's already did (`Postgres.variantAwareCast`):
+  Standard's wire bugs 35 -> 1, Relation's 7 -> 3, and channel A's `testSquareRootError` passes (its message reads
+  `-1.0` now; the pin is gone).
+- **A NULL Float's text on SQLite (found and fixed the same day):** the shortest-digits text read a NULL through
+  `printf`, which takes it for 0 and wrote `0.0`; the dual-verdict alarm caught it on 9 empty aggregates (`max`,
+  `greatest`, `corr`, `covar*` over no values). A NULL's text is NULL now (`SQLite.SHORTEST`).
+- **A regular expression with a non-literal pattern (SQLite 10, MariaDB 9, BigQuery 10):** the tests' own checks
+  (`chunk(1)->sort()->joinStrings('')` over a group's text) build the pattern in the query; these dialects translate a
+  pattern only when it is a literal. The likely fix: `chunk` with a literal size spells its pattern as one literal.
+- **Lists in a test's own check on H2 (14):** H2 has no list type (§ the H2 lane).
+- **A pivot's column order (SQLite, MariaDB, Snowflake, BigQuery: 2 each):** the columns come back in another order
+  than DuckDB's.
+- **Databricks' 10 Relation rows:** the warehouse fails them with no error detail ("no error details from server");
+  not yet read statement by statement.
+- **MariaDB's `testMixedSortNoComparator`:** its statement (9.8 MB, the Float text expression written out 5,868 times
+  for a five-element sort and the assert's element-wise comparison) takes the server past 12 GB while planning, memory
+  `--max-session-mem-used` does not count, and the kernel's OOM killer ends it. It failed every later test until the
+  embedded MariaDB and MySQL learned to restart a server a statement killed (`EmbeddedMariaDb.shared`, said on stderr
+  with the dead server's log), so the test fails alone. Several MariaDB lanes run at once can exceed the machine
+  together: run them one at a time (`--local_test_jobs=1`). The statement's size is the bug to fix (channel A pins the
+  same test by its "Out of memory").

@@ -59,8 +59,30 @@ public final class EmbeddedMySql {
             }
             EmbeddedMySql started = shared;
             Runtime.getRuntime().addShutdownHook(new Thread(started::stop, "embedded-mysql-stop"));
+        } else if (!shared.server.isAlive()) {
+            // A STATEMENT KILLED THE SERVER (2026-10-11, measured on MariaDB: the kernel's OOM killer ended the server
+            // at 12 GB while it planned a 9.8 MB statement, memory the session cap does not count). The test that sent
+            // it has failed on its closed connection; the server starts again on the same data and port, so that
+            // failure is that test's alone and not every later test's. Said on stderr, with the dead server's log.
+            System.err.println("[embedded-mysql] mysqld died (exit " + shared.server.exitValue() + "); restarting it on port "
+                    + shared.port + ". Its log's tail:\n" + shared.logTail());
+            try {
+                shared.startServer();
+            } catch (IOException e) {
+                throw new IllegalStateException("the embedded server did not restart: " + e.getMessage(), e);
+            }
         }
         return shared;
+    }
+
+    /** The last few thousand characters of the server's log, to say why it died. */
+    private String logTail() {
+        try {
+            String log = read(data.resolve("server.log"));
+            return log.substring(Math.max(0, log.length() - 3000));
+        } catch (IOException e) {
+            return "(its log could not be read: " + e.getMessage() + ")";
+        }
     }
 
     /** {@code jdbc:mariadb://127.0.0.1:<port>/<database>?user=legend}, the database made on the first connection:

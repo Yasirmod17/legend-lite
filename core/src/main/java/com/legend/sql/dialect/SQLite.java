@@ -1232,8 +1232,10 @@ public final class SQLite extends AnsiSqlRenderer {
     }
 
     /** A double's shortest round-trip text, of {@code __t.v}: 15 digits, else 16, else 17 ({@code !} keeps a whole
-     *  value's {@code .0}, measured). */
-    private static final String SHORTEST = "CASE WHEN CAST(printf('%!.15g', __t.v) AS REAL) = __t.v THEN"
+     *  value's {@code .0}, measured); NULL's is NULL (printf reads a NULL as 0 and wrote '0.0': measured 2026-10-11 by
+     *  channel B on SQLite, an empty max's text). */
+    private static final String SHORTEST = "CASE WHEN __t.v IS NULL THEN NULL"
+            + " WHEN CAST(printf('%!.15g', __t.v) AS REAL) = __t.v THEN"
             + " printf('%!.15g', __t.v) WHEN CAST(printf('%!.16g', __t.v) AS REAL) = __t.v THEN printf('%!.16g', __t.v)"
             + " ELSE printf('%!.17g', __t.v) END";
 

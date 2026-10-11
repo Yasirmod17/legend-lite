@@ -726,6 +726,13 @@ public final class Postgres extends AnsiSqlRenderer {
                 return writer.piece(compactJson(w -> w.append("CAST(").expr(c.value(), 0).append(" AS VARCHAR)")));
             }
         }
+        // DuckDB's Float text keeps an integral value's '.0' (41.0, where Postgres writes 41: measured 2026-10-11 by
+        // channel B on Postgres, an average's TDS cell printed in the query), as Snowflake's
+        if (c.target() == SqlType.Scalar.VARCHAR && (isDouble(c.value()) || c.value() instanceof SqlExpr.FloatLit)) {
+            writer.append("regexp_replace(");
+            super.variantAwareCast(writer, c);
+            return writer.append(", '^(-?[0-9]+)$', '\\1.0')");
+        }
         return super.variantAwareCast(writer, c);
     }
 
