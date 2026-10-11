@@ -116,8 +116,9 @@ try {
   check(subtitle.includes("in the page's project, datacube:trades"), `the page's project, not a new one: ${subtitle}`);
   check(await page.locator('.dc-class-package input').isDisabled(), "the page's package, kept");
   const second = await files();
-  check(JSON.stringify(second) === JSON.stringify(['changedtrades::store::Browser', 'newtrades::function::CustomerFn',
-    'newtrades::domain::Customer', 'newtrades::mapping::CustomerMapping', 'changedtrades::mapping::Model',
+  // the project's files changed, in the project's order (the SDLC's: by path), then the new ones, as made
+  check(JSON.stringify(second) === JSON.stringify(['changedtrades::mapping::Model', 'changedtrades::store::Browser',
+    'newtrades::function::CustomerFn', 'newtrades::domain::Customer', 'newtrades::mapping::CustomerMapping',
     'newtrades::data::CustomersSample']), `the first class's files read back, two changed: ${second.join(', ')}`);
   const store = await pure('trades::store::Browser');
   check(/Table trades\w*/.test(store) && /Table customers\w*/.test(store), `one store, a table per source\n${store}`);

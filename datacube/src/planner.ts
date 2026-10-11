@@ -12,6 +12,7 @@ import type { Planner } from './cube.ts';
 import { PureV1Client, type PrintStyle, type PureV1Options } from '../../engine-client/src/pure-v1.ts';
 import { relationColumns, tdsColumns, type Plan, type PlanColumn } from '../../engine-client/src/relation-type.ts';
 import { toJson, type Lambda } from '../../pure-protocol/src/index.ts';
+import type { GridSource } from './model-writer.ts';
 
 export interface UpstreamPlannerOptions extends PureV1Options {
   /**
@@ -69,6 +70,11 @@ export class UpstreamPlanner implements Planner {
    * A planner over ANOTHER model -- another source on the page -- on the same server, with caches
    * of its own. Every request carries its model, so the server holds nothing for either.
    */
+  /** Where this planner's queries are planned from: its model, and the runtime they run on. */
+  source(): GridSource {
+    return { model: this.#options.model, runtime: this.#options.runtime };
+  }
+
   withModel(model: string, runtime: string, how: ModelOptions = {}): UpstreamPlanner {
     const other = new UpstreamPlanner({ ...this.#options, model, runtime });
     other.useModel(model, runtime, how);

@@ -96,7 +96,8 @@ import type { CubeSnapshot } from '../src/snapshot.ts';
 import type { TreeState } from '../src/tree.ts';
 import { sourceColumns } from '../src/source-columns.ts';
 import { accessor, lambda, type ValueSpecification } from '../../pure-protocol/src/index.ts';
-import { classLambda, sampleLambda, storeTableOf, writesClasses } from '../src/query.ts';
+import { classLambda, sampleLambda, storeTableOf } from '../src/query.ts';
+import { writesModels } from '../src/model-writer.ts';
 import type { PageModelRef } from '../src/page-model.ts';
 import type { SnapTarget } from '../src/cube.ts';
 
@@ -612,7 +613,7 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
         // page has a model home and the grid's planner writes classes, Create a Class… of the grid's rows
         hostMenu: () => [
           ...planeMenu(),
-          ...(createClass && writesClasses(place.planner ?? planner) ? [CREATE_CLASS] : []),
+          ...(createClass && (place.planner ?? planner).source ? [CREATE_CLASS] : []),
         ],
         onHostMenu: (item) => {
           if (item.id === CREATE_CLASS.id) createClass?.(created, place, spawned.id);
@@ -1752,14 +1753,16 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
     /** CREATE A CLASS… of a grid (src/create-class.ts, fetched the first time it is asked for). */
     const makeClass = async (grid: CubeApp, place: GridPlace, cube: string | undefined): Promise<void> => {
       const config = await pageConfig();
-      const writer = place.planner ?? planner;
-      if (!config.depot || !writesClasses(writer)) return;
-      const source = place.label ?? 'this source';
+      const grid0 = place.planner ?? planner;
+      const source = grid0.source?.();
+      // the model's writer: the tab's module, on every plane (the one beside a server's planner writes table models too)
+      if (!config.depot || !source || !writesModels(tables)) return;
+      const sourceName = place.label ?? 'this source';
       const snapshot = grid.snapshot;
       // refused before the window opens, in words: a source read from no table of its own, a pivot, a lone total
       const table = storeTableOf(snapshot.source.query);
       if (!table) {
-        window.alert(`Create a Class makes a class of a table's rows; ${source} is not read from a table of its own.`);
+        window.alert(`Create a Class makes a class of a table's rows; ${sourceName} is not read from a table of its own.`);
         return;
       }
       let query;
@@ -1774,12 +1777,14 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
         query,
         table,
         sample: sampleLambda(snapshot.source.query),
-        writer,
-        engine: place.engine ?? engine,
+        planner: grid0,
         source,
+        writer: tables,
+        engine: place.engine ?? engine,
+        sourceName,
         cube,
         // the page's name, or -- never saved -- its grid's source, without its file's extension (`trades.csv` trades)
-        pageName: current.name ?? ((page.suggestedName || source).replace(/\.[A-Za-z0-9]+$/, '') || 'page'),
+        pageName: current.name ?? ((page.suggestedName || sourceName).replace(/\.[A-Za-z0-9]+$/, '') || 'page'),
         model: current.model,
         client: home.client,
         studio: (project, workspace) => new URL(
