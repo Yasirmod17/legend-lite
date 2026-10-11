@@ -283,7 +283,7 @@ public final class SqlTypeCensus {
                 }
                 if (label.equals(meta)) {
                     WIRE_AGREE.increment();
-                } else if (delivers(outs.get(i).type(), meta)) {
+                } else if (delivers(outs.get(i).type(), meta) || snowflakeOwn(dialect, outs.get(i).type(), meta)) {
                     // THE DELIVERY RELATION (adjudicated 2026-08-23):
                     // value-subset narrowing (every INTEGER fits the
                     // BIGINT contract; DECIMAL(p,s) fits DECIMAL(P>=p,s))
@@ -536,6 +536,18 @@ public final class SqlTypeCensus {
      * without value loss? Exact is handled by the caller; this covers
      * value-subset narrowing and the registered carrier conventions
      * (metaToType + admissible — ONE relation, read from both sides). */
+    /** Snowflake's own types, which are the platform's by design (2026-10-11): its integers are NUMBER(p,0), every
+     *  integer type a synonym of NUMBER(38,0) and an integer expression reported at its own precision (42 is
+     *  NUMBER(2,0), measured); and its one object type, OBJECT, carries a struct and a map alike. */
+    private static boolean snowflakeOwn(String dialect, SqlType label, String meta) {
+        if (!"Snowflake".equals(dialect)) {
+            return false;
+        }
+        boolean integral = label == SqlType.Scalar.BIGINT || label == SqlType.Scalar.INTEGER;
+        return integral && meta.startsWith("DECIMAL(") && meta.endsWith(",0)")
+                || (label instanceof SqlType.Struct || label instanceof SqlType.Map) && meta.equals("OBJECT");
+    }
+
     private static boolean delivers(SqlType label, String meta) {
         // the kind-faithful carriers: spelling TEXT is their physical
         // form on every backend (F10 proper + §4bZ-V B3 + the
@@ -680,6 +692,9 @@ public final class SqlTypeCensus {
                 return "VARCHAR";
             case "VARIANT":
                 return "JSON";
+            // Snowflake's driver names every fixed-point number NUMBER (precision and scale from the column)
+            case "NUMBER":
+                return "DECIMAL";
             default:
                 break;
         }

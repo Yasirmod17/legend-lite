@@ -42,6 +42,28 @@ public record TypeNames(Map<SqlType.Scalar, String> scalarNames,
      * collection and variant carrier (POSTGRES_BACKEND.md §5); no STRUCT. */
     public static final TypeNames POSTGRES = new TypeNames(postgres(), false);
 
+    /** Snowflake (2026-10-11): NUMBER(38,0) is every integer (INTEGER and BIGINT are its synonyms); DOUBLE is
+     *  FLOAT; a timestamp is TIMESTAMP_NTZ (the platform's naive UTC) and a zoned one TIMESTAMP_LTZ (an instant, the
+     *  session zone UTC); a variant is VARIANT; composite casts are the dialect's {@code arrayTypeName} and friends. */
+    public static final TypeNames SNOWFLAKE = new TypeNames(snowflake(), true);
+
+    private static Map<SqlType.Scalar, String> snowflake() {
+        Map<SqlType.Scalar, String> m = new EnumMap<>(SqlType.Scalar.class);
+        m.put(SqlType.Scalar.BOOLEAN, "BOOLEAN");
+        m.put(SqlType.Scalar.INTEGER, "INTEGER");
+        m.put(SqlType.Scalar.BIGINT, "BIGINT");
+        m.put(SqlType.Scalar.HUGEINT, "NUMBER(38,0)");
+        m.put(SqlType.Scalar.DOUBLE, "DOUBLE");
+        m.put(SqlType.Scalar.VARCHAR, "VARCHAR");
+        m.put(SqlType.Scalar.LITERAL, "VARCHAR");
+        m.put(SqlType.Scalar.TEMPORAL_TEXT, "VARCHAR");
+        m.put(SqlType.Scalar.DATE, "DATE");
+        m.put(SqlType.Scalar.TIMESTAMP, "TIMESTAMP_NTZ");
+        m.put(SqlType.Scalar.TIMESTAMPTZ, "TIMESTAMP_LTZ");
+        m.put(SqlType.Scalar.JSON, "VARIANT");
+        return m;
+    }
+
     /** Databricks SQL (2026-10-11, docs/CLOUD_BACKENDS_PCT_2026_10_11.md): INT and STRING (a bare VARCHAR needs a
      * length there); HUGEINT as DECIMAL(38,0); a zoned timestamp is the session-zone TIMESTAMP (the session is UTC);
      * JSON as VARIANT, the variant carrier; STRUCT natively ({@code STRUCT<a: T>}, the dialect's spelling). */

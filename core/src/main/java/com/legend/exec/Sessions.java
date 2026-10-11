@@ -76,7 +76,8 @@ public final class Sessions {
             case SQLite -> "SQLite";
             // the Databricks JDBC driver reports Spark's name (measured, databricks-jdbc 3.4.3)
             case Databricks -> "SparkSQL";
-            case DB2, MemSQL, Sybase, SybaseIQ, Composite, SqlServer, Hive, Snowflake, Presto, Trino, BigQuery,
+            case Snowflake -> "Snowflake";
+            case DB2, MemSQL, Sybase, SybaseIQ, Composite, SqlServer, Hive, Presto, Trino, BigQuery,
                  Redshift, Spanner, Athena, Oracle, ClickHouse, Aurora ->
                     throw new com.legend.error.NotImplementedException(
                             "sessions on database type '" + type + "' are not implemented");

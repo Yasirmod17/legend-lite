@@ -46,11 +46,12 @@ public final class Databases {
             case H2 -> new com.legend.sql.dialect.H2();
             case Postgres -> new com.legend.sql.dialect.Postgres();
             case Databricks -> new com.legend.sql.dialect.Databricks();
+            case Snowflake -> new com.legend.sql.dialect.Snowflake();
             // SQLite differs from the ANSI baseline ONLY lexically — a Lexicon row, not a dialect subclass
             // (remediation T3.2)
             case SQLite -> new com.legend.sql.dialect.AnsiSqlRenderer(com.legend.sql.dialect.Lexicon.SQLITE,
                     com.legend.sql.dialect.TypeNames.ANSI, com.legend.sql.dialect.Spellings.DUCKDB);
-            case DB2, MemSQL, Sybase, SybaseIQ, Composite, SqlServer, Hive, Snowflake, Presto, Trino, BigQuery,
+            case DB2, MemSQL, Sybase, SybaseIQ, Composite, SqlServer, Hive, Presto, Trino, BigQuery,
                  Redshift, Spanner, Athena, Oracle, ClickHouse, Aurora ->
                     throw new com.legend.error.NotImplementedException(
                             "SQL dialect for database type '" + type + "' is not implemented yet");
@@ -63,8 +64,8 @@ public final class Databases {
     public static com.legend.executionplan.ExecutionPlan.Servers servers(DatabaseType type) {
         return switch (type) {
             case H2 -> new com.legend.executionplan.ExecutionPlan.Servers.Versions(com.legend.sql.dialect.H2.SERVERS);
-            case DuckDB, Postgres, SQLite, Databricks -> new com.legend.executionplan.ExecutionPlan.Servers.Every();
-            case DB2, MemSQL, Sybase, SybaseIQ, Composite, SqlServer, Hive, Snowflake, Presto, Trino, BigQuery,
+            case DuckDB, Postgres, SQLite, Databricks, Snowflake -> new com.legend.executionplan.ExecutionPlan.Servers.Every();
+            case DB2, MemSQL, Sybase, SybaseIQ, Composite, SqlServer, Hive, Presto, Trino, BigQuery,
                  Redshift, Spanner, Athena, Oracle, ClickHouse, Aurora ->
                     throw new com.legend.error.NotImplementedException(
                             "SQL dialect for database type '" + type + "' is not implemented yet");
@@ -77,8 +78,8 @@ public final class Databases {
     public static boolean loadsRowsInBulk(DatabaseType type) {
         return switch (type) {
             case DuckDB -> true;
-            case H2, Postgres, SQLite, Databricks -> false;
-            case DB2, MemSQL, Sybase, SybaseIQ, Composite, SqlServer, Hive, Snowflake, Presto, Trino, BigQuery,
+            case H2, Postgres, SQLite, Databricks, Snowflake -> false;
+            case DB2, MemSQL, Sybase, SybaseIQ, Composite, SqlServer, Hive, Presto, Trino, BigQuery,
                  Redshift, Spanner, Athena, Oracle, ClickHouse, Aurora ->
                     throw new com.legend.error.NotImplementedException(
                             "loading rows into database type '" + type + "' is not implemented yet");

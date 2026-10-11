@@ -101,6 +101,19 @@ public record Lexicon(char quoteChar, Set<String> reservedWords) {
 
     public static final Lexicon ENGINE_STYLE = new Lexicon('"', Set.of());
 
+    /** Snowflake (2026-10-11, docs/CLOUD_BACKENDS_PCT_2026_10_11.md): double quotes; Snowflake's documented reserved keywords. The dialect quotes EVERY
+     *  identifier, so the list never decides a spelling here. */
+    public static final Lexicon SNOWFLAKE = new Lexicon('"', Set.of(
+            "account", "all", "alter", "and", "any", "as", "between", "by", "case", "cast", "check", "column",
+            "connect", "connection", "constraint", "create", "cross", "current", "current_date", "current_time",
+            "current_timestamp", "current_user", "database", "delete", "distinct", "drop", "else", "exists", "false",
+            "following", "for", "from", "full", "grant", "group", "gscluster", "having", "ilike", "in", "increment",
+            "inner", "insert", "intersect", "into", "is", "issue", "join", "lateral", "left", "like", "localtime",
+            "localtimestamp", "minus", "natural", "not", "null", "of", "on", "or", "order", "organization", "qualify",
+            "regexp", "revoke", "right", "rlike", "row", "rows", "sample", "schema", "select", "set", "some", "start",
+            "table", "tablesample", "then", "to", "trigger", "true", "try_cast", "union", "unique", "update", "using",
+            "values", "view", "when", "whenever", "where", "window", "with"));
+
     /** Databricks SQL (2026-10-11, docs/CLOUD_BACKENDS_PCT_2026_10_11.md): backticks. The {@code Databricks}
      * dialect quotes EVERY identifier, so this list never decides a spelling there; it is Databricks' documented
      * reserved set (ANSI mode's reserved words) for any reader that asks. */

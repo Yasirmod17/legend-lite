@@ -66,6 +66,9 @@ public final class CarrierStrategies extends SqlRewriter {
         public static final Caps POSTGRES = new Caps(false, true, true, true);
         /** Databricks (2026-10-11): typed native arrays with lambdas, as DuckDB's (docs/CLOUD_BACKENDS_PCT_2026_10_11.md). */
         public static final Caps DATABRICKS = new Caps(true, true, true, true);
+        /** Snowflake (2026-10-11): semi-structured arrays with higher-order functions -- the strategies stand aside,
+         *  as on DuckDB and Databricks; FULL OUTER is native. */
+        public static final Caps SNOWFLAKE = new Caps(true, true, true, true);
     }
 
     private final Caps caps;
