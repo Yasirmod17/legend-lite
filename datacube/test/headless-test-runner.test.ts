@@ -24,7 +24,8 @@ T.it('options: skip', { skip: true }, () => { ours.push('never: options skip'); 
 /** The suite on Node's own node:test: each test's path and outcome, and the order things ran in. */
 function nodes(): { results: [string, string][]; order: string[] } {
   const entry = fileURLToPath(new URL('./headless/runner-entry.ts', import.meta.url));
-  const reporter = fileURLToPath(new URL('./headless/runner-reporter.mjs', import.meta.url));
+  // a reporter is a module specifier, so its file: URL (on Windows a drive path reads as a URL scheme)
+  const reporter = new URL('./headless/runner-reporter.mjs', import.meta.url).href;
   const ran = spawnSync(process.execPath, [...process.execArgv, `--test-reporter=${reporter}`, '--test-reporter-destination=stdout', entry],
     { encoding: 'utf8', timeout: 60_000 });
   const lines = ran.stdout.split('\n');
