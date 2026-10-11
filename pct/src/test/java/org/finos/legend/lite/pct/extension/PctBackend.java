@@ -17,7 +17,9 @@ import java.sql.SQLException;
  * <ul>
  *   <li>unset: a fresh in-memory DuckDB;</li>
  *   <li>{@code h2}: a fresh in-memory H2, with the portability sweep's session settings;</li>
- *   <li>{@code postgres}: this JVM's embedded Postgres 16 (leg P2), a new session on its database.</li>
+ *   <li>{@code postgres}: this JVM's embedded Postgres 16 (leg P2), a new session on its database;</li>
+ *   <li>{@code databricks}, {@code snowflake}, {@code bigquery}: a real account's warehouse, one session held for the
+ *       suite ({@link CloudLane}: its coordinates and credentials from {@code LEGENDLITE_PCT_CLOUD_PROPERTIES}).</li>
  * </ul>
  *
  * Session settings are the dialect's, applied at the platform's connection seam
@@ -47,6 +49,24 @@ final class PctBackend {
             Connection open() throws SQLException {
                 return DriverManager.getConnection(EmbeddedPostgres.shared().jdbcUrl("postgres"));
             }
+        },
+        DATABRICKS(DatabaseType.Databricks) {
+            @Override
+            Connection open() throws SQLException {
+                return CloudLane.connect(CloudLane.Cloud.DATABRICKS);
+            }
+        },
+        SNOWFLAKE(DatabaseType.Snowflake) {
+            @Override
+            Connection open() throws SQLException {
+                return CloudLane.connect(CloudLane.Cloud.SNOWFLAKE);
+            }
+        },
+        BIGQUERY(DatabaseType.BigQuery) {
+            @Override
+            Connection open() throws SQLException {
+                return CloudLane.connect(CloudLane.Cloud.BIGQUERY);
+            }
         };
 
         final DatabaseType type;
@@ -66,8 +86,11 @@ final class PctBackend {
         return switch (backend) {
             case "h2" -> Lane.H2;
             case "postgres" -> Lane.POSTGRES;
+            case "databricks" -> Lane.DATABRICKS;
+            case "snowflake" -> Lane.SNOWFLAKE;
+            case "bigquery" -> Lane.BIGQUERY;
             default -> throw new IllegalStateException("LEGENDLITE_PCT_BACKEND=" + backend + ": a PCT lane runs on"
-                    + " DuckDB (unset), h2 or postgres");
+                    + " DuckDB (unset), h2, postgres, databricks, snowflake or bigquery");
         };
     }
 
@@ -78,6 +101,9 @@ final class PctBackend {
             case DUCKDB, H2 -> com.legend.test.StorelessRuntime.with(model, lane.type);
             case POSTGRES -> com.legend.test.StorelessRuntime.onServer(model, lane.type, "127.0.0.1",
                     EmbeddedPostgres.shared().port(), "postgres");
+            case DATABRICKS -> CloudLane.withStorelessRuntime(model, CloudLane.Cloud.DATABRICKS);
+            case SNOWFLAKE -> CloudLane.withStorelessRuntime(model, CloudLane.Cloud.SNOWFLAKE);
+            case BIGQUERY -> CloudLane.withStorelessRuntime(model, CloudLane.Cloud.BIGQUERY);
         };
     }
 

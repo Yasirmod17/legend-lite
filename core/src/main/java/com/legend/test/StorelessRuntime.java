@@ -36,6 +36,14 @@ public final class StorelessRuntime {
                 + "'; port: " + port + "; };\n  auth: Test");
     }
 
+    /** {@code model} with the storeless runtime on {@code type}, its connection declared by
+     *  {@code specificationAndAuth} -- a cloud warehouse's coordinates and its credential's vault REFERENCE, never
+     *  the secret -- for the session the caller opens (the cloud PCT lanes; the session is checked against
+     *  {@code type}, as every session is). */
+    public static String declaring(String model, DatabaseType type, String specificationAndAuth) {
+        return model + "\n" + runtime(type, specificationAndAuth);
+    }
+
     /** The empty database, its connection on the in-process {@code type}, and the runtime binding them. */
     public static String declaration(DatabaseType type) {
         return runtime(type, specificationAndAuth(type));

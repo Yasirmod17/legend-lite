@@ -735,6 +735,20 @@ full CI run on it.
 Not touched: the database owner's `lowering/` files (`Render`, `WireRender`, `LiteralSpelling`, `Fold`, `Scalars`,
 `MixedEncoding`), `sql/dialect/`, the parser.
 
+## An eighth line, 2026-10-11: Databricks, Snowflake and BigQuery (the user's ask, rule 5)
+
+The user: add Snowflake, Databricks and BigQuery as backends "very similar to how we just added Postgres", the PCT
+suites on real accounts; then DataCube straight to each one's HTTP SQL API from the browser. Design, state and how to
+run: `docs/CLOUD_BACKENDS_PCT_2026_10_11.md`. Branch `claude/great-wright-p6t5s1`; nothing lands on `main` without
+the user. **Announced 2026-10-11, the first step (landed on the branch):** `tools/deps/jars_table.bzl` (three
+test-only drivers, users `pct`), `tools/deps/jars.bzl` (an optional classifier), `tools/guards/classpath.bzl` (the
+same), `MODULE.bazel` (their `use_repo`), `pct/BUILD.bazel` (the cloud lanes, all `manual`), `pct/` sources
+(`CloudLane`, `PctBackend`, fifteen suite classes), and one core edit: `core/.../test/StorelessRuntime.java`
+(`declaring`, additive). **Announced, next:** three new dialects in `core/src/main/java/com/legend/sql/dialect/`
+(`Databricks`, `Snowflake`, `BigQuery`, siblings of `Postgres`; new `Lexicon`, `TypeNames` and `Spellings` rows) and
+their arms in the `DatabaseType` switches (`database/Databases.java`, `exec/Sessions.java`), in that order: core files
+the database-owner line also reads, so each lands with its own announcement line here.
+
 ## Rules between sessions
 
 1. Never force-push; never bare `git stash` (the stash stack is shared by every worktree).
