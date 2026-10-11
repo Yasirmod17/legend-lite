@@ -94,7 +94,7 @@ public final class Snowflake extends AnsiSqlRenderer {
     protected List<com.legend.sql.SqlRewriter> passes() {
         return List.of(new CarrierStrategies(CarrierStrategies.Caps.SNOWFLAKE), new PivotAsGroupBy(), new CheckedDefectsToLists(),
                 new SubstringClamp(), new LateralUnnestAsMarker(), new SelectListUnnestAsLateral(),
-                new ConstantKeysAsExpressions(), new RootNumericTypes());
+                new StarOverExplosionUnwrapped(), new ConstantKeysAsExpressions(), new RootNumericTypes());
     }
 
     @Override
@@ -305,6 +305,14 @@ public final class Snowflake extends AnsiSqlRenderer {
                     .append(") WITHIN GROUP (ORDER BY ").expr(ola.orderBy(), 0).append(")");
             case SqlExpr.Membership m when m.collection() instanceof SqlExpr.PlanParam p -> throw new DialectCapability(
                     "list parameter '" + p.name() + "' reached Snowflake, which binds no array (= ANY(?))");
+            // a decimal literal is the DECIMAL of its digits (SqlTyping.decimalLitType): Snowflake drops a trailing
+            // zero's scale (1.0 is a NUMBER(2,0), its text '1', measured), so such a literal spells its type
+            case SqlExpr.DecimalLit d when d.value().scale() > 0
+                    && d.value().stripTrailingZeros().scale() < d.value().scale() -> writer.append("CAST("
+                    + d.value().toPlainString() + " AS " + (d.type() instanceof com.legend.sql.TypeFact.Typed t
+                            && t.type() instanceof SqlType.Decimal dd ? castTypeName(dd)
+                            : "NUMBER(" + Math.max(d.value().precision(), d.value().scale()) + ","
+                                    + d.value().scale() + ")") + ")");
             default -> super.expr(writer, e, parentPrec);
         };
     }
@@ -523,8 +531,10 @@ public final class Snowflake extends AnsiSqlRenderer {
             case LIST_DISTINCT -> writer.append("ARRAY_DISTINCT(ARRAY_COMPACT(").expr(xs, 0).append("))");
             case LIST_APPEND -> writer.append("ARRAY_APPEND(").expr(xs, 0).append(", ").expr(a.get(1), 0).append(")");
             case LIST_SUM -> writer.piece(nonEmpty(xs, sum(xs, element, result)));
-            case LIST_MIN -> writer.piece(typed(w -> w.append("ARRAY_MIN(").expr(xs, 0).append(")"), element));
-            case LIST_MAX -> writer.piece(typed(w -> w.append("ARRAY_MAX(").expr(xs, 0).append(")"), element));
+            case LIST_MIN -> writer.piece(typed(w -> w.append("ARRAY_MIN(").expr(xs, 0).append(")"),
+                    element != null ? element : result));
+            case LIST_MAX -> writer.piece(typed(w -> w.append("ARRAY_MAX(").expr(xs, 0).append(")"),
+                    element != null ? element : result));
             case LIST_AVG -> writer.piece(nonEmpty(xs, w -> w.piece(sum(xs, SqlType.Scalar.DOUBLE,
                     SqlType.Scalar.DOUBLE)).append(" / ARRAY_SIZE(ARRAY_COMPACT(").expr(xs, 0).append("))")));
             case LIST_MEDIAN -> writer.piece(median(xs, element, result));
@@ -742,8 +752,10 @@ public final class Snowflake extends AnsiSqlRenderer {
         SqlType result = typeOf(rc);
         return switch (rc.reducer()) {
             case SUM -> writer.piece(nonEmpty(xs, sum(xs, element, result)));
-            case MIN -> writer.piece(typed(w -> w.append("ARRAY_MIN(").expr(xs, 0).append(")"), element));
-            case MAX -> writer.piece(typed(w -> w.append("ARRAY_MAX(").expr(xs, 0).append(")"), element));
+            case MIN -> writer.piece(typed(w -> w.append("ARRAY_MIN(").expr(xs, 0).append(")"),
+                    element != null ? element : result));
+            case MAX -> writer.piece(typed(w -> w.append("ARRAY_MAX(").expr(xs, 0).append(")"),
+                    element != null ? element : result));
             case AVG -> writer.piece(nonEmpty(xs, w -> w.piece(sum(xs, SqlType.Scalar.DOUBLE, SqlType.Scalar.DOUBLE))
                     .append(" / ARRAY_SIZE(ARRAY_COMPACT(").expr(xs, 0).append("))")));
             case COUNT -> writer.append("ARRAY_SIZE(ARRAY_COMPACT(").expr(xs, 0).append("))");
@@ -1417,7 +1429,7 @@ public final class Snowflake extends AnsiSqlRenderer {
                     String number = " AS NUMBER(38, " + precision + "))";
                     yield w -> w.append("(CASE WHEN ").expr(x, 0).append(" < 0 AND CAST(").expr(x, 0).append(number)
                             .append(" = 0 THEN '-' ELSE '' END || TO_VARCHAR(CAST(").expr(x, 0).append(number)
-                            .append(")");
+                            .append("))");
                 }
                 default -> throw new IllegalStateException("the directive pattern admits s, d, f: " + conversion);
             };
@@ -2041,6 +2053,15 @@ public final class Snowflake extends AnsiSqlRenderer {
 
     private SqlWriter windowedReducer(SqlWriter writer, SqlAgg.Reducer r, Window win) {
         boolean ordered = !win.orderBy().isEmpty();
+        // over a whole-partition frame, the aggregate in the window's order is the partition's ordered aggregate (an
+        // ARRAY_AGG over an ordered whole frame keeps no order, measured: 'BFH' for DuckDB's 'HFB')
+        if ((r.fn() == SqlAgg.Fn.STRING_AGG || r.fn() == SqlAgg.Fn.LIST) && ordered && win.frame() != null
+                && win.frame().from() instanceof SqlExpr.WindowCall.Frame.Bound.UnboundedPreceding
+                && win.frame().to() instanceof SqlExpr.WindowCall.Frame.Bound.UnboundedFollowing) {
+            SqlAgg.Reducer within = r.orderBy().isEmpty()
+                    ? new SqlAgg.Reducer(r.fn(), r.args(), r.distinct(), win.orderBy(), r.type()) : r;
+            return windowedReducer(writer, within, new Window(win.partitionBy(), List.of(), null));
+        }
         if (UNORDERED_ONLY.contains(r.fn()) && (ordered || win.frame() != null)) {
             throw new DialectCapability(r.fn() + " over an ordered or framed window reached Snowflake");
         }
@@ -2176,8 +2197,9 @@ public final class Snowflake extends AnsiSqlRenderer {
             List<SqlSelect.Projection> ps = new ArrayList<>();
             for (SqlSelect.Projection p : s.projections()) {
                 String name = markerColumn(p);
-                SqlExpr read = p.out() != null
-                        ? SqlExpr.Column.of(alias, name, p.out().type(), true, com.legend.sql.OutputCol.Origin.DERIVED)
+                SqlType slot = scalarSlot(p);
+                SqlExpr read = slot != null
+                        ? SqlExpr.Column.of(alias, name, slot, true, com.legend.sql.OutputCol.Origin.DERIVED)
                         : SqlExpr.Column.derived(alias, name);
                 ps.add(new SqlSelect.Projection(read, name, p.out()));
             }
@@ -2244,7 +2266,7 @@ public final class Snowflake extends AnsiSqlRenderer {
             for (SqlSelect.Projection p : m.projections()) {
                 String name = markerColumn(p);
                 SqlType element = p.expr().type() instanceof com.legend.sql.TypeFact.Typed t ? t.type()
-                        : p.out() != null ? p.out().type() : null;
+                        : scalarSlot(p);
                 SqlExpr.Column read = element == null ? SqlExpr.Column.derived(sub.alias(), name)
                         : SqlExpr.Column.of(sub.alias(), name, element, true, com.legend.sql.OutputCol.Origin.DERIVED);
                 into.add(w -> column(w, read).append(" AS ").append(aliasIdent(name)));
@@ -2266,6 +2288,35 @@ public final class Snowflake extends AnsiSqlRenderer {
             }
             into.put(sub.alias(), cols);
         }
+    }
+
+    /**
+     * MOVE TO its own file. {@code (SELECT * FROM (marker) AS t0) AS t1} is the marker itself, as {@code t1}:
+     * Snowflake refuses a correlated lateral subquery ("Unsupported subquery type cannot be evaluated", measured), and
+     * a FLATTEN joins laterally only bare.
+     */
+    static final class StarOverExplosionUnwrapped extends com.legend.sql.SqlRewriter {
+        @Override
+        protected SqlSource source(SqlSource s) {
+            if (s instanceof SqlSource.Subselect outer && outer.inner() instanceof SqlSelect star && plainStar(star)
+                    && star.from() instanceof SqlSource.Subselect inner && isMarker(inner.inner())) {
+                return new SqlSource.Subselect(inner.inner(), outer.alias(), outer.frameName());
+            }
+            return s;
+        }
+
+        private static boolean plainStar(SqlSelect s) {
+            return s.projections().isEmpty() && !s.distinct() && s.where() == null && s.groupBy().isEmpty()
+                    && s.having() == null && s.qualify() == null && s.orderBy().isEmpty() && s.limit() == null
+                    && s.offset() == null;
+        }
+    }
+
+    /** The scalar type an exploded column's slot declares, for an element of no known type (an exploded NULL list's:
+     *  its untyped read would be a VARIANT column under a scalar label); null for a composite slot, whose cell need
+     *  not be an OBJECT (a class value's slot holds the class's name, measured: "Failed to cast variant value"). */
+    static @com.legend.base.Nullable SqlType scalarSlot(SqlSelect.Projection p) {
+        return p.out() != null && p.out().type() instanceof SqlType.Scalar s ? s : null;
     }
 
     /** A select that only explodes lists: every projection a one-list UNNEST, FROM nothing, no clause. */
@@ -2596,10 +2647,9 @@ public final class Snowflake extends AnsiSqlRenderer {
                 }
                 String name = markerColumn(p);
                 unnests.add(new SqlSelect.Projection(p.expr(), name, p.out()));
-                // the element's type, else the slot's (an exploded NULL list's element has none, and its untyped
-                // read is a VARIANT column under a scalar label)
+                // the element's type, else the slot's when scalar (scalarSlot)
                 SqlType element = p.expr().type() instanceof com.legend.sql.TypeFact.Typed t ? t.type()
-                        : p.out() != null ? p.out().type() : null;
+                        : scalarSlot(p);
                 SqlExpr read = element == null ? SqlExpr.Column.derived(alias, name)
                         : SqlExpr.Column.of(alias, name, element, true, com.legend.sql.OutputCol.Origin.DERIVED);
                 ps.add(new SqlSelect.Projection(read, p.alias(), p.out()));
