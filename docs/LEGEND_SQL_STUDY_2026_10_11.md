@@ -806,9 +806,32 @@ Everything else is refused by name and position.
 - **Units:** the reader and the translator have 38 unit tests (`protocol/sql/SqlParserTest`, `SqlToPureTest`).
 - **Regressions:** core's guardrail (88) and census (12) suites pass.
 
-All of this ran locally on `javac` and JUnit with Maven Central's jars. Bazel itself could not run in this session:
-the environment's network policy blocks the GitHub archive downloads its toolchains need. The new Bazel target is
-therefore unproven until a Bazel run.
+All of this first ran locally on `javac` and JUnit with Maven Central's jars, then under Bazel.
+
+**Under Bazel** (later on 2026-10-11, Bazel 9.2.0 on a 4-core Linux container running as root):
+- **The local gate.** `bazel test --lockfile_mode=error //gates:local` on this branch: 310 of 325 pass, every core
+  target among them (`core_tests`, with the reader, the translator and the DuckDB end-to-end tests; the checks, the
+  guards and the census).
+- **What Bazel caught.** NullAway, which the `javac` run did not have, refused `SqlToPure`'s use of the nullable
+  `getMessage()`. `SqlSyntaxException.reason()` now carries the message, never null.
+- **The Postgres lane.** `//core:sql_island_postgres_test`, as Bazel built it (its JDK 25, its embedded Postgres
+  16), passes 90 of 90 run as a non-root user. Inside `bazel test` it cannot start here: `initdb` refuses root
+  (`EmbeddedPostgres`), as do `//core:postgres_arm_test` and `//datacube:verify_app_test`.
+- **The other 12 failures are this container's.** Each fails the same way on the commit before this work (11283c8),
+  and `main`'s CI is green on them:
+  - A WebAssembly trap, "function signature mismatch": `//datacube:run_stress_test` (the JSON Lines sample's
+    ingest), `verify_features_test` (the filter editor's typed values) and `//query:verify_test` (Objects mode's
+    JSON). `verify_smoke_test` renders no rows for the same JSON Lines sample.
+  - `//site:verify_test` waits 60 s for a selector, after its DataCube steps pass.
+  - Tests that time out even alone: `//datacube:json_read_test`, `upload_test`, the three `typed_values` tests, and
+    `//engine-client:model_data_test`.
+  - `//datacube:verify_remote_test` times out fetching from `extensions.duckdb.org`. It was not rerun on the base;
+    GATES.md records the same dependence.
+- **Getting Bazel to fetch.** The session's GitHub access is scoped to this repository, so archive downloads from
+  other GitHub repositories return 403, though git reads of them work. bats (registered by `bazel_lib`; nothing
+  here uses it) came from `mirror.bazel.build`. The legend-engine 4.145.0 and legend-pure 5.99.0 source archives
+  were rebuilt from their git tags with `git archive | gzip -n`, byte-identical to the pinned integrities, and given
+  to Bazel through `--distdir`.
 
 **Known differences from Postgres,** each refused or recorded:
 - `avg` returns Pure's Float where Postgres returns numeric (`SqlIslandIntegrationTest.anAverageIsAFloat…`).
