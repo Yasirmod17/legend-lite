@@ -314,3 +314,21 @@ commits; what they settled beyond §3 and §6:
 - **Left for later:** step 3, the page engine (the page's orchestration out of the screen, then `page.export`); step 5,
   the model plan's Python `create_*` (§15.5), which rides on step 2. A grid's view from Python is read-only for now: a
   grid is changed through the page builder (`grid.filter`, `grid.group`, ...), then viewed.
+
+## 13. Every non-screen test headless (2026-10-11, 7d973ea9e)
+
+The user: "we have to make sure we do the test split for all headless tests to run so we are not coding blind". §11's
+14 left-out files are each split in two, the half that needs more than V8 named for why: `<name>-dom` (the screen,
+jsdom), `<name>-http` (DataCube's HTTP clients over a stubbed fetch), `<name>-node` (Node as the reference). The rest
+keeps its name and runs in the lane.
+
+- **The lane: 67 files, 1,122 tests, every one passing**, the same count Node runs for those files. The 28 split files
+  hold 324 tests in Node, as the 14 did.
+- **Left out by name:** the four `-http` halves (the host has no fetch), `chart-echarts` (ECharts draws on a DOM
+  canvas), and the lane's own three conformance tests. The `-dom` and `-node` halves are left out by what they import,
+  which the roster guard reads.
+- **node:test's mock timers** are in the stand-in now (setTimeout and setInterval), held to Node's own by one scenario.
+  One quirk of Node's own mock is not copied: an interval cleared inside its own callback runs again there.
+- **mini-racer's timer defect** is reported upstream (https://github.com/bpcreech/PyMiniRacer/issues/97). It is not by
+  design (ECMAScript defines both results), not reported before, and not fixed in 0.14.1 or on main. The host's floor
+  goes when the pin moves past the fix; the lane tests every timeout form.
