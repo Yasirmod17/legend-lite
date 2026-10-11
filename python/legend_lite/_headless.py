@@ -77,14 +77,17 @@ class Headless:
     """DataCube's non-screen code in one V8 context, with its planner and its database. One per process is the intent
     (one state owner, as on screen); calls are serialized, one at a time. ``close()`` (or a ``with`` block) ends it."""
 
-    def __init__(self, bundle: str, *, memory_limit: int = DEFAULT_MEMORY_LIMIT, lib: Library | None = None) -> None:
+    def __init__(self, bundle: str, *, folder: str | Path | None = None, memory_limit: int = DEFAULT_MEMORY_LIMIT,
+                 lib: Library | None = None) -> None:
+        """``bundle`` is a headless bundle's script; ``folder`` where the files DataCube registers are written, which the
+        database reads relative names from (a temporary folder of the engine's own when not given)."""
         import duckdb  # the database: the datacube extra's, never the compiler's
 
         self._lib = lib or library()
-        self._files = tempfile.TemporaryDirectory(prefix='legend-lite-datacube-')
+        self._own_folder = tempfile.TemporaryDirectory(prefix='legend-lite-datacube-') if folder is None else None
+        self._folder = Path(self._own_folder.name if self._own_folder else folder).resolve()
         self._db = duckdb.connect()
-        # a file DataCube registers is written to the engine's own folder, which the database reads relative names from
-        self._db.execute('SET file_search_path = ?', [self._files.name])
+        self._db.execute("SET file_search_path = '" + str(self._folder).replace("'", "''") + "'")
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._loop.run_forever, name='legend-lite-datacube', daemon=True)
         self._thread.start()
@@ -112,7 +115,7 @@ class Headless:
         return base64.b64encode(sink.getvalue()).decode('ascii')
 
     async def _register_file(self, name: str, data: str) -> None:
-        root = Path(self._files.name).resolve()
+        root = self._folder
         target = (root / name).resolve()
         if root not in target.parents:
             raise ValueError(f'a registered file stays in the engine\'s folder: {name!r} does not')
@@ -135,13 +138,17 @@ class Headless:
         self._mr.set_hard_memory_limit(memory_limit)
         # no WebAssembly in this process (the user's ruling, 2026-10-11): anything that reached for it fails here, loudly
         self._mr.eval('delete globalThis.WebAssembly;')
-        self._mr.eval(bundle)
-        check_interface(json.loads(self._mr.eval('JSON.stringify(legendLiteHeadless.REQUEST_KINDS)')), self._lib)
+        # the host's calls first, as a browser's globals are there before a page's scripts: a module may plan as it loads
         calls = [await self._stack.enter_async_context(self._mr.wrap_py_function(f))
                  for f in (self._planner, self._query, self._register_file, self._digest)]
-        start = self._mr.eval('(planner, query, registerFile, digest) => {'
-                              ' globalThis.legendLite = legendLiteHeadless.start({ planner, query, registerFile, digest }); }')
-        start(*calls)
+        define = self._mr.eval('(planner, query, registerFile, digest) => {'
+                               ' globalThis.legendLiteHost = { planner, query, registerFile, digest }; }')
+        define(*calls)
+        self._mr.eval(bundle)
+        # a bundle whose modules await as they load (a test bundle's fixtures) says when it has: legendLiteReady
+        await self._mr.eval('Promise.resolve(globalThis.legendLiteReady)')
+        check_interface(json.loads(self._mr.eval('JSON.stringify(legendLiteHeadless.REQUEST_KINDS)')), self._lib)
+        self._mr.eval('globalThis.legendLite = legendLiteHeadless.start();')
 
     def _run(self, coroutine: Coroutine[Any, Any, Any]) -> Any:
         if threading.current_thread() is self._thread:
@@ -163,7 +170,7 @@ class Headless:
         self._run(run())
 
     def close(self) -> None:
-        """Ends the engine: its calls let go, V8's context, the loop's thread, the database and its folder."""
+        """Ends the engine: its calls let go, V8's context, the loop's thread, the database, and its own folder."""
         if self._loop.is_running():
             async def shut() -> None:
                 await self._stack.aclose()
@@ -176,7 +183,8 @@ class Headless:
             self._thread.join()
         self._loop.close()
         self._db.close()
-        self._files.cleanup()
+        if self._own_folder is not None:
+            self._own_folder.cleanup()
 
     def __enter__(self) -> Headless:
         return self

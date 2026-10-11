@@ -6,11 +6,10 @@
 // against a real engine rather than asserting it.
 
 import assert from 'node:assert/strict';
-import { engineClientRequire } from '../../engine-client/src/node-require.ts';
-import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
+import { openDatabase } from '#test-host';
 
-import { DuckDbEngine, type ArrowishConnection } from '../../engine-client/src/duckdb.ts';
+import { DuckDbEngine } from '../../engine-client/src/duckdb.ts';
 
 import type { CubeSnapshot } from '../src/snapshot.ts';
 import { element } from '../../pure-protocol/src/index.ts';
@@ -20,24 +19,8 @@ import { printLevel } from './lite-compiler.ts';
 let engine: DuckDbEngine;
 
 before(async () => {
-  const duckdb = engineClientRequire('@duckdb/duckdb-wasm/blocking');
-  const dist = path.dirname(engineClientRequire.resolve('@duckdb/duckdb-wasm/blocking'));
-  const db = await duckdb.createDuckDB(
-    {
-      mvp: {
-        mainModule: path.join(dist, 'duckdb-mvp.wasm'),
-        mainWorker: path.join(dist, 'duckdb-node-mvp.worker.cjs'),
-      },
-      eh: {
-        mainModule: path.join(dist, 'duckdb-eh.wasm'),
-        mainWorker: path.join(dist, 'duckdb-node-eh.worker.cjs'),
-      },
-    },
-    new duckdb.VoidLogger(),
-    duckdb.NODE_RUNTIME,
-  );
-  await db.instantiate();
-  engine = new DuckDbEngine(db.connect() as ArrowishConnection);
+  const db = await openDatabase();
+  engine = new DuckDbEngine(db.connection);
 
   // One region, two deliberately lopsided rows: a tiny deal at a
   // great margin and a large deal at a poor one.

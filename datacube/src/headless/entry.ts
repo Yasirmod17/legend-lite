@@ -6,7 +6,7 @@ import './install-web.ts';
 import './install-url.ts';
 
 import { REQUEST_KINDS, type PlannerWorker } from '../planner-protocol.ts';
-import { hostDatabase, hostWorker, installDigest, type HostCalls, type HostDatabase } from './host.ts';
+import { hostCalls, hostDatabase, hostWorker, type HostDatabase } from './host.ts';
 
 /** The request kinds this bundle's planner sends: the host checks, before anything runs, that it answers each (§7). */
 export { REQUEST_KINDS };
@@ -17,8 +17,8 @@ export interface Headless {
   readonly database: HostDatabase;
 }
 
-/** The host's calls taken: `crypto.subtle.digest` installed over them, and the planner's worker and the database made. */
-export function start(calls: HostCalls): Headless {
-  installDigest(calls);
+/** The planner's worker and the database, over the host's calls (`legendLiteHost`, defined before the bundle loads). */
+export function start(): Headless {
+  const calls = hostCalls();
   return { worker: () => hostWorker(calls), database: hostDatabase(calls) };
 }

@@ -1,13 +1,14 @@
-// legend-lite's own parser and printer -- the tab's WASM module, through pure-protocol's test
-// helper -- for tests that check WHAT QUERY DataCube builds: fixtures parsed as the compiler
-// parses what a person typed, and queries read back as the compiler prints them. A test using
-// this runs in the WASM group (BUILD.bazel `_WASM_TESTS`). Every answer of the compiler is awaited,
-// as DataCube's own planner API is: the compiler may answer from another thread or process
+// legend-lite's own parser and printer -- the product's planner (LitePlanner's parse and compose:
+// legend-engine's pure/v1 grammar calls), from the test's host (#test-host) -- for tests that check
+// WHAT QUERY DataCube builds: fixtures parsed as the compiler parses what a person typed, and
+// queries read back as the compiler prints them. A test using this runs in the WASM group
+// (BUILD.bazel `_WASM_TESTS`). Every answer of the compiler is awaited, as DataCube's own planner
+// API is: the compiler may answer from another thread or process
 // (docs/DATACUBE_HEADLESS_PYTHON_DESIGN_2026_10_11.md §6). The query is still built synchronously,
 // so a refusal of the builder throws as before.
 
-import { readLambda, toJson, type Lambda, type ValueSpecification } from '../../pure-protocol/src/index.ts';
-import { compose, parse } from '../../pure-protocol/test/lite.ts';
+import type { Lambda, ValueSpecification } from '../../pure-protocol/src/index.ts';
+import { plannerFor } from './catalog-builder.ts';
 import {
   childAggregateLambda,
   drillLambda,
@@ -22,9 +23,12 @@ import {
 import type { CubeSnapshot, FilterNode } from '../src/snapshot.ts';
 import { lambda } from '../../pure-protocol/src/index.ts';
 
+/** The grammar's planner: no model of its own is needed to parse and print. */
+const grammar = plannerFor('', '');
+
 /** E1's twin: what a person typed, as its lambda. */
 export async function liteParse(text: string): Promise<Lambda> {
-  return readLambda(await parse(text));
+  return grammar.parse(text);
 }
 
 /** E4's twin: a query as one line of Pure. */
@@ -34,19 +38,19 @@ export async function litePrint(query: Lambda): Promise<string> {
 
 /** A calculated column's lambda from the body a person typed, `$x.a * 2`: parsed by lite. */
 export async function row(body: string): Promise<Lambda> {
-  return readLambda(await parse(`x|${body}`));
+  return grammar.parse(`x|${body}`);
 }
 
 /** A relation expression a person typed, `#>{db::DB.T}#`: parsed by lite. */
 export async function source(text: string): Promise<ValueSpecification> {
-  const parsed = readLambda(await parse(`|${text}`)).body[0];
+  const parsed = (await grammar.parse(`|${text}`)).body[0];
   if (parsed === undefined) throw new Error(`not an expression: ${text}`);
   return parsed;
 }
 
 /** A query as one line of Pure, as lite prints it. */
 export function print(query: Lambda): Promise<string> {
-  return compose(toJson(query));
+  return grammar.compose(query, 'STANDARD');
 }
 
 /** A level's query, printed. */

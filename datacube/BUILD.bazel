@@ -244,7 +244,10 @@ _WASM_TESTS = [
     ) + (
         ["//engine-client:node_modules/@duckdb/duckdb-wasm"] if t[len("test/"):-len(".test.ts")] in _DUCKDB_USERS else []
     ) + (
-        ["test/catalog-builder.ts", "test/lite-compiler.ts", "//pure-protocol:typescript_sources"] if t[len("test/"):-len(".test.ts")] in _WASM_TESTS else []
+        ["test/catalog-builder.ts", "test/lite-compiler.ts"] if t[len("test/"):-len(".test.ts")] in _WASM_TESTS else []
+    ) + (
+        # the test's host (package.json "imports", #test-host): in Node, the module in-thread and DuckDB-WASM
+        ["test/host/node.ts"] if t[len("test/"):-len(".test.ts")] in _WASM_TESTS + _DUCKDB_USERS else []
     ),
     entry_point = t,
     env = _EXTRA_ENV.get(t[len("test/"):-len(".test.ts")], {}) | ({
