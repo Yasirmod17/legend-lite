@@ -232,24 +232,31 @@ public final class BigQuery extends AnsiSqlRenderer {
         }
     }
 
-    /** At the root, a list's element, min or max over the NULL list is its label's NULL (a bare NULL is an INT64
-     *  here, and {@code UNNEST(NULL)} is refused, measured). */
+    /** At the root, a value NULL by its shape ({@link #nullValued}) is its label's NULL (a bare NULL is an INT64 here,
+     *  and {@code UNNEST(NULL)} is refused, measured). */
     private SqlSelect rootNulls(SqlSelect s, int depth) {
         List<com.legend.sql.OutputCol> labels = roots.peek();
         if (depth != 0 || labels == null || labels.size() != s.projections().size()
-                || s.projections().stream().noneMatch(p -> nullOverNullList(p.expr()))) {
+                || s.projections().stream().noneMatch(p -> nullValued(p.expr()))) {
             return s;
         }
         List<SqlSelect.Projection> ps = new ArrayList<>();
         for (int i = 0; i < s.projections().size(); i++) {
             SqlSelect.Projection p = s.projections().get(i);
-            ps.add(nullOverNullList(p.expr())
+            ps.add(nullValued(p.expr())
                     ? new SqlSelect.Projection(new SqlExpr.Cast(new SqlExpr.NullLit(), labels.get(i).type()), p.alias(),
                             p.out())
                     : p);
         }
         return new SqlSelect(ps, s.distinct(), s.from(), s.where(), s.groupBy(), s.having(), s.qualify(), s.orderBy(),
                 s.limit(), s.offset(), s.outputs());
+    }
+
+    /** NULL by its shape: a list's element, min or max over the NULL list, or a COALESCE of NULLs (a bare NULL is an
+     *  INT64 here: COALESCE(NULL, NULL) is an INT64 column under a VARCHAR label, measured). */
+    private static boolean nullValued(SqlExpr e) {
+        return nullOverNullList(e) || e instanceof SqlExpr.Call c && c.fn() == SqlFn.COALESCE
+                && c.args().stream().allMatch(x -> x instanceof SqlExpr.NullLit);
     }
 
     /** {@code s} with each star over a FROM holding a marker spelled out: each other source's columns, then each
@@ -1075,6 +1082,10 @@ public final class BigQuery extends AnsiSqlRenderer {
         if (type == SqlType.Scalar.JSON || type instanceof SqlType.Array || type instanceof SqlType.Struct) {
             return w -> w.append("TO_JSON_STRING(").piece(value).append(")");
         }
+        // a decimal's text has its scale's digits, as DuckDB's (CAST(BIGNUMERIC '1.0' AS STRING) is '1', measured)
+        if (type instanceof SqlType.Decimal d && d.scale() > 0) {
+            return w -> w.append("FORMAT(" + stringLit("%." + d.scale() + "f") + ", ").piece(value).append(")");
+        }
         return w -> w.append("CAST(").piece(value).append(" AS STRING)");
     }
 
@@ -1085,6 +1096,18 @@ public final class BigQuery extends AnsiSqlRenderer {
     @Override
     protected SqlWriter call(SqlWriter writer, SqlExpr.Call c, int parentPrec) {
         List<SqlExpr> a = c.args();
+        if ((c.fn() == SqlFn.EQUAL || c.fn() == SqlFn.NOT_EQUAL) && a.size() == 2
+                && (composite(a.get(0)) || composite(a.get(1)))) {
+            return compositeEquality(writer, a, c.fn() == SqlFn.EQUAL);
+        }
+        // null-safe: a NULL composite's JSON text is 'null', no composite value's is
+        if ((c.fn() == SqlFn.IS_DISTINCT_FROM || c.fn() == SqlFn.NULL_SAFE_EQUAL
+                || c.fn() == SqlFn.NULL_SAFE_NOT_EQUAL) && a.size() == 2
+                && (composite(a.get(0)) || composite(a.get(1)))) {
+            return writer.append("(TO_JSON_STRING(").expr(a.get(0), 0)
+                    .append(c.fn() == SqlFn.NULL_SAFE_EQUAL ? ") = " : ") <> ").append("TO_JSON_STRING(")
+                    .expr(a.get(1), 0).append("))");
+        }
         return switch (c.fn()) {
             // ---- portable: the base arm (or a Spellings.BIGQUERY row) is GoogleSQL
             case AND, OR, NOT, EQUAL, NOT_EQUAL, LESS, LESS_EQUAL, GREATER, GREATER_EQUAL, PLUS, MINUS, TIMES,
@@ -1172,7 +1195,7 @@ public final class BigQuery extends AnsiSqlRenderer {
                     .append("))");
             case GUID -> writer.append("GENERATE_UUID()");
             // printf-like as DuckDB's: %d takes an INT64, %s a STRING on both (measured)
-            case FORMAT -> writer.append("FORMAT(").list(a).append(")");
+            case FORMAT -> format(writer, a);
             case JARO_WINKLER -> throw wall(c.fn(), "BigQuery has no Jaro-Winkler similarity");
             case CURRENT_USER_FN -> writer.append("SESSION_USER()");
 
@@ -1313,6 +1336,42 @@ public final class BigQuery extends AnsiSqlRenderer {
             case JSON_PRETTY -> throw wall(c.fn(), "BigQuery has no JSON pretty-printer");
             case JSON_MERGE_PATCH -> throw wall(c.fn(), "BigQuery has no JSON merge patch");
         };
+    }
+
+    private static boolean composite(SqlExpr e) {
+        SqlType t = typeOf(e);
+        return t instanceof SqlType.Struct || t instanceof SqlType.Array;
+    }
+
+    /** {@code =} between structs or arrays: GoogleSQL defines none ("Equality is not defined for arguments of type
+     *  STRUCT", measured); DuckDB's compares nested NULLs as equal, as their JSON texts do; a NULL operand is NULL. */
+    private SqlWriter compositeEquality(SqlWriter writer, List<SqlExpr> a, boolean equal) {
+        return writer.append("(CASE WHEN ").expr(a.get(0), 4).append(" IS NULL OR ").expr(a.get(1), 4)
+                .append(" IS NULL THEN NULL ELSE TO_JSON_STRING(").expr(a.get(0), 0).append(equal ? ") = " : ") <> ")
+                .append("TO_JSON_STRING(").expr(a.get(1), 0).append(") END)");
+    }
+
+    /** printf: a {@code %s} argument as its text (GoogleSQL's %s takes a STRING only: "Expected STRING; Got BOOL",
+     *  measured); the others as they are. */
+    private SqlWriter format(SqlWriter writer, List<SqlExpr> a) {
+        if (!(a.get(0) instanceof SqlExpr.StringLit f)) {
+            return writer.append("FORMAT(").list(a).append(")");
+        }
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("%[-+ #0]*[0-9]*(?:\\.[0-9]+)?([a-zA-Z%])")
+                .matcher(f.value());
+        List<SqlExpr> args = new ArrayList<>(a);
+        int arg = 1;
+        while (m.find()) {
+            char conversion = m.group(1).charAt(0);
+            if (conversion == '%') {
+                continue;
+            }
+            if (conversion == 's' && arg < args.size()) {
+                args.set(arg, new SqlExpr.Cast(args.get(arg), SqlType.Scalar.VARCHAR));
+            }
+            arg++;
+        }
+        return writer.append("FORMAT(").list(args).append(")");
     }
 
     // ---- call arms too long to stay inline (CodeShapeGuardrailTest: call under 250 lines)
