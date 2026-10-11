@@ -67,11 +67,12 @@ Python process
   - **Each request kind is answered by the same `Boundary` function in both hosts** (the Plan Gen line's review). The
     worker's nine kinds (`hold`, `release`, `relationType`, `tableModel`, `catalogColumnsSql`, `planJson`, `pureV1`,
     `testData`, `plan`) are one exported TypeScript type, which both hosts are checked against (§6).
-  - Two have no native function yet, and get one beside the held functions in `native/.../nativelib/Compiler.java`:
-    `plan`, as `lite_plan_held` over `Boundary.planHeld` (the query planned against the model held, compiled once),
-    and `testData`, as `lite_test_data_sql`. The measurement answered `plan` by `lite_plan_text` over the held model's
-    text, which compiles the whole model again for every query: not production's path, and it undoes compile-once.
-    The design does not.
+  - Three had no native function, and have one beside the held functions in `native/.../nativelib/Compiler.java`
+    (step 1c): `plan`, as `lite_plan_text_held` over `Boundary.planHeld` (the query planned against the model held,
+    compiled once); `relationType`, as `lite_relation_type_text_held` over `Boundary.relationTypeHeld` (Pure text: the
+    library's `lite_relation_type_held` reads a lambda's JSON); and `testData`, as `lite_test_data_sql`. The
+    measurement answered `plan` by `lite_plan_text` over the held model's text, which compiles the whole model again
+    for every query, and `relationType` by the JSON function: neither production's path. The design does neither.
   - `WasmPlanner` names how the browser delivers its module, not what it is. It is renamed `LitePlanner` (ruled, §10),
     with the Plan Gen / Exec Split line, whose boundary it is.
 - **The database.** It is DataCube's `DuckDbEngine`, unchanged, over a connection whose `query(sql)` runs on Python's
@@ -186,8 +187,10 @@ The measurement becomes a test, `//datacube:headless_test`, run on all three pla
 - **The extra raises the glibc floor for its users only:** `mini-racer`'s Linux wheels are `manylinux_2_27`, and
   legend-lite's wheel says `2_17`. The extra's documentation says so.
 - **An interface check at start, by lists, not a version** (the Plan Gen line's review: `Boundary` has no version, and a
-  hand-kept one gets forgotten). The bundle lists the request kinds it sends; the native library lists the functions
-  it exports (`lite_interface()`). A kind with no function fails at once, with both lists named.
+  hand-kept one gets forgotten). The bundle lists the request kinds it sends (`REQUEST_KINDS`); the host's one table
+  of kind to native function (`KINDS`, `legend_lite/_headless.py`) is checked against it, and each function against
+  the library's own export table (`Library.exports`: the linker's list, none kept by hand; agreed with the Plan Gen
+  line in place of a `lite_interface()`). A mismatch fails at start, with both sides named.
 
 ## 8. What it costs, and the risks
 
@@ -212,8 +215,8 @@ The measurement becomes a test, `//datacube:headless_test`, run on all three pla
    name agreed by the Plan Gen / Exec Split line.
 1. **The lane (§6).**
    - The test helpers made asynchronous; the hooks made supported options; the web layer with its conformance tests;
-     the worker's request kinds as one type, with their guard; `lite_plan_held` and `lite_test_data_sql` natively
-     (entry points in `native/` over `Boundary`'s existing functions, announced in docs/IN_FLIGHT.md on main first).
+     the worker's request kinds as one type, with their guard; `lite_plan_text_held`, `lite_relation_type_text_held`
+     and `lite_test_data_sql` natively (entry points in `native/` over `Boundary`'s existing functions). Built: §11.
    - Reviews: the Compiler Rewrite line for the BUILD diff and the new pinned Python dependency (`mini-racer` in
      `@pypi`); the Plan Gen / Exec Split line for the planner's hooks, the worker contract and the native entry points.
    - Before the push: the lane query (`tests(//...) except tests(//gates:lanes) except tests(//gates:heavy)` empty),
@@ -237,3 +240,48 @@ depends on steps 1-2. Steps 3-4 can follow the model plan's step 3 (dashboards o
 2. **V8** (`mini-racer`), at its size (+15-22 MB, +51 MB of memory), not QuickJS.
 3. **Before the model plan's Python calls** (§15.5): this design's steps 0-2 first.
 4. **The rename**, `WasmPlanner` to `LitePlanner`, with the Plan Gen / Exec Split line (agreed by it, 2026-10-11).
+
+## 11. Step 1, as built (2026-10-11, on branch datacube-headless)
+
+The user, 2026-10-11: "just do everything on the branch first with multiple commits then push". Step 1 is six
+commits; what they settled beyond §3 and §6:
+
+- **1a, the test helpers asynchronous** (6973ef19f). `lite-compiler.ts` and `pure-protocol/test/lite.ts` await each
+  answer; their callers in 18 files were converted by the measurement's codemod, its three flagged spots by hand, and
+  ten return types the type checker refused by hand. Every changed target runs the same number of tests before and after
+  (`docs/datacube-headless-evidence-2026-10-11/step1a/`).
+- **1b, the worker contract** (4d46a0e57). `datacube/src/planner-protocol.ts`: `REQUEST_KINDS` and one union tied to it at
+  compile time, so planner-worker.ts's switch is checked by tsc. `LitePlanner`'s `worker` option, a worker its host makes.
+- **1c, the native entry points** (d5a1f70e1). The three of §3, tested against the corpus differential over a held model.
+- **1d, the host** (ad7719bde). DataCube's side, `datacube/src/headless/`:
+  - The web layer to the standards' own algorithms, not the measurement's approximations. For example, UTF-8 decoding
+    gives one U+FFFD per maximal invalid subpart; capture listeners run first at the target; a passive listener cannot
+    cancel. It is held case for case to Node's built-ins by `headless-web.test.ts`, and to the DOM standard alone where
+    Node 22 departs from it.
+  - URL from whatwg-url, now a dependency of DataCube's.
+  - The planner's worker and the DuckDB connection, over the host's calls.
+
+  Python's side is `legend_lite/_headless.py`. It runs V8 on a loop of legend-lite's own, with WebAssembly deleted
+  before anything loads.
+- **1e, the tests' host** (9c3923ce2). `#test-host`, a package.json "imports" entry with a `headless` condition: in Node,
+  the module in-thread and DuckDB-WASM; in the lane, the host's. The swap is the build's. The fixtures are parsed and
+  printed by the product's planner (`LitePlanner.parse`/`compose`). **The host contract:** Python defines its calls as
+  `legendLiteHost` before a bundle loads, as a browser's globals are there before a page's scripts. A module may plan as
+  it loads.
+- **1f, the lane** (aff16009f). `//datacube:headless_test`, in `//gates:warehouse`:
+  - **53 test files, 985 of 985 tests, about 5 s**, each file in a Headless of its own, plus the host's own checks over
+    the product's bundle.
+  - **Left out, by name in BUILD:** the 4 files that test DataCube's HTTP clients (no fetch here); and 10 files that mix
+    screen tests (jsdom, or Node's own `fileURLToPath`/`node:crypto` as a reference) with non-screen ones. **A follow-up
+    splits those 10** into a screen file and a non-screen file, and the non-screen halves join the lane.
+  - **The stand-ins that judge the tests are held to Node's own in Node's lane:**
+    - `node-assert.ts` against `node:assert/strict`, over 66 x 66 value pairs and every expectation kind;
+    - `node-test.ts` against node:test's run of the same suite.
+
+    Two of the measurement's runner's errors are fixed: an async describe's tests are its own, and `afterEach` runs
+    after a failing test.
+  - **mini-racer 0.14's `setTimeout` throws for a delay of 0.** It waits on `Atomics.waitAsync`, which then answers at
+    once. The host holds each delay to at least a millisecond. To report upstream.
+  - **Made web-standard in four tests:** two describes no longer awaited, and two load-time fixtures moved into `before`
+    hooks, because a script bundle cannot await at load. Three tests that read Node's `Buffer` now use `atob` and
+    `TextDecoder`.
