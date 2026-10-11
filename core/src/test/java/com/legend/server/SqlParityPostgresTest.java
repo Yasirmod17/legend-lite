@@ -39,7 +39,8 @@ class SqlParityPostgresTest {
     @Test
     void theAnswersArePostgresAndEveryCaseHasItsLedgerStatus() throws Exception {
         Path dir = Runfile.property("sql.parity.schema").getParent();
-        List<SqlParity.Case> cases = SqlParity.cases(dir);
+        List<SqlParity.Case> cases = new java.util.ArrayList<>(SqlParity.cases(dir));
+        cases.addAll(SqlParity.cases(Runfile.property("sql.parity.lite").getParent(), "lite/"));
         List<SqlParity.Table> tables = SqlParity.schema(dir);
         Set<String> names = SqlParity.tableNames(tables);
         EmbeddedPostgres pg = EmbeddedPostgres.shared();

@@ -65,16 +65,41 @@ public final class SqlToPure {
     /** The one table function this step reads: {@code tb('pkg::Database.schema.table')}, upstream's dynamic source. */
     private static final String TABLE_FUNCTION = "tb";
 
-    private static final String ROW = "r";
-    private static final String GROUP = "y";
     private static final String NULL_ORDER = "meta::pure::functions::relation::NullOrder";
+    private static final String JOIN_KIND = "meta::pure::functions::relation::JoinKind";
     private static final String SYNTHETIC = "_sql_";
 
     private final Sources sources;
+    private final Env env;
+    /** This query level's lambda parameters: a row, a group, a join's two sides, a subquery's row. Each level has
+     *  its own, so a correlated subquery's lambdas can reach the enclosing query's row. */
+    private final String row;
+    private final String group;
+    private final String leftRow;
+    private final String rightRow;
     private int fresh;
 
-    private SqlToPure(Sources sources) {
+    private SqlToPure(Sources sources, Env env) {
         this.sources = sources;
+        this.env = env;
+        String level = env.level() == 0 ? "" : Integer.toString(env.level());
+        this.row = "r" + level;
+        this.group = "y" + level;
+        this.leftRow = "a" + level;
+        this.rightRow = "b" + level;
+    }
+
+    /** What a query level sees beyond its own FROM: the WITH queries in force, the enclosing query's scope (for a
+     *  correlated subquery), and how deep it is. */
+    private record Env(Map<String, Rel> ctes, @com.legend.base.Nullable Scope outer, int level) {
+    }
+
+    /** A translated query: its relation and its output columns. */
+    private record Rel(ValueSpecification vs, List<OutCol> columns) {
+    }
+
+    /** An output column: the name the query shows, what is known of its type, whether it may be NULL. */
+    private record OutCol(String name, Kind kind, boolean nullable) {
     }
 
     /** The Pure relation expression {@code sql} means; {@link SqlTranslationException} when it has none (its kind
@@ -87,8 +112,14 @@ public final class SqlToPure {
             throw new SqlTranslationException(e.unsupported() ? SqlTranslationException.Kind.UNSUPPORTED
                     : SqlTranslationException.Kind.SYNTAX, e.reason(), e.line(), e.column());
         }
+        return new SqlToPure(sources, new Env(Map.of(), null, 0)).statement(statement).vs();
+    }
+
+    private Rel statement(SqlAst.Statement statement) {
         return switch (statement) {
-            case SqlAst.Select s -> new SqlToPure(sources).select(s);
+            case SqlAst.Select s -> select(s);
+            case SqlAst.SetOperation s -> setOperation(s);
+            case SqlAst.With w -> with(w);
         };
     }
 
@@ -156,8 +187,22 @@ public final class SqlToPure {
         }
     }
 
-    /** A column of the relation in hand. */
-    private record Col(String name, Kind kind, boolean nullable) {
+    /** A column of the relation in hand: {@code name} is the column the relation holds it in, {@code label} the name
+     *  the query sees it by, and {@code var} the lambda parameter that reaches it when it is not this level's row
+     *  (a join side's, or an enclosing query's for a correlated reference). */
+    private record Col(String name, Kind kind, boolean nullable, @com.legend.base.Nullable String var, String label) {
+
+        static Col of(String name, Kind kind, boolean nullable) {
+            return new Col(name, kind, nullable, null, name);
+        }
+
+        Col via(@com.legend.base.Nullable String parameter) {
+            return new Col(name, kind, nullable, parameter, label);
+        }
+
+        Col asNullable() {
+            return new Col(name, kind, true, var, label);
+        }
     }
 
     // ------------------------------------------------------------------ names
@@ -226,57 +271,174 @@ public final class SqlToPure {
         @com.legend.base.Nullable String noAggregatesIn();
     }
 
-    /** The FROM source's columns, before any grouping. */
+    /** A FROM item's columns as the query names them: its qualifier (an alias, a table's or function's name; none
+     *  for an unaliased subquery), and its columns. */
+    private record Binding(SqlAst.@com.legend.base.Nullable Ident qualifier, List<BCol> columns) {
+
+        List<String> names(boolean bareOnly) {
+            List<String> names = new ArrayList<>();
+            for (BCol c : columns) {
+                if (c.bare() || !bareOnly) {
+                    names.add(c.col().label());
+                }
+            }
+            return names;
+        }
+
+        Binding via(@com.legend.base.Nullable String parameter) {
+            List<BCol> cols = new ArrayList<>();
+            for (BCol c : columns) {
+                cols.add(new BCol(c.col().via(parameter), c.bare()));
+            }
+            return new Binding(qualifier, cols);
+        }
+
+        Binding asNullable() {
+            List<BCol> cols = new ArrayList<>();
+            for (BCol c : columns) {
+                cols.add(new BCol(c.col().asNullable(), c.bare()));
+            }
+            return new Binding(qualifier, cols);
+        }
+    }
+
+    /** A binding's column; {@code bare} when an unqualified name reaches it (a USING join's two sides' columns are
+     *  reached only qualified: the unqualified name is the merged column). */
+    private record BCol(Col col, boolean bare) {
+    }
+
+    /** The FROM clause's relation, its bindings, and its columns in {@code SELECT *}'s order. */
+    private record Source(ValueSpecification relation, List<Binding> bindings, List<Col> star) {
+    }
+
+    /** The FROM clause's columns, before any grouping; names it does not have are the enclosing query's. */
     private final class Input implements Scope {
-        private final SqlAst.Ident qualifier;
-        private final List<Col> columns;
+        private final List<Binding> bindings;
+        private final List<Col> star;
         private final String clause;
 
-        Input(SqlAst.Ident qualifier, List<Col> columns, String clause) {
-            this.qualifier = qualifier;
-            this.columns = columns;
+        Input(List<Binding> bindings, List<Col> star, String clause) {
+            this.bindings = bindings;
+            this.star = star;
             this.clause = clause;
         }
 
         Input in(String otherClause) {
-            return new Input(qualifier, columns, otherClause);
+            return new Input(bindings, star, otherClause);
         }
 
+        /** The relation's columns, by the names it holds them under. */
         List<String> names() {
-            return columns.stream().map(Col::name).toList();
+            List<String> names = new ArrayList<>();
+            for (Binding b : bindings) {
+                for (BCol c : b.columns()) {
+                    names.add(c.col().name());
+                }
+            }
+            return names;
+        }
+
+        /** True iff an unqualified {@code name} is a column here (Postgres reads a GROUP BY name as one first). */
+        boolean has(SqlAst.Ident name) {
+            for (Binding b : bindings) {
+                if (resolve(name, b.names(true), "column") != null) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         @Override
         public Col column(SqlAst.ColumnRef ref) {
+            Col found = find(ref);
+            if (found != null) {
+                return found;
+            }
+            Scope outer = env.outer();
+            if (outer != null) {
+                return outer.column(ref);
+            }
+            return notFound(ref);
+        }
+
+        /** The column {@code ref} names here, or null for none (an enclosing query may have it). */
+        @com.legend.base.Nullable Col find(SqlAst.ColumnRef ref) {
             List<SqlAst.Ident> parts = ref.parts();
             if (parts.size() > 2) {
                 throw SqlTranslationException.unsupported("schema-qualified column references are not supported yet",
                         ref.pos());
             }
+            SqlAst.Ident name = parts.get(parts.size() - 1);
             if (parts.size() == 2) {
-                SqlAst.Ident q = parts.get(0);
-                if (resolve(q, List.of(qualifier.text()), "table") == null) {
-                    throw SqlTranslationException.invalid("missing FROM-clause entry for table \"" + q.text() + "\"",
-                            q.pos());
+                Binding b = binding(parts.get(0));
+                if (b == null) {
+                    return null;
+                }
+                String label = resolve(name, b.names(false), "column");
+                if (label == null) {
+                    throw SqlTranslationException.invalid("column " + parts.get(0).text() + "." + name.text()
+                            + " does not exist" + hint(name, b.names(false)), name.pos());
+                }
+                return column(b, label, false);
+            }
+            Col match = null;
+            for (Binding b : bindings) {
+                String label = resolve(name, b.names(true), "column");
+                if (label != null) {
+                    if (match != null) {
+                        throw SqlTranslationException.invalid("column reference \"" + name.text() + "\" is ambiguous",
+                                name.pos());
+                    }
+                    match = column(b, label, true);
                 }
             }
+            return match;
+        }
+
+        private Col column(Binding b, String label, boolean bareOnly) {
+            for (BCol c : b.columns()) {
+                if (c.col().label().equals(label) && (c.bare() || !bareOnly)) {
+                    return c.col();
+                }
+            }
+            throw new IllegalStateException("resolved to a column not in the binding: " + label);
+        }
+
+        /** The binding a qualifier names, or null. */
+        @com.legend.base.Nullable Binding binding(SqlAst.Ident qualifier) {
+            Binding found = null;
+            for (Binding b : bindings) {
+                SqlAst.Ident q = b.qualifier();
+                if (q != null && resolve(qualifier, List.of(q.quoted() ? q.text() : fold(q.text())), "table")
+                        != null) {
+                    if (found != null) {
+                        throw SqlTranslationException.invalid("table reference \"" + qualifier.text()
+                                + "\" is ambiguous", qualifier.pos());
+                    }
+                    found = b;
+                }
+            }
+            return found;
+        }
+
+        private Col notFound(SqlAst.ColumnRef ref) {
+            List<SqlAst.Ident> parts = ref.parts();
             SqlAst.Ident name = parts.get(parts.size() - 1);
-            String found = resolve(name, names(), "column");
-            if (found == null && parts.size() == 1 && resolve(name, List.of(qualifier.text()), "table") != null) {
+            if (parts.size() == 2) {
+                throw SqlTranslationException.invalid("missing FROM-clause entry for table \"" + parts.get(0).text()
+                        + "\"", parts.get(0).pos());
+            }
+            if (binding(name) != null) {
                 // Postgres reads a FROM item's name as its whole row (row_to_json(persons))
                 throw SqlTranslationException.unsupported("whole-row references (\"" + name.text() + "\" as a value)"
                         + " are not supported yet", name.pos());
             }
-            if (found == null) {
-                throw SqlTranslationException.invalid("column \"" + name.text() + "\" does not exist"
-                        + hint(name, names()), name.pos());
+            List<String> all = new ArrayList<>();
+            for (Binding b : bindings) {
+                all.addAll(b.names(false));
             }
-            for (Col c : columns) {
-                if (c.name().equals(found)) {
-                    return c;
-                }
-            }
-            throw new IllegalStateException("resolved to a column not in the scope: " + found);
+            throw SqlTranslationException.invalid("column \"" + name.text() + "\" does not exist" + hint(name, all),
+                    name.pos());
         }
 
         @Override
@@ -305,6 +467,10 @@ public final class SqlToPure {
         @Override
         public Col column(SqlAst.ColumnRef ref) {
             Col source = input.column(ref);
+            if (source.var() != null) {
+                // the enclosing query's column: one value per group, as Postgres has it
+                return source;
+            }
             Col key = keyBySource.get(source.name());
             if (key == null) {
                 throw SqlTranslationException.invalid("column \"" + text(ref) + "\" must appear in the GROUP BY"
@@ -333,67 +499,453 @@ public final class SqlToPure {
 
     // ------------------------------------------------------------------ the query
 
-    private ValueSpecification select(SqlAst.Select s) {
-        SqlAst.FromItem from = s.from();
-        if (from == null) {
+    private Rel select(SqlAst.Select s) {
+        if (s.from().isEmpty()) {
             throw SqlTranslationException.unsupported("a query without FROM is not supported yet", s.pos());
         }
         if (s.items().isEmpty()) {
             throw SqlTranslationException.unsupported("a select list with no columns is not supported yet", s.pos());
         }
-        ValueSpecification relation = source(from);
-        List<Col> columns = new ArrayList<>();
-        sources.columns(relation, (name, type, nullable) -> columns.add(new Col(name, kindOf(type), nullable)));
-        SqlAst.Ident alias = from.alias();
-        SqlAst.Ident qualifier = alias != null ? alias : last(from);
-        Input input = new Input(qualifier, columns, "WHERE");
-
+        Source src = null;
+        for (SqlAst.FromItem item : s.from()) {
+            // a comma is a cross join, binding looser than JOIN (the ON of a JOIN sees its own two sides only)
+            Source next = from(item);
+            src = src == null ? next : join(src, next, SqlAst.JoinType.CROSS, null, List.of(), false, item.pos());
+        }
+        Source source = java.util.Objects.requireNonNull(src);
+        Input input = new Input(source.bindings(), source.star(), "WHERE");
+        ValueSpecification relation = source.relation();
         SqlAst.Expr where = s.where();
         if (where != null) {
-            relation = call("filter", relation, lambda(ROW, condition(where, input, "WHERE")));
+            relation = call("filter", relation, lambda(row, condition(where, input, "WHERE")));
         }
         boolean aggregate = !s.groupBy().isEmpty() || hasAggregate(s);
         return aggregate ? grouped(s, input.in("GROUP BY"), relation) : plain(s, input.in("the select list"), relation);
     }
 
-    private static SqlAst.Ident last(SqlAst.FromItem from) {
-        List<SqlAst.Ident> name = switch (from) {
-            case SqlAst.TableName t -> t.name();
-            case SqlAst.TableFunction f -> f.name();
+    // ------------------------------------------------------------------ FROM
+
+    /** One FROM item: a table, a WITH query, a subquery, or a join. */
+    private Source from(SqlAst.FromItem item) {
+        return switch (item) {
+            case SqlAst.TableName t -> {
+                Rel cte = t.name().size() == 1 ? cte(t.name().get(0)) : null;
+                if (cte == null) {
+                    throw SqlTranslationException.unsupported("a table name needs a source function for now: write "
+                            + TABLE_FUNCTION + "('pkg::Database.schema.table')", t.pos());
+                }
+                SqlAst.Ident alias = t.alias();
+                yield bound(cte, alias != null ? alias : t.name().get(0), t.columnAliases(), t.pos());
+            }
+            case SqlAst.TableFunction f -> {
+                ValueSpecification relation = tableFunction(f);
+                List<OutCol> columns = new ArrayList<>();
+                sources.columns(relation, (name, type, nullable) -> columns.add(new OutCol(name, kindOf(type),
+                        nullable)));
+                SqlAst.Ident alias = f.alias();
+                yield bound(new Rel(relation, columns), alias != null ? alias : f.name().get(f.name().size() - 1),
+                        f.columnAliases(), f.pos());
+            }
+            case SqlAst.SubqueryFrom q -> {
+                // not LATERAL: the subquery sees the WITH queries, never this query's other FROM items
+                Rel rel = new SqlToPure(sources, new Env(env.ctes(), env.outer(), env.level())).statement(q.query());
+                yield bound(rel, q.alias(), q.columnAliases(), q.pos());
+            }
+            case SqlAst.Join j -> join(from(j.left()), from(j.right()), j.type(), j.on(), j.using(), j.natural(),
+                    j.pos());
         };
-        return name.get(name.size() - 1);
+    }
+
+    /** The WITH query a one-part table name names, or null. */
+    private @com.legend.base.Nullable Rel cte(SqlAst.Ident name) {
+        String found = resolve(name, env.ctes().keySet(), "table");
+        return found == null ? null : env.ctes().get(found);
+    }
+
+    /** A relation as a FROM item: its columns renamed by the alias's column list, under its qualifier. */
+    private Source bound(Rel rel, SqlAst.@com.legend.base.Nullable Ident qualifier, List<SqlAst.Ident> columnAliases,
+            SqlAst.Pos pos) {
+        Rel renamed = columnAliases.isEmpty() ? rel : aliased(rel, columnAliases, qualifier, pos);
+        List<BCol> cols = new ArrayList<>();
+        List<Col> star = new ArrayList<>();
+        for (OutCol c : renamed.columns()) {
+            Col col = Col.of(c.name(), c.kind(), c.nullable());
+            cols.add(new BCol(col, true));
+            star.add(col);
+        }
+        return new Source(renamed.vs(), List.of(new Binding(qualifier, cols)), star);
+    }
+
+    /** {@code alias(a, b)}: the first columns renamed, in order (Postgres lets fewer names than columns be given). */
+    private Rel aliased(Rel rel, List<SqlAst.Ident> names, SqlAst.@com.legend.base.Nullable Ident qualifier,
+            SqlAst.Pos pos) {
+        if (names.size() > rel.columns().size()) {
+            throw SqlTranslationException.invalid("table \"" + (qualifier == null ? "" : qualifier.text()) + "\" has "
+                    + rel.columns().size() + " columns available but " + names.size() + " columns specified", pos);
+        }
+        List<String> to = new ArrayList<>();
+        for (int i = 0; i < rel.columns().size(); i++) {
+            to.add(i < names.size() ? names.get(i).quoted() ? names.get(i).text() : fold(names.get(i).text())
+                    : rel.columns().get(i).name());
+        }
+        return renamed(rel, to, pos);
+    }
+
+    /** {@code rel} with its columns named {@code to}, in order, through fresh names where two would collide. */
+    private Rel renamed(Rel rel, List<String> to, SqlAst.Pos pos) {
+        Set<String> seen = new HashSet<>();
+        for (String n : to) {
+            if (!seen.add(n)) {
+                throw SqlTranslationException.unsupported("the column name \"" + n + "\" appears twice; Pure relations"
+                        + " need distinct column names", pos);
+            }
+        }
+        Set<String> taken = new HashSet<>(to);
+        rel.columns().forEach(c -> taken.add(c.name()));
+        List<Integer> changed = new ArrayList<>();
+        boolean swaps = false;
+        List<OutCol> cols = new ArrayList<>();
+        for (int i = 0; i < to.size(); i++) {
+            OutCol c = rel.columns().get(i);
+            String target = to.get(i);
+            if (!c.name().equals(target)) {
+                changed.add(i);
+                swaps |= rel.columns().stream().anyMatch(o -> o.name().equals(target));
+            }
+            cols.add(new OutCol(to.get(i), c.kind(), c.nullable()));
+        }
+        // a new name that another column holds now: every change goes through a fresh name first
+        ValueSpecification vs = rel.vs();
+        List<String> via = new ArrayList<>();
+        for (int i : changed) {
+            String from = rel.columns().get(i).name();
+            if (swaps) {
+                String t = fresh(taken);
+                vs = call("rename", vs, colSpec(from), colSpec(t));
+                from = t;
+            }
+            via.add(from);
+        }
+        for (int k = 0; k < changed.size(); k++) {
+            vs = call("rename", vs, colSpec(via.get(k)), colSpec(to.get(changed.get(k))));
+        }
+        return new Rel(vs, cols);
     }
 
     /** {@code tb('pkg::Database.schema.table')}: the table as {@code #>{pkg::Database.schema.table}#}. */
-    private ValueSpecification source(SqlAst.FromItem from) {
-        return switch (from) {
-            case SqlAst.TableName t -> throw SqlTranslationException.unsupported("a table name needs a source"
-                    + " function for now: write " + TABLE_FUNCTION + "('pkg::Database.schema.table')", t.pos());
-            case SqlAst.TableFunction f -> {
-                if (f.name().size() != 1 || !TABLE_FUNCTION.equals(functionName(f.name().get(0)))) {
-                    throw SqlTranslationException.unsupported("function \"" + f.name().get(f.name().size() - 1).text()
-                            + "\" in FROM is not supported yet; the source function is " + TABLE_FUNCTION + "(...)",
-                            f.pos());
+    private static ValueSpecification tableFunction(SqlAst.TableFunction f) {
+        if (f.name().size() != 1 || !TABLE_FUNCTION.equals(functionName(f.name().get(0)))) {
+            throw SqlTranslationException.unsupported("function \"" + f.name().get(f.name().size() - 1).text()
+                    + "\" in FROM is not supported yet; the source function is " + TABLE_FUNCTION + "(...)", f.pos());
+        }
+        if (f.args().size() != 1 || f.args().get(0).name() != null
+                || !(f.args().get(0).value() instanceof SqlAst.StringLit path)) {
+            throw SqlTranslationException.invalid(TABLE_FUNCTION + "(...) takes one string: " + TABLE_FUNCTION
+                    + "('pkg::Database.schema.table')", f.pos());
+        }
+        // the database's path holds no '.', so the first one ends it
+        String p = path.value();
+        int dot = p.indexOf('.');
+        if (dot <= 0 || dot == p.length() - 1) {
+            throw SqlTranslationException.invalid("a table is named 'pkg::Database.schema.table' or"
+                    + " 'pkg::Database.table', not '" + p + "'", path.pos());
+        }
+        return AppliedFunction.tableReference(p.substring(0, dot), p.substring(dot + 1), null);
+    }
+
+    /** Two FROM items joined: the right side's columns renamed where the left has the name (a Pure relation's
+     *  column names are distinct), then Pure's join, its condition over the two sides' rows. An outer join's
+     *  other side may be NULL; a USING or NATURAL join's columns are merged, shown once, first. */
+    private Source join(Source left, Source right, SqlAst.JoinType type, SqlAst.@com.legend.base.Nullable Expr on,
+            List<SqlAst.Ident> using, boolean natural, SqlAst.Pos pos) {
+        for (Binding l : left.bindings()) {
+            for (Binding r : right.bindings()) {
+                SqlAst.Ident lq = l.qualifier();
+                SqlAst.Ident rq = r.qualifier();
+                if (lq != null && rq != null && (lq.quoted() ? lq.text() : fold(lq.text())).equals(
+                        rq.quoted() ? rq.text() : fold(rq.text()))) {
+                    throw SqlTranslationException.invalid("table name \"" + rq.text() + "\" specified more than once",
+                            rq.pos());
                 }
-                if (f.args().size() != 1 || f.args().get(0).name() != null
-                        || !(f.args().get(0).value() instanceof SqlAst.StringLit path)) {
-                    throw SqlTranslationException.invalid(TABLE_FUNCTION + "(...) takes one string:"
-                            + " " + TABLE_FUNCTION + "('pkg::Database.schema.table')", f.pos());
-                }
-                // the database's path holds no '.', so the first one ends it
-                String p = path.value();
-                int dot = p.indexOf('.');
-                if (dot <= 0 || dot == p.length() - 1) {
-                    throw SqlTranslationException.invalid("a table is named 'pkg::Database.schema.table' or"
-                            + " 'pkg::Database.table', not '" + p + "'", path.pos());
-                }
-                yield AppliedFunction.tableReference(p.substring(0, dot), p.substring(dot + 1), null);
             }
+        }
+        // the right side's columns, renamed apart from the left's
+        Set<String> taken = new HashSet<>();
+        left.bindings().forEach(b -> b.columns().forEach(c -> taken.add(c.col().name())));
+        right.bindings().forEach(b -> b.columns().forEach(c -> taken.add(c.col().name())));
+        Set<String> leftNames = new HashSet<>();
+        left.bindings().forEach(b -> b.columns().forEach(c -> leftNames.add(c.col().name())));
+        Map<String, String> renames = new LinkedHashMap<>();
+        ValueSpecification rightRel = right.relation();
+        for (Binding b : right.bindings()) {
+            for (BCol c : b.columns()) {
+                String name = c.col().name();
+                if (leftNames.contains(name)) {
+                    SqlAst.Ident q = b.qualifier();
+                    String want = (q == null ? "t" : fold(q.text())) + "_" + name;
+                    String to = taken.contains(want) ? fresh(taken) : want;
+                    taken.add(to);
+                    renames.put(name, to);
+                    rightRel = call("rename", rightRel, colSpec(name), colSpec(to));
+                }
+            }
+        }
+        List<Binding> rights = new ArrayList<>();
+        for (Binding b : right.bindings()) {
+            List<BCol> cols = new ArrayList<>();
+            for (BCol c : b.columns()) {
+                Col col = c.col();
+                String to = renames.get(col.name());
+                cols.add(new BCol(to == null ? col : new Col(to, col.kind(), col.nullable(), col.var(), col.label()),
+                        c.bare()));
+            }
+            rights.add(new Binding(b.qualifier(), cols));
+        }
+        List<Col> rightStar = new ArrayList<>();
+        for (Col c : right.star()) {
+            String to = renames.get(c.name());
+            rightStar.add(to == null ? c : new Col(to, c.kind(), c.nullable(), c.var(), c.label()));
+        }
+        // USING and NATURAL: the columns the two sides share by name
+        List<SqlAst.Ident> shared = new ArrayList<>(using);
+        if (natural) {
+            for (Col l : left.star()) {
+                for (Col r : rightStar) {
+                    if (l.label().equals(r.label())) {
+                        shared.add(new SqlAst.Ident(l.label(), true, pos));
+                    }
+                }
+            }
+        }
+        // the condition, over the two sides' rows
+        List<Binding> conditionScope = new ArrayList<>();
+        left.bindings().forEach(b -> conditionScope.add(b.via(leftRow)));
+        rights.forEach(b -> conditionScope.add(b.via(rightRow)));
+        Input sides = new Input(conditionScope, List.of(), "JOIN conditions");
+        List<Col[]> merged = new ArrayList<>();
+        ValueSpecification condition;
+        if (!shared.isEmpty()) {
+            List<ValueSpecification> tests = new ArrayList<>();
+            for (SqlAst.Ident u : shared) {
+                Col l = sharedColumn(left.bindings(), u, "left");
+                Col r = sharedColumn(rights, u, "right");
+                List<Tx> pair = List.of(columnValue(row, l.via(leftRow)), columnValue(row, r.via(rightRow)));
+                if (pair.get(0).kind() != pair.get(1).kind() && !(pair.get(0).kind().numeric()
+                        && pair.get(1).kind().numeric())) {
+                    throw SqlTranslationException.invalid("JOIN/USING types " + l.kind().name().toLowerCase(Locale.ROOT)
+                            + " and " + r.kind().name().toLowerCase(Locale.ROOT) + " cannot be matched", u.pos());
+                }
+                tests.add(strictTest(pair, v -> call("equal", v.get(0), v.get(1))).vs());
+                merged.add(new Col[] {l, r});
+            }
+            condition = tests.get(0);
+            for (int i = 1; i < tests.size(); i++) {
+                condition = call("and", condition, tests.get(i));
+            }
+        } else if (on != null) {
+            condition = condition(on, sides, "JOIN/ON");
+        } else {
+            condition = new CBoolean(true);
+        }
+        String kind = switch (type) {
+            case INNER, CROSS -> "INNER";
+            case LEFT -> "LEFT";
+            case RIGHT -> "RIGHT";
+            case FULL -> "FULL";
         };
+        ValueSpecification relation = call("join", left.relation(), rightRel, new EnumValue(JOIN_KIND, kind),
+                lambda2(leftRow, rightRow, condition));
+        // an outer join's other side may hold no row
+        boolean leftNullable = type == SqlAst.JoinType.RIGHT || type == SqlAst.JoinType.FULL;
+        boolean rightNullable = type == SqlAst.JoinType.LEFT || type == SqlAst.JoinType.FULL;
+        List<Binding> bindings = new ArrayList<>();
+        Set<String> hidden = new HashSet<>();
+        for (Col[] m : merged) {
+            hidden.add(m[0].name());
+            hidden.add(m[1].name());
+        }
+        for (Binding b : left.bindings()) {
+            bindings.add(hide(leftNullable ? b.asNullable() : b, hidden));
+        }
+        for (Binding b : rights) {
+            bindings.add(hide(rightNullable ? b.asNullable() : b, hidden));
+        }
+        List<Col> star = new ArrayList<>();
+        if (!merged.isEmpty()) {
+            List<BCol> mergedCols = new ArrayList<>();
+            List<ColSpec> coalesced = new ArrayList<>();
+            for (Col[] m : merged) {
+                Col l = m[0];
+                Col r = m[1];
+                Col col;
+                if (type == SqlAst.JoinType.FULL) {
+                    String name = fresh(taken);
+                    coalesced.add(new ColSpec(name, lambda(row, call("coalesce", property(row, l.name()),
+                            property(row, r.name()))), null, null));
+                    col = new Col(name, l.kind(), l.nullable() && r.nullable(), null, l.label());
+                } else if (type == SqlAst.JoinType.RIGHT) {
+                    col = new Col(r.name(), r.kind(), r.nullable(), null, l.label());
+                } else {
+                    col = new Col(l.name(), l.kind(), l.nullable(), null, l.label());
+                }
+                mergedCols.add(new BCol(col, true));
+                star.add(col);
+            }
+            if (!coalesced.isEmpty()) {
+                relation = call("extend", relation, new ColSpecArray(coalesced));
+            }
+            bindings.add(0, new Binding(null, mergedCols));
+        }
+        for (Col c : left.star()) {
+            if (!hidden.contains(c.name())) {
+                star.add(leftNullable ? c.asNullable() : c);
+            }
+        }
+        for (Col c : rightStar) {
+            if (!hidden.contains(c.name())) {
+                star.add(rightNullable ? c.asNullable() : c);
+            }
+        }
+        return new Source(relation, bindings, star);
+    }
+
+    /** A USING column on one side of a join: the one column there of that name. */
+    private static Col sharedColumn(List<Binding> side, SqlAst.Ident name, String which) {
+        Col found = null;
+        for (Binding b : side) {
+            String label = resolve(name, b.names(true), "column");
+            if (label != null) {
+                if (found != null) {
+                    throw SqlTranslationException.invalid("common column name \"" + name.text() + "\" appears more"
+                            + " than once in " + which + " table", name.pos());
+                }
+                for (BCol c : b.columns()) {
+                    if (c.col().label().equals(label) && c.bare()) {
+                        found = c.col();
+                    }
+                }
+            }
+        }
+        if (found == null) {
+            throw SqlTranslationException.invalid("column \"" + name.text() + "\" specified in USING clause does not"
+                    + " exist in " + which + " table", name.pos());
+        }
+        return found;
+    }
+
+    /** A binding whose USING columns are reached only qualified. */
+    private static Binding hide(Binding b, Set<String> hidden) {
+        List<BCol> cols = new ArrayList<>();
+        for (BCol c : b.columns()) {
+            cols.add(new BCol(c.col(), c.bare() && !hidden.contains(c.col().name())));
+        }
+        return new Binding(b.qualifier(), cols);
+    }
+
+    // ------------------------------------------------------------------ set operations and WITH
+
+    /** {@code UNION [ALL]}: Pure's concatenate (and distinct), the right side's columns named as the left's, in
+     *  order; then the result's sort and slice, by output name or position only (Postgres's rule). INTERSECT and
+     *  EXCEPT have no Pure spelling yet. */
+    private Rel setOperation(SqlAst.SetOperation s) {
+        if (s.op() != SqlAst.SetOp.UNION) {
+            throw SqlTranslationException.unsupported(s.op() + " is not supported yet", s.pos());
+        }
+        Rel left = statement(s.left());
+        Rel right = statement(s.right());
+        if (left.columns().size() != right.columns().size()) {
+            throw SqlTranslationException.invalid("each UNION query must have the same number of columns", s.pos());
+        }
+        List<String> names = new ArrayList<>();
+        List<OutCol> columns = new ArrayList<>();
+        for (int i = 0; i < left.columns().size(); i++) {
+            OutCol l = left.columns().get(i);
+            OutCol r = right.columns().get(i);
+            if (l.kind() != r.kind()) {
+                if (l.kind() == Kind.NULL || r.kind() == Kind.NULL || l.kind().numeric() && r.kind().numeric()) {
+                    throw SqlTranslationException.unsupported("UNION of " + l.kind().name().toLowerCase(Locale.ROOT)
+                            + " and " + r.kind().name().toLowerCase(Locale.ROOT) + " columns is not supported yet",
+                            s.pos());
+                }
+                throw SqlTranslationException.invalid("UNION types " + l.kind().name().toLowerCase(Locale.ROOT)
+                        + " and " + r.kind().name().toLowerCase(Locale.ROOT) + " cannot be matched", s.pos());
+            }
+            names.add(l.name());
+            columns.add(new OutCol(l.name(), l.kind(), l.nullable() || r.nullable()));
+        }
+        boolean sameNames = true;
+        for (int i = 0; i < names.size(); i++) {
+            sameNames &= names.get(i).equals(right.columns().get(i).name());
+        }
+        Rel aligned = sameNames ? right : renamed(right, names, s.pos());
+        ValueSpecification vs = call("concatenate", left.vs(), aligned.vs());
+        if (!s.all()) {
+            vs = call("distinct", vs);
+        }
+        List<ValueSpecification> sortInfos = new ArrayList<>();
+        for (SqlAst.SortItem item : s.orderBy()) {
+            String key = outputKey(item.expr(), names);
+            boolean nullsFirst = item.nullsFirst() != null ? java.util.Objects.requireNonNull(item.nullsFirst())
+                    : item.descending();
+            sortInfos.add(call(item.descending() ? "descending" : "ascending", colSpec(key),
+                    new EnumValue(NULL_ORDER, nullsFirst ? "FIRST" : "LAST")));
+        }
+        if (!sortInfos.isEmpty()) {
+            vs = call("sort", vs, new PureCollection(sortInfos));
+        }
+        SqlAst.Expr offset = s.offset();
+        if (offset != null) {
+            vs = call("drop", vs, count(offset, "OFFSET"));
+        }
+        SqlAst.Expr limit = s.limit();
+        if (limit != null) {
+            vs = call("limit", vs, count(limit, "LIMIT"));
+        }
+        return new Rel(vs, columns);
+    }
+
+    /** A set operation's ORDER BY key: an output column's name or position. */
+    private static String outputKey(SqlAst.Expr e, List<String> names) {
+        if (e instanceof SqlAst.IntegerLit n) {
+            if (n.value().signum() <= 0 || n.value().compareTo(java.math.BigInteger.valueOf(names.size())) > 0) {
+                throw SqlTranslationException.invalid("ORDER BY position " + n.value() + " is not in select list",
+                        n.pos());
+            }
+            return names.get(n.value().intValue() - 1);
+        }
+        if (e instanceof SqlAst.ColumnRef ref && ref.parts().size() == 1) {
+            String found = resolve(ref.parts().get(0), names, "column");
+            if (found != null) {
+                return found;
+            }
+            throw SqlTranslationException.invalid("column \"" + ref.parts().get(0).text() + "\" does not exist",
+                    ref.pos());
+        }
+        throw SqlTranslationException.invalid("invalid UNION/INTERSECT/EXCEPT ORDER BY clause: only result column"
+                + " names can be used", e.pos());
+    }
+
+    /** {@code WITH a AS (...), b AS (...) body}: each query translated once, in order, each seeing those before it;
+     *  a reference to one is its relation. */
+    private Rel with(SqlAst.With w) {
+        if (w.recursive()) {
+            throw SqlTranslationException.unsupported("WITH RECURSIVE is not supported yet", w.pos());
+        }
+        Map<String, Rel> ctes = new LinkedHashMap<>(env.ctes());
+        for (SqlAst.Cte cte : w.ctes()) {
+            String name = cte.name().quoted() ? cte.name().text() : fold(cte.name().text());
+            Rel rel = new SqlToPure(sources, new Env(java.util.Collections.unmodifiableMap(new LinkedHashMap<>(ctes)), env.outer(), env.level())).statement(
+                    cte.query());
+            if (!cte.columns().isEmpty()) {
+                rel = aliased(rel, cte.columns(), cte.name(), cte.pos());
+            }
+            ctes.put(name, rel);
+        }
+        return new SqlToPure(sources, new Env(java.util.Collections.unmodifiableMap(new LinkedHashMap<>(ctes)), env.outer(), env.level())).statement(w.body());
     }
 
     /** A query with no grouping: filter, computed columns, sort, the select list, then the slice. */
-    private ValueSpecification plain(SqlAst.Select s, Input in, ValueSpecification relation) {
+    private Rel plain(SqlAst.Select s, Input in, ValueSpecification relation) {
         SqlAst.Expr having = s.having();
         if (having != null) {
             throw SqlTranslationException.unsupported("HAVING without GROUP BY or an aggregate is not supported yet",
@@ -406,12 +958,19 @@ public final class SqlToPure {
             switch (item) {
                 case SqlAst.AllColumns all -> {
                     SqlAst.Ident q = all.qualifier();
-                    if (q != null && resolve(q, List.of(in.qualifier.text()), "table") == null) {
-                        throw SqlTranslationException.invalid("missing FROM-clause entry for table \"" + q.text()
-                                + "\"", q.pos());
+                    List<Col> cols = new ArrayList<>();
+                    if (q == null) {
+                        cols.addAll(in.star);
+                    } else {
+                        Binding b = in.binding(q);
+                        if (b == null) {
+                            throw SqlTranslationException.invalid("missing FROM-clause entry for table \"" + q.text()
+                                    + "\"", q.pos());
+                        }
+                        b.columns().forEach(c -> cols.add(c.col()));
                     }
-                    for (Col c : in.columns) {
-                        outputs.add(passthrough(c, c.name(), passed, present, in));
+                    for (Col c : cols) {
+                        outputs.add(passthrough(c, c.label(), passed, present, in));
                     }
                 }
                 case SqlAst.SelectExpr x -> outputs.add(output(x, in, passed, present));
@@ -422,7 +981,7 @@ public final class SqlToPure {
 
     /** A query with GROUP BY or aggregates: keys and aggregates by groupBy (or aggregate), then HAVING, then as
      *  plain. */
-    private ValueSpecification grouped(SqlAst.Select s, Input in, ValueSpecification relation) {
+    private Rel grouped(SqlAst.Select s, Input in, ValueSpecification relation) {
         // the group keys: a column is a key as itself; any other expression is computed first
         Map<String, Col> byCanon = new LinkedHashMap<>();
         Map<String, Col> keyBySource = new HashMap<>();
@@ -442,9 +1001,9 @@ public final class SqlToPure {
                 col = source;
                 keyBySource.put(source.name(), source);
             } else {
-                Tx t = tx(key, in, ROW);
-                col = new Col(fresh(names), t.kind(), t.nullable());
-                computedKeys.add(new ColSpec(col.name(), lambda(ROW, valueOf(t)), null, null));
+                Tx t = tx(key, in, row);
+                col = Col.of(fresh(names), t.kind(), t.nullable());
+                computedKeys.add(new ColSpec(col.name(), lambda(row, valueOf(t)), null, null));
             }
             byCanon.put(canon, col);
             keys.add(new ColSpec(col.name(), null, null, null));
@@ -489,7 +1048,7 @@ public final class SqlToPure {
         }
         Grouped g = new Grouped(in, byCanon, keyBySource);
         if (having != null) {
-            relation = call("filter", relation, lambda(ROW, condition(having, g, "HAVING")));
+            relation = call("filter", relation, lambda(row, condition(having, g, "HAVING")));
         }
         Set<String> present = new HashSet<>();
         for (Col c : byCanon.values()) {
@@ -510,7 +1069,7 @@ public final class SqlToPure {
             return selectExpr(s, n, "GROUP BY");
         }
         if (g instanceof SqlAst.ColumnRef ref && ref.parts().size() == 1
-                && resolve(ref.parts().get(0), in.names(), "column") == null) {
+                && !in.has(ref.parts().get(0))) {
             List<String> outputNames = new ArrayList<>();
             for (SqlAst.SelectItem item : s.items()) {
                 if (item instanceof SqlAst.SelectExpr x && x.alias() != null) {
@@ -548,30 +1107,30 @@ public final class SqlToPure {
 
     /** An output column: the name the query shows, the column that holds it, and its value when it is computed. */
     private record Output(String name, String internal, @com.legend.base.Nullable ValueSpecification value,
-            SqlAst.@com.legend.base.Nullable Expr expr) {
+            SqlAst.@com.legend.base.Nullable Expr expr, Kind kind, boolean nullable) {
     }
 
     private Output output(SqlAst.SelectExpr x, Scope scope, Set<String> passed, Set<String> present) {
         SqlAst.Ident alias = x.alias();
         Col g = scope.grouped(x.expr());
         Col col = g != null ? g : x.expr() instanceof SqlAst.ColumnRef ref ? scope.column(ref) : null;
-        if (col != null) {
+        if (col != null && col.var() == null) {
             String name = alias != null ? alias.text()
-                    : x.expr() instanceof SqlAst.ColumnRef ? col.name() : defaultName(x.expr());
+                    : x.expr() instanceof SqlAst.ColumnRef ? col.label() : defaultName(x.expr());
             Output o = passthrough(col, name, passed, present, scope);
-            return new Output(o.name(), o.internal(), o.value(), x.expr());
+            return new Output(o.name(), o.internal(), o.value(), x.expr(), o.kind(), o.nullable());
         }
-        Tx t = tx(x.expr(), scope, ROW);
+        Tx t = tx(x.expr(), scope, row);
         String name = alias != null ? alias.text() : defaultName(x.expr());
-        return new Output(name, internalFor(name, present), valueOf(t), x.expr());
+        return new Output(name, internalFor(name, present), valueOf(t), x.expr(), t.kind(), t.nullable());
     }
 
     /** A column shown as itself once; shown again, or under another name, it is a computed copy. */
     private Output passthrough(Col c, String name, Set<String> passed, Set<String> present, Scope scope) {
         if (name.equals(c.name()) && passed.add(c.name())) {
-            return new Output(name, c.name(), null, null);
+            return new Output(name, c.name(), null, null, c.kind(), c.nullable());
         }
-        return new Output(name, internalFor(name, present), property(ROW, c.name()), null);
+        return new Output(name, internalFor(name, present), property(row, c.name()), null, c.kind(), c.nullable());
     }
 
     /** The column a computed output is built in: its own name when that is free, else a fresh one (renamed last). */
@@ -606,7 +1165,7 @@ public final class SqlToPure {
     }
 
     /** The computed outputs, the sort, the select list, the renames and the slice, in Postgres's order. */
-    private ValueSpecification assemble(SqlAst.Select s, Scope scope, ValueSpecification relation, Set<String> present,
+    private Rel assemble(SqlAst.Select s, Scope scope, ValueSpecification relation, Set<String> present,
             List<Output> outputs) {
         Set<String> shown = new HashSet<>();
         for (Output o : outputs) {
@@ -619,7 +1178,7 @@ public final class SqlToPure {
         for (Output o : outputs) {
             ValueSpecification v = o.value();
             if (v != null) {
-                computed.add(new ColSpec(o.internal(), lambda(ROW, v), null, null));
+                computed.add(new ColSpec(o.internal(), lambda(row, v), null, null));
             }
         }
         // the sort keys: an ordinal or an output name means that output; anything else is computed for the sort
@@ -662,14 +1221,22 @@ public final class SqlToPure {
         if (limit != null) {
             relation = call("limit", relation, count(limit, "LIMIT"));
         }
-        return relation;
+        List<OutCol> columns = new ArrayList<>();
+        for (Output o : outputs) {
+            columns.add(new OutCol(o.name(), o.kind(), o.nullable()));
+        }
+        return new Rel(relation, columns);
     }
 
     private String sortKey(SqlAst.SortItem item, SqlAst.Select s, Scope scope, List<Output> outputs,
             List<ColSpec> computed, Set<String> present) {
         SqlAst.Expr e = item.expr();
         if (e instanceof SqlAst.IntegerLit n) {
-            selectExpr(s, n, "ORDER BY");
+            // a position counts the select list as expanded: SELECT * ... ORDER BY 2 is the second column
+            if (n.value().signum() <= 0 || n.value().compareTo(java.math.BigInteger.valueOf(outputs.size())) > 0) {
+                throw SqlTranslationException.invalid("ORDER BY position " + n.value() + " is not in select list",
+                        n.pos());
+            }
             return outputs.get(n.value().intValue() - 1).internal();
         }
         if (e instanceof SqlAst.ColumnRef ref && ref.parts().size() == 1) {
@@ -701,9 +1268,9 @@ public final class SqlToPure {
         if (e instanceof SqlAst.ColumnRef ref) {
             return scope.column(ref).name();
         }
-        Tx t = tx(e, scope, ROW);
+        Tx t = tx(e, scope, row);
         String name = fresh(present);
-        computed.add(new ColSpec(name, lambda(ROW, valueOf(t)), null, null));
+        computed.add(new ColSpec(name, lambda(row, valueOf(t)), null, null));
         return name;
     }
 
@@ -797,39 +1364,39 @@ public final class SqlToPure {
                 if (f.args().size() != 1) {
                     throw SqlTranslationException.invalid(fn + " takes one argument here", f.pos());
                 }
-                arg = tx(f.args().get(0), in, ROW);
+                arg = tx(f.args().get(0), in, row);
             }
             if (f.distinct() && !fn.equals("count")) {
                 throw SqlTranslationException.unsupported(fn + "(DISTINCT ...) is not supported yet", f.pos());
             }
-            ValueSpecification group = new Variable(GROUP);
+            ValueSpecification values = new Variable(group);
             if (f.distinct()) {
-                group = call("distinct", group);
+                values = call("distinct", values);
             }
             Kind kind;
             ValueSpecification reduce;
             switch (fn) {
                 case "count" -> {
                     kind = Kind.INTEGER;
-                    reduce = call("count", group);
+                    reduce = call("count", values);
                 }
                 case "sum" -> {
                     requireNumeric(arg, f);
                     kind = arg.kind() == Kind.DECIMAL ? Kind.NUMBER : arg.kind();
-                    reduce = call("sum", group);
+                    reduce = call("sum", values);
                 }
                 case "avg" -> {
                     requireNumeric(arg, f);
                     kind = Kind.FLOAT;
-                    reduce = call("average", group);
+                    reduce = call("average", values);
                 }
                 case "min" -> {
                     kind = arg.kind();
-                    reduce = call("min", group);
+                    reduce = call("min", values);
                 }
                 case "max" -> {
                     kind = arg.kind();
-                    reduce = call("max", group);
+                    reduce = call("max", values);
                 }
                 default -> throw new IllegalStateException("not an aggregate: " + fn);
             }
@@ -837,9 +1404,9 @@ public final class SqlToPure {
             String want = preferred.get(canon);
             String name = want != null && !names.contains(want) && !want.startsWith(SYNTHETIC) ? want : fresh(names);
             names.add(name);
-            Col col = new Col(name, kind, !fn.equals("count"));
+            Col col = Col.of(name, kind, !fn.equals("count"));
             byCanon.put(canon, col);
-            aggregates.add(new ColSpec(col.name(), lambda(ROW, valueOf(arg)), lambda(GROUP, reduce), null));
+            aggregates.add(new ColSpec(col.name(), lambda(row, valueOf(arg)), lambda(group, reduce), null));
             return;
         }
         for (SqlAst.Expr child : children(e)) {
@@ -858,7 +1425,7 @@ public final class SqlToPure {
 
     /** A WHERE, HAVING or WHEN condition: the rows where it is TRUE (NULL and FALSE alike are not TRUE). */
     private ValueSpecification condition(SqlAst.Expr e, Scope scope, String clause) {
-        return truth(tx(e, scope, ROW), clause, e.pos()).vs();
+        return truth(tx(e, scope, row), clause, e.pos()).vs();
     }
 
     /** A boolean operand ({@code clause}'s). A NULL constant is Postgres's unknown truth value: neither true nor
@@ -875,7 +1442,8 @@ public final class SqlToPure {
 
     /** A column's value; a boolean column is a condition (TRUE when it holds true, FALSE when it holds false). */
     private static Tx columnValue(String row, Col c) {
-        ValueSpecification v = property(row, c.name());
+        String var = c.var();
+        ValueSpecification v = property(var != null ? var : row, c.name());
         return c.kind() == Kind.BOOLEAN ? booleanValue(v, c.nullable()) : Tx.value(v, c.kind(), c.nullable());
     }
 
@@ -979,6 +1547,16 @@ public final class SqlToPure {
             case SqlAst.Case c -> caseExpr(c, scope, row);
             case SqlAst.FunctionCall f -> function(f, scope, row);
             case SqlAst.Cast c -> throw SqlTranslationException.unsupported("casts are not supported yet", c.pos());
+            case SqlAst.ScalarSubquery q -> throw SqlTranslationException.unsupported("scalar subqueries are not"
+                    + " supported yet", q.pos());
+            case SqlAst.Exists q -> throw SqlTranslationException.unsupported("EXISTS subqueries are not supported yet",
+                    q.pos());
+            case SqlAst.InSubquery q -> throw SqlTranslationException.unsupported("IN subqueries are not supported yet",
+                    q.pos());
+            case SqlAst.Quantified q -> throw SqlTranslationException.unsupported("quantified comparisons (ANY, SOME,"
+                    + " ALL) are not supported yet", q.pos());
+            case SqlAst.Window w -> throw SqlTranslationException.unsupported("window functions (OVER) are not"
+                    + " supported yet", w.pos());
         };
     }
 
@@ -1602,7 +2180,10 @@ public final class SqlToPure {
      *  {@code t.NAME}) have one canonical form. Postgres matches GROUP BY and select-list expressions this way. */
     private static String canon(SqlAst.Expr e, Input in) {
         return switch (e) {
-            case SqlAst.ColumnRef ref -> "col(" + in.column(ref).name() + ")";
+            case SqlAst.ColumnRef ref -> {
+                Col c = in.column(ref);
+                yield "col(" + (c.var() == null ? "" : c.var() + ".") + c.name() + ")";
+            }
             case SqlAst.IntegerLit n -> "int(" + n.value() + ")";
             case SqlAst.NumericLit n -> "num(" + n.value().toPlainString() + ")";
             case SqlAst.StringLit s -> "str(" + s.value().length() + ":" + s.value() + ")";
@@ -1644,6 +2225,12 @@ public final class SqlToPure {
                     + list(f.args(), in) + ")";
             case SqlAst.Cast c -> "cast(" + c.type().name() + c.type().modifiers() + "," + canon(c.operand(), in)
                     + ")";
+            // a subquery or a window call is the one it is: matched only to itself, by where it was written
+            case SqlAst.ScalarSubquery q -> "subquery@" + q.pos().line() + ":" + q.pos().column();
+            case SqlAst.Exists q -> "exists@" + q.pos().line() + ":" + q.pos().column();
+            case SqlAst.InSubquery q -> "in@" + q.pos().line() + ":" + q.pos().column();
+            case SqlAst.Quantified q -> "quantified@" + q.pos().line() + ":" + q.pos().column();
+            case SqlAst.Window w -> "window@" + w.pos().line() + ":" + w.pos().column();
         };
     }
 
@@ -1707,6 +2294,18 @@ public final class SqlToPure {
             }
             case SqlAst.FunctionCall f -> f.args();
             case SqlAst.Cast c -> List.of(c.operand());
+            // a subquery's insides are its own query's: its aggregates are not this one's
+            case SqlAst.ScalarSubquery q -> List.of();
+            case SqlAst.Exists q -> List.of();
+            case SqlAst.InSubquery q -> List.of(q.operand());
+            case SqlAst.Quantified q -> List.of(q.left());
+            // a window call is no aggregate of this query's grouping, but what it reads may be
+            case SqlAst.Window w -> {
+                List<SqlAst.Expr> all = new ArrayList<>(w.call().args());
+                all.addAll(w.spec().partitionBy());
+                w.spec().orderBy().forEach(o -> all.add(o.expr()));
+                yield all;
+            }
         };
     }
 
@@ -1731,6 +2330,11 @@ public final class SqlToPure {
 
     private static LambdaFunction lambda(String parameter, ValueSpecification body) {
         return new LambdaFunction(List.of(new Variable(parameter)), List.of(body));
+    }
+
+    /** A two-parameter lambda: a join's condition over its two sides' rows. */
+    private static LambdaFunction lambda2(String first, String second, ValueSpecification body) {
+        return new LambdaFunction(List.of(new Variable(first), new Variable(second)), List.of(body));
     }
 
     private static LambdaFunction thunk(ValueSpecification body) {

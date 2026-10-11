@@ -793,7 +793,11 @@ public final class Lowerer {
             collectBranches(c.left(), out);
             collectBranches(c.right(), out);
         } else {
-            out.add(relation(spec));
+            // a union's branch has no ORDER BY, LIMIT or OFFSET of its own
+            // in SQL: a branch that sorts or slices is a subselect
+            SqlSelect branch = relation(spec);
+            out.add(branch.orderBy().isEmpty() && branch.limit() == null
+                    && branch.offset() == null ? branch : isolate(branch));
         }
     }
 

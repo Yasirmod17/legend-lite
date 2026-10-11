@@ -619,7 +619,7 @@ junit_test(
 # also checks the snapped answers against Postgres.
 _SQL_PARITY_SCHEMA = "@legend_engine_src//:legend-engine-xts-sql/legend-engine-xt-sql-e2e-tests/src/test/resources/parity-tests/schema.yaml"
 
-_SQL_PARITY_DATA = [
+_SQL_PARITY_DATA = glob(["src/test/resources/sql-parity/lite/*.yaml"]) + [
     "src/test/resources/sql-parity/ledger.tsv",
     "src/test/resources/sql-parity/postgres-answers.jsonl",
     "@legend_engine_src//:sql_parity_tests",
@@ -630,6 +630,8 @@ _SQL_PARITY_FLAGS = [
     "-Dsql.parity.schema=$(rlocationpath %s)" % _SQL_PARITY_SCHEMA,
     "-Dsql.parity.answers=$(rlocationpath src/test/resources/sql-parity/postgres-answers.jsonl)",
     "-Dsql.parity.ledger=$(rlocationpath src/test/resources/sql-parity/ledger.tsv)",
+    # legend-lite's own cases, beside upstream's: the directory of this file
+    "-Dsql.parity.lite=$(rlocationpath src/test/resources/sql-parity/lite/joins.yaml)",
 ]
 
 junit_test(

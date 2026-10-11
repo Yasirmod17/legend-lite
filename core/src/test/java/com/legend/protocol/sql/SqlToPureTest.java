@@ -90,6 +90,56 @@ class SqlToPureTest {
                 pure("select upper(dept) as d, count(*) from tb('s::DB.T') group by upper(dept)"));
     }
 
+    // ------------------------------------------------------------------ several relations
+
+    @Test
+    void aJoinRenamesTheRightSidesTakenNamesAndReadsEachSideByItsQualifier() {
+        // both sides have every name: the right side's become b_<name>, and an output named like a taken column is
+        // computed under a fresh name and renamed last
+        assertEquals("#>{s::DB.T}#->join(#>{s::DB.T}#->rename(~ID, ~b_ID)->rename(~firstName, ~b_firstName)->rename(~age, ~b_age)->rename(~dept, ~b_dept), meta::pure::functions::relation::JoinKind.INNER,"
+                        + " {a, b|$b.b_age->isNotEmpty() && ($a.ID == $b.b_age->toOne())})"
+                        + "->extend(~[_sql_1:r|$r.b_dept])->select(~[ID, _sql_1])->rename(~_sql_1, ~dept)",
+                pure("select a.ID, b.dept from tb('s::DB.T') a join tb('s::DB.T') b on a.ID = b.age"));
+    }
+
+    @Test
+    void usingMergesTheSharedColumnAndAFullJoinCoalescesIt() {
+        // the merged ID is whichever side has a row: COALESCE(a.ID, b.ID)
+        assertEquals("#>{s::DB.T}#->join(#>{s::DB.T}#->rename(~ID, ~b_ID)->rename(~firstName, ~b_firstName)->rename(~age, ~b_age)->rename(~dept, ~b_dept), meta::pure::functions::relation::JoinKind.FULL,"
+                        + " {a, b|$a.ID == $b.b_ID})->extend(~[_sql_1:r|$r.ID->coalesce($r.b_ID)])"
+                        + "->extend(~[_sql_2:r|$r._sql_1])->select(~[_sql_2, dept])->rename(~_sql_2, ~ID)",
+                pure("select ID, a.dept from tb('s::DB.T') a full join tb('s::DB.T') b using (ID)"));
+    }
+
+    @Test
+    void unionIsConcatenateThenDistinctAndUnionAllKeepsDuplicates() {
+        // the right side's columns take the left side's names, by position
+        assertEquals("#>{s::DB.T}#->select(~[dept])->concatenate(#>{s::DB.T}#->select(~[firstName])"
+                        + "->rename(~firstName, ~dept))->distinct()",
+                pure("select dept from tb('s::DB.T') union select firstName from tb('s::DB.T')"));
+        assertEquals("#>{s::DB.T}#->select(~[ID])->concatenate(#>{s::DB.T}#->select(~[age])->rename(~age, ~ID))"
+                        + "->sort([~ID->ascending(meta::pure::functions::relation::NullOrder.LAST)])",
+                pure("select ID from tb('s::DB.T') union all select age from tb('s::DB.T') order by 1"));
+    }
+
+    @Test
+    void aCteIsItsQueryWhereverItIsNamed() {
+        assertEquals("#>{s::DB.T}#->select(~[ID])->rename(~ID, ~n)->filter(r|$r.n > 1)->select(~[n])",
+                pure("with x (n) as (select ID from tb('s::DB.T')) select n from x where n > 1"));
+    }
+
+    @Test
+    void setOperationsCheckTheirColumnsAsPostgresDoes() {
+        assertEquals("UNION types integer and string cannot be matched",
+                refusal("select ID from tb('s::DB.T') union select dept from tb('s::DB.T')").getMessage());
+        assertEquals("each UNION query must have the same number of columns",
+                refusal("select ID from tb('s::DB.T') union select ID, dept from tb('s::DB.T')")
+                .getMessage());
+        assertEquals("INTERSECT is not supported yet",
+                refusal("select ID from tb('s::DB.T') intersect select ID from tb('s::DB.T')")
+                .getMessage());
+    }
+
     // ------------------------------------------------------------------ Postgres's NULL rules
 
     @Test
@@ -210,7 +260,7 @@ class SqlToPureTest {
         assertEquals(1, syntax.line());
         assertEquals(35, syntax.column());
         assertEquals(SqlTranslationException.Kind.UNSUPPORTED,
-                refusal("select ID from tb('s::DB.T') a join tb('s::DB.U') b on a.ID = b.ID").kind());
+                refusal("select ID from tb('s::DB.T') a, lateral (select 1) b").kind());
         assertEquals(SqlTranslationException.Kind.UNSUPPORTED, refusal("select age / 2 from tb('s::DB.T')").kind());
         SqlTranslationException grouped = refusal("select dept, age from tb('s::DB.T') group by dept");
         assertEquals(SqlTranslationException.Kind.INVALID, grouped.kind());

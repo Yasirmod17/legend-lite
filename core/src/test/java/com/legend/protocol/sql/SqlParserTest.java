@@ -44,7 +44,7 @@ class SqlParserTest {
         assertEquals(3, s.items().size());
         assertEquals("c", java.util.Objects.requireNonNull(((SqlAst.SelectExpr) s.items().get(1)).alias()).text());
         assertEquals("e", java.util.Objects.requireNonNull(((SqlAst.SelectExpr) s.items().get(2)).alias()).text());
-        SqlAst.TableFunction from = assertInstanceOf(SqlAst.TableFunction.class, s.from());
+        SqlAst.TableFunction from = assertInstanceOf(SqlAst.TableFunction.class, s.from().get(0));
         assertEquals("tb", from.name().get(0).text());
         assertEquals("x", java.util.Objects.requireNonNull(from.alias()).text());
         assertEquals(2, s.groupBy().size());
@@ -76,8 +76,7 @@ class SqlParserTest {
 
     @Test
     void namedArgumentsToATableFunction() {
-        SqlAst.TableFunction f = (SqlAst.TableFunction) java.util.Objects.requireNonNull(
-                select("select a from service('/x', p => 1)").from());
+        SqlAst.TableFunction f = (SqlAst.TableFunction) select("select a from service('/x', p => 1)").from().get(0);
         assertNull(f.args().get(0).name());
         assertEquals("p", java.util.Objects.requireNonNull(f.args().get(1).name()).text());
     }
@@ -328,12 +327,9 @@ class SqlParserTest {
     @Test
     void notYetSupportedFormsAreRefusedByName() {
         List<String> forms = List.of(
-                "select a from t join u on t.a = u.a", "joins are not supported yet",
-                "select a from t, u", "joins are not supported yet",
-                "with x as (select 1) select * from x", "WITH queries are not supported yet",
-                "select a from t union select b from u", "UNION is not supported yet",
-                "select a from t where a in (select b from u)", "subqueries are not supported yet",
-                "select count(*) over () from t", "window functions (OVER) are not supported yet",
+                "select a from t, lateral (select 1) x", "LATERAL is not supported yet",
+                "values (1)", "VALUES lists are not supported yet",
+                "select a = any(array[1]) from t", "ANY, SOME and ALL over an array are not supported yet",
                 "select E'x'", "escape string constants (E'...') are not supported yet",
                 "select a[1] from t", "array subscripts are not supported yet",
                 "select a from t group by rollup (a)", "ROLLUP, CUBE and GROUPING SETS are not supported yet");

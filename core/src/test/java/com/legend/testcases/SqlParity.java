@@ -77,12 +77,14 @@ public final class SqlParity {
             "functions/math_functions/random_cov", "volatile: RANDOM()",
             "functions/network_functions/inet_client_port__unsupported", "volatile: the client's port");
 
-    /** The cases whose ORDER BY leaves the order of tied rows to the database (alias_in_having: three groups of
-     *  count 3, ORDER BY cnt DESC): compared as upstream compares a query without ORDER BY, both sides sorted. */
-    static final Set<String> TIED_ORDER = Set.of("structural/aliases/alias_in_having");
-
     /** Every case, in file order (files by path), from the parity-tests directory. */
     public static List<Case> cases(Path dir) throws IOException {
+        return cases(dir, "");
+    }
+
+    /** Every case of the case files under {@code dir}, each file named {@code prefix} and its path: upstream's
+     *  ({@code ""}), or legend-lite's own ({@code "lite/"}, core/src/test/resources/sql-parity/lite). */
+    public static List<Case> cases(Path dir, String prefix) throws IOException {
         List<Path> files;
         try (Stream<Path> walk = Files.walk(dir)) {
             files = walk.filter(p -> p.toString().endsWith(".yaml") && !p.getFileName().toString().equals("schema.yaml"))
@@ -90,7 +92,7 @@ public final class SqlParity {
         }
         List<Case> cases = new ArrayList<>();
         for (Path f : files) {
-            String file = dir.relativize(f).toString().replace('\\', '/');
+            String file = prefix + dir.relativize(f).toString().replace('\\', '/');
             for (Map<String, Object> m : Yaml.tests(Files.readString(f, StandardCharsets.UTF_8), file)) {
                 String id = (String) m.get("id");
                 String sql = (String) m.get("sql");
@@ -450,11 +452,70 @@ public final class SqlParity {
     }
 
     /** Upstream's comparison ({@code ResultComparator.compare}), each result first sorted unless the SQL has an
-     *  ORDER BY ({@code TestPostgresParity}): the differences, none when the results agree. */
+     *  ORDER BY ({@code TestPostgresParity}): the differences, none when the results agree. One refinement: when
+     *  every ORDER BY key is an output column (by position or name), the order among rows tied on those keys is the
+     *  database's, not the query's; then the rows must agree as a set and the keys in sequence. */
     public static List<String> compare(Case c, Grid expected, Grid actual) {
-        boolean ordered = c.sql().toUpperCase(Locale.ROOT).contains("ORDER BY") && !TIED_ORDER.contains(key(c));
-        Grid e = ordered ? expected : sorted(expected);
-        Grid a = ordered ? actual : sorted(actual);
+        boolean ordered = c.sql().toUpperCase(Locale.ROOT).contains("ORDER BY");
+        List<Integer> keys = ordered ? orderKeys(c.sql(), expected.columns()) : null;
+        if (keys != null) {
+            List<String> diffs = compare(sorted(expected), sorted(actual));
+            for (int r = 0; r < Math.min(expected.rows().size(), actual.rows().size()) && diffs.isEmpty(); r++) {
+                for (int k : keys) {
+                    Object ev = expected.rows().get(r).get(k);
+                    Object av = actual.rows().get(r).get(k);
+                    if (!cellEquals(ev, av)) {
+                        diffs.add("Row " + r + ", sort key '" + expected.columns().get(k) + "': expected '" + ev
+                                + "' but got '" + av + "'");
+                    }
+                }
+            }
+            return diffs;
+        }
+        return compare(ordered ? expected : sorted(expected), ordered ? actual : sorted(actual));
+    }
+
+    /** The output columns a query's top-level ORDER BY sorts on, when each key is one (an ordinal, or an output
+     *  column's name); null otherwise, or when the SQL does not parse. */
+    private static @com.legend.base.Nullable List<Integer> orderKeys(String sql, List<String> columns) {
+        com.legend.protocol.sql.SqlAst.Statement st;
+        try {
+            st = com.legend.protocol.sql.SqlParser.parse(sql);
+        } catch (RuntimeException e) {
+            return null;
+        }
+        List<com.legend.protocol.sql.SqlAst.SortItem> orderBy = switch (st) {
+            case com.legend.protocol.sql.SqlAst.Select q -> q.orderBy();
+            case com.legend.protocol.sql.SqlAst.SetOperation q -> q.orderBy();
+            case com.legend.protocol.sql.SqlAst.With w -> List.of();
+        };
+        if (orderBy.isEmpty()) {
+            return null;
+        }
+        List<Integer> keys = new ArrayList<>();
+        for (com.legend.protocol.sql.SqlAst.SortItem item : orderBy) {
+            if (item.expr() instanceof com.legend.protocol.sql.SqlAst.IntegerLit n && n.value().signum() > 0
+                    && n.value().intValue() <= columns.size()) {
+                keys.add(n.value().intValue() - 1);
+            } else if (item.expr() instanceof com.legend.protocol.sql.SqlAst.ColumnRef ref && ref.parts().size() == 1) {
+                int found = -1;
+                for (int i = 0; i < columns.size(); i++) {
+                    if (columns.get(i).equalsIgnoreCase(ref.parts().get(0).text())) {
+                        found = found == -1 ? i : -2;
+                    }
+                }
+                if (found < 0) {
+                    return null;
+                }
+                keys.add(found);
+            } else {
+                return null;
+            }
+        }
+        return keys;
+    }
+
+    private static List<String> compare(Grid e, Grid a) {
         List<String> diffs = new ArrayList<>();
         if (e.columns().size() != a.columns().size()) {
             diffs.add("Column count mismatch: expected " + e.columns().size() + " but got " + a.columns().size());

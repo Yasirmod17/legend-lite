@@ -35,20 +35,49 @@ public final class SqlAst {
 
     // ------------------------------------------------------------------ statements
 
-    /** A statement. */
-    public sealed interface Statement permits Select {
+    /** A query: a SELECT, a set operation of two queries, or a query with a WITH clause. */
+    public sealed interface Statement permits Select, SetOperation, With {
         Pos pos();
     }
 
-    /** {@code SELECT [DISTINCT] items [FROM from] [WHERE] [GROUP BY] [HAVING] [ORDER BY] [LIMIT] [OFFSET]}. */
-    public record Select(boolean distinct, List<SelectItem> items, @com.legend.base.Nullable FromItem from,
+    /** {@code SELECT [DISTINCT] items [FROM from, ...] [WHERE] [GROUP BY] [HAVING] [ORDER BY] [LIMIT] [OFFSET]}: the
+     *  FROM items as written, separated by commas (empty when there is no FROM). */
+    public record Select(boolean distinct, List<SelectItem> items, List<FromItem> from,
             @com.legend.base.Nullable Expr where, List<Expr> groupBy, @com.legend.base.Nullable Expr having,
-            List<SortItem> orderBy, @com.legend.base.Nullable Expr limit, @com.legend.base.Nullable Expr offset,
-            Pos pos) implements Statement {
+            List<NamedWindow> windows, List<SortItem> orderBy, @com.legend.base.Nullable Expr limit,
+            @com.legend.base.Nullable Expr offset, Pos pos) implements Statement {
         public Select {
             items = List.copyOf(items);
+            from = List.copyOf(from);
             groupBy = List.copyOf(groupBy);
+            windows = List.copyOf(windows);
             orderBy = List.copyOf(orderBy);
+        }
+    }
+
+    /** {@code UNION}, {@code INTERSECT}, {@code EXCEPT}. */
+    public enum SetOp { UNION, INTERSECT, EXCEPT }
+
+    /** {@code left op [ALL] right [ORDER BY] [LIMIT] [OFFSET]}: the sort and the slice are the whole result's. */
+    public record SetOperation(SetOp op, boolean all, Statement left, Statement right, List<SortItem> orderBy,
+            @com.legend.base.Nullable Expr limit, @com.legend.base.Nullable Expr offset, Pos pos)
+            implements Statement {
+        public SetOperation {
+            orderBy = List.copyOf(orderBy);
+        }
+    }
+
+    /** {@code WITH [RECURSIVE] name [(columns)] AS (query), ... body}. */
+    public record With(boolean recursive, List<Cte> ctes, Statement body, Pos pos) implements Statement {
+        public With {
+            ctes = List.copyOf(ctes);
+        }
+    }
+
+    /** One common table expression: its name, its column names when written, its query. */
+    public record Cte(Ident name, List<Ident> columns, Statement query, Pos pos) {
+        public Cte {
+            columns = List.copyOf(columns);
         }
     }
 
@@ -71,26 +100,47 @@ public final class SqlAst {
 
     // ------------------------------------------------------------------ FROM
 
-    /** One item of a FROM clause. */
-    public sealed interface FromItem permits TableName, TableFunction {
+    /** One item of a FROM clause: a table, a function, a subquery, or a join of two items. */
+    public sealed interface FromItem permits TableName, TableFunction, SubqueryFrom, Join {
         Pos pos();
-
-        @com.legend.base.Nullable Ident alias();
     }
 
-    /** A table by (possibly qualified) name: {@code schema.table}. */
-    public record TableName(List<Ident> name, @com.legend.base.Nullable Ident alias, Pos pos) implements FromItem {
+    /** A table by (possibly qualified) name: {@code schema.table [[AS] alias [(columns)]]}. */
+    public record TableName(List<Ident> name, @com.legend.base.Nullable Ident alias, List<Ident> columnAliases,
+            Pos pos) implements FromItem {
         public TableName {
             name = List.copyOf(name);
+            columnAliases = List.copyOf(columnAliases);
         }
     }
 
-    /** A function in FROM: {@code name(args) [[AS] alias]}. */
-    public record TableFunction(List<Ident> name, List<Arg> args, @com.legend.base.Nullable Ident alias, Pos pos)
-            implements FromItem {
+    /** A function in FROM: {@code name(args) [[AS] alias [(columns)]]}. */
+    public record TableFunction(List<Ident> name, List<Arg> args, @com.legend.base.Nullable Ident alias,
+            List<Ident> columnAliases, Pos pos) implements FromItem {
         public TableFunction {
             name = List.copyOf(name);
             args = List.copyOf(args);
+            columnAliases = List.copyOf(columnAliases);
+        }
+    }
+
+    /** {@code (query) [[AS] alias [(columns)]]}: Postgres 16 lets the alias go unwritten. */
+    public record SubqueryFrom(Statement query, @com.legend.base.Nullable Ident alias, List<Ident> columnAliases,
+            Pos pos) implements FromItem {
+        public SubqueryFrom {
+            columnAliases = List.copyOf(columnAliases);
+        }
+    }
+
+    /** A join's kind. */
+    public enum JoinType { INNER, LEFT, RIGHT, FULL, CROSS }
+
+    /** {@code left [NATURAL] type JOIN right [ON condition | USING (columns)]}; a CROSS JOIN, and a comma in FROM,
+     *  have neither. */
+    public record Join(JoinType type, boolean natural, FromItem left, FromItem right,
+            @com.legend.base.Nullable Expr on, List<Ident> using, Pos pos) implements FromItem {
+        public Join {
+            using = List.copyOf(using);
         }
     }
 
@@ -103,7 +153,7 @@ public final class SqlAst {
     /** A value expression. */
     public sealed interface Expr permits ColumnRef, IntegerLit, NumericLit, StringLit, BooleanLit, NullLit, TypedLit,
             Param, Unary, Binary, Operator, IsNull, IsTruth, IsDistinct, InList, Between, Like, Case, FunctionCall,
-            Cast {
+            Cast, ScalarSubquery, Exists, InSubquery, Quantified, Window {
         Pos pos();
     }
 
@@ -213,6 +263,54 @@ public final class SqlAst {
             name = List.copyOf(name);
             args = List.copyOf(args);
         }
+    }
+
+    /** {@code (query)} as a value: the one column of its one row, or NULL when it has none. */
+    public record ScalarSubquery(Statement query, Pos pos) implements Expr {
+    }
+
+    /** {@code EXISTS (query)}. */
+    public record Exists(Statement query, Pos pos) implements Expr {
+    }
+
+    /** {@code x [NOT] IN (query)}. */
+    public record InSubquery(Expr operand, Statement query, boolean negated, Pos pos) implements Expr {
+    }
+
+    /** {@code x op ANY | SOME | ALL (query)}; {@code all} for ALL. */
+    public record Quantified(BinaryOp op, boolean all, Expr left, Statement query, Pos pos) implements Expr {
+    }
+
+    /** A window function call: {@code f(args) [FILTER (WHERE ...)] OVER (window)} or {@code OVER name}. */
+    public record Window(FunctionCall call, WindowSpec spec, Pos pos) implements Expr {
+    }
+
+    /** A window: {@code [name] [PARTITION BY ...] [ORDER BY ...] [frame]}, or a reference to a named one. */
+    public record WindowSpec(@com.legend.base.Nullable Ident base, List<Expr> partitionBy, List<SortItem> orderBy,
+            @com.legend.base.Nullable Frame frame, Pos pos) {
+        public WindowSpec {
+            partitionBy = List.copyOf(partitionBy);
+            orderBy = List.copyOf(orderBy);
+        }
+    }
+
+    /** A frame's unit. */
+    public enum FrameUnit { ROWS, RANGE, GROUPS }
+
+    /** {@code unit BETWEEN start AND end} (or {@code unit start}, ending at the current row), with any EXCLUDE. */
+    public record Frame(FrameUnit unit, FrameBound start, FrameBound end, @com.legend.base.Nullable String exclude,
+            Pos pos) {
+    }
+
+    /** A frame bound's kind. */
+    public enum BoundKind { UNBOUNDED_PRECEDING, PRECEDING, CURRENT_ROW, FOLLOWING, UNBOUNDED_FOLLOWING }
+
+    /** A frame bound: its kind, and the offset of a PRECEDING or FOLLOWING one. */
+    public record FrameBound(BoundKind kind, @com.legend.base.Nullable Expr offset) {
+    }
+
+    /** A named window of the WINDOW clause. */
+    public record NamedWindow(Ident name, WindowSpec spec) {
     }
 
     /** {@code CAST(x AS type)} or {@code x::type}. */

@@ -82,74 +82,103 @@ public final class SqlParser {
 
     // ------------------------------------------------------------------ statements
 
+    /** A query (Postgres's {@code SelectStmt}): {@code [WITH ...] term [UNION | EXCEPT term ...] [ORDER BY ...]
+     *  [LIMIT | OFFSET | FETCH ...]}, INTERSECT binding tighter than UNION and EXCEPT, the sort and the slice the
+     *  whole result's. */
     private SqlAst.Statement statement() {
         Token t = peek();
         if (t.is("with")) {
-            throw unsupported("WITH queries are");
+            return with();
         }
-        if (t.is("values")) {
-            throw unsupported("VALUES lists are");
-        }
-        if (t.kind() == Kind.LPAREN) {
-            throw unsupported("parenthesized queries are");
-        }
-        if (!t.is("select")) {
+        if (!t.is("select") && !t.is("values") && !t.is("table") && t.kind() != Kind.LPAREN) {
             if (t.kind() == Kind.EOF) {
                 throw error("syntax error at end of input");
             }
             throw error("only queries are supported: a statement must begin with SELECT, not \"" + t.text() + "\"");
         }
-        return select();
+        SqlAst.Statement query = setExpression();
+        return tail(query);
     }
 
-    private SqlAst.Select select() {
-        SqlAst.Pos pos = expectWord("select").pos();
-        boolean distinct = false;
-        if (acceptWord("distinct")) {
-            if (peek().is("on")) {
-                throw unsupported("DISTINCT ON is");
+    private SqlAst.Statement with() {
+        SqlAst.Pos pos = expectWord("with").pos();
+        boolean recursive = acceptWord("recursive");
+        List<SqlAst.Cte> ctes = new ArrayList<>();
+        do {
+            Token name = expectName();
+            List<SqlAst.Ident> columns = new ArrayList<>();
+            if (accept(Kind.LPAREN)) {
+                do {
+                    columns.add(ident(expectName()));
+                } while (accept(Kind.COMMA));
+                expect(Kind.RPAREN);
             }
-            distinct = true;
-        } else {
-            acceptWord("all");
-        }
-        List<SqlAst.SelectItem> items = new ArrayList<>();
-        // Postgres allows an empty select list (SELECT FROM t), though not after DISTINCT
-        if (distinct || !endsTargetList(peek())) {
-            do {
-                items.add(selectItem());
-            } while (accept(Kind.COMMA));
-        }
+            expectWord("as");
+            // [NOT] MATERIALIZED: how Postgres evaluates the CTE, never what it answers
+            if (acceptWord("not")) {
+                expectWord("materialized");
+            } else {
+                acceptWord("materialized");
+            }
+            expect(Kind.LPAREN);
+            SqlAst.Statement query = statement();
+            expect(Kind.RPAREN);
+            ctes.add(new SqlAst.Cte(ident(name), columns, query, name.pos()));
+        } while (accept(Kind.COMMA));
+        SqlAst.Statement body = statement();
+        return new SqlAst.With(recursive, ctes, body, pos);
+    }
 
-        SqlAst.FromItem from = null;
-        if (acceptWord("from")) {
-            from = fromItem();
-            if (peek().kind() == Kind.COMMA || isJoinWord(peek())) {
-                throw unsupported("joins are");
+    /** {@code term ((UNION | EXCEPT) [ALL | DISTINCT] term)*}, left-associative. */
+    private SqlAst.Statement setExpression() {
+        SqlAst.Statement left = setTerm();
+        while (peek().is("union") || peek().is("except")) {
+            Token op = next();
+            boolean all = acceptWord("all");
+            if (!all) {
+                acceptWord("distinct");
             }
+            SqlAst.Statement right = setTerm();
+            left = new SqlAst.SetOperation(op.is("union") ? SqlAst.SetOp.UNION : SqlAst.SetOp.EXCEPT, all, left, right,
+                    List.of(), null, null, op.pos());
         }
-        SqlAst.Expr where = acceptWord("where") ? expr() : null;
-        List<SqlAst.Expr> groupBy = new ArrayList<>();
-        if (acceptWord("group")) {
-            expectWord("by");
-            if (peek().is("all") || peek().is("distinct")) {
-                throw unsupported("GROUP BY ALL / DISTINCT is");
+        return left;
+    }
+
+    private SqlAst.Statement setTerm() {
+        SqlAst.Statement left = setPrimary();
+        while (peek().is("intersect")) {
+            Token op = next();
+            boolean all = acceptWord("all");
+            if (!all) {
+                acceptWord("distinct");
             }
-            do {
-                if ((peek().is("rollup") || peek().is("cube")) && peekAt(1).kind() == Kind.LPAREN
-                        || peek().is("grouping") && peekAt(1).is("sets")) {
-                    throw unsupported("ROLLUP, CUBE and GROUPING SETS are");
-                }
-                groupBy.add(expr());
-            } while (accept(Kind.COMMA));
+            left = new SqlAst.SetOperation(SqlAst.SetOp.INTERSECT, all, left, setPrimary(), List.of(), null, null,
+                    op.pos());
         }
-        SqlAst.Expr having = acceptWord("having") ? expr() : null;
-        if (peek().is("window")) {
-            throw unsupported("the WINDOW clause is");
+        return left;
+    }
+
+    /** A SELECT, or a parenthesized query (which may have its own sort and slice). */
+    private SqlAst.Statement setPrimary() {
+        Token t = peek();
+        if (t.kind() == Kind.LPAREN) {
+            at++;
+            SqlAst.Statement inner = statement();
+            expect(Kind.RPAREN);
+            return inner;
         }
-        if (peek().is("union") || peek().is("intersect") || peek().is("except")) {
-            throw unsupported(peek().text().toUpperCase(Locale.ROOT) + " is");
+        if (t.is("values")) {
+            throw unsupported("VALUES lists are");
         }
+        if (t.is("table")) {
+            throw unsupported("TABLE name queries are");
+        }
+        return selectCore();
+    }
+
+    /** The sort and the slice after a query, attached to it (Postgres refuses a second ORDER BY or LIMIT). */
+    private SqlAst.Statement tail(SqlAst.Statement query) {
         List<SqlAst.SortItem> orderBy = new ArrayList<>();
         if (acceptWord("order")) {
             expectWord("by");
@@ -197,7 +226,90 @@ public final class SqlParser {
         if (peek().is("for")) {
             throw unsupported("locking clauses (FOR UPDATE, FOR SHARE) are");
         }
-        return new SqlAst.Select(distinct, items, from, where, groupBy, having, orderBy, limit, offset, pos);
+        if (orderBy.isEmpty() && !sawLimit && !sawOffset) {
+            return query;
+        }
+        return switch (query) {
+            case SqlAst.Select q -> {
+                if (!q.orderBy().isEmpty() && !orderBy.isEmpty()) {
+                    throw error("multiple ORDER BY clauses not allowed");
+                }
+                if ((q.limit() != null || q.offset() != null) && (sawLimit || sawOffset)) {
+                    throw error("multiple LIMIT clauses not allowed");
+                }
+                yield new SqlAst.Select(q.distinct(), q.items(), q.from(), q.where(), q.groupBy(), q.having(),
+                        q.windows(), orderBy.isEmpty() ? q.orderBy() : orderBy, sawLimit ? limit : q.limit(),
+                        sawOffset ? offset : q.offset(), q.pos());
+            }
+            case SqlAst.SetOperation q -> {
+                if (!q.orderBy().isEmpty() && !orderBy.isEmpty()) {
+                    throw error("multiple ORDER BY clauses not allowed");
+                }
+                if ((q.limit() != null || q.offset() != null) && (sawLimit || sawOffset)) {
+                    throw error("multiple LIMIT clauses not allowed");
+                }
+                yield new SqlAst.SetOperation(q.op(), q.all(), q.left(), q.right(),
+                        orderBy.isEmpty() ? q.orderBy() : orderBy, sawLimit ? limit : q.limit(),
+                        sawOffset ? offset : q.offset(), q.pos());
+            }
+            case SqlAst.With w -> throw unsupported("ORDER BY or LIMIT after a parenthesized WITH query is");
+        };
+    }
+
+    /** {@code SELECT [DISTINCT | ALL] items [FROM ...] [WHERE] [GROUP BY] [HAVING] [WINDOW]}: no sort, no slice. */
+    private SqlAst.Select selectCore() {
+        SqlAst.Pos pos = expectWord("select").pos();
+        boolean distinct = false;
+        if (acceptWord("distinct")) {
+            if (peek().is("on")) {
+                throw unsupported("DISTINCT ON is");
+            }
+            distinct = true;
+        } else {
+            acceptWord("all");
+        }
+        List<SqlAst.SelectItem> items = new ArrayList<>();
+        // Postgres allows an empty select list (SELECT FROM t), though not after DISTINCT
+        if (distinct || !endsTargetList(peek())) {
+            do {
+                items.add(selectItem());
+            } while (accept(Kind.COMMA));
+        }
+        if (peek().is("into")) {
+            throw unsupported("an INTO clause is");
+        }
+        List<SqlAst.FromItem> from = new ArrayList<>();
+        if (acceptWord("from")) {
+            do {
+                from.add(fromItem());
+            } while (accept(Kind.COMMA));
+        }
+        SqlAst.Expr where = acceptWord("where") ? expr() : null;
+        List<SqlAst.Expr> groupBy = new ArrayList<>();
+        if (acceptWord("group")) {
+            expectWord("by");
+            if (peek().is("all") || peek().is("distinct")) {
+                throw unsupported("GROUP BY ALL / DISTINCT is");
+            }
+            do {
+                if ((peek().is("rollup") || peek().is("cube")) && peekAt(1).kind() == Kind.LPAREN
+                        || peek().is("grouping") && peekAt(1).is("sets")) {
+                    throw unsupported("ROLLUP, CUBE and GROUPING SETS are");
+                }
+                groupBy.add(expr());
+            } while (accept(Kind.COMMA));
+        }
+        SqlAst.Expr having = acceptWord("having") ? expr() : null;
+        List<SqlAst.NamedWindow> windows = new ArrayList<>();
+        if (acceptWord("window")) {
+            do {
+                SqlAst.Ident name = ident(expectName());
+                expectWord("as");
+                expect(Kind.LPAREN);
+                windows.add(new SqlAst.NamedWindow(name, windowSpec(name.pos())));
+            } while (accept(Kind.COMMA));
+        }
+        return new SqlAst.Select(distinct, items, from, where, groupBy, having, windows, List.of(), null, null, pos);
     }
 
     /** True iff {@code t} cannot begin a select list, so the list before it is empty. */
@@ -250,16 +362,85 @@ public final class SqlParser {
 
     // ------------------------------------------------------------------ FROM
 
+    /** A FROM item and the joins that follow it, left-associative: {@code a JOIN b ON ... LEFT JOIN c USING (x)}. */
     private SqlAst.FromItem fromItem() {
-        Token t = peek();
-        if (t.kind() == Kind.LPAREN) {
-            throw unsupported("subqueries in FROM are");
+        SqlAst.FromItem left = fromPrimary();
+        while (true) {
+            Token t = peek();
+            if (t.is("cross")) {
+                at++;
+                expectWord("join");
+                left = new SqlAst.Join(SqlAst.JoinType.CROSS, false, left, fromPrimary(), null, List.of(), t.pos());
+                continue;
+            }
+            boolean natural = acceptWord("natural");
+            SqlAst.JoinType type = null;
+            if (acceptWord("inner")) {
+                type = SqlAst.JoinType.INNER;
+            } else if (acceptWord("left")) {
+                acceptWord("outer");
+                type = SqlAst.JoinType.LEFT;
+            } else if (acceptWord("right")) {
+                acceptWord("outer");
+                type = SqlAst.JoinType.RIGHT;
+            } else if (acceptWord("full")) {
+                acceptWord("outer");
+                type = SqlAst.JoinType.FULL;
+            }
+            if (!peek().is("join")) {
+                if (type != null || natural) {
+                    throw unexpected();
+                }
+                return left;
+            }
+            at++;
+            type = type == null ? SqlAst.JoinType.INNER : type;
+            SqlAst.FromItem right = fromPrimary();
+            if (natural) {
+                left = new SqlAst.Join(type, true, left, right, null, List.of(), t.pos());
+            } else if (acceptWord("on")) {
+                left = new SqlAst.Join(type, false, left, right, expr(), List.of(), t.pos());
+            } else if (acceptWord("using")) {
+                expect(Kind.LPAREN);
+                List<SqlAst.Ident> using = new ArrayList<>();
+                do {
+                    using.add(ident(expectName()));
+                } while (accept(Kind.COMMA));
+                expect(Kind.RPAREN);
+                if (peek().is("as")) {
+                    throw unsupported("an alias for a USING join's columns is");
+                }
+                left = new SqlAst.Join(type, false, left, right, null, using, t.pos());
+            } else {
+                throw unexpected();
+            }
         }
+    }
+
+    /** A table, a function, a subquery, or a parenthesized join. */
+    private SqlAst.FromItem fromPrimary() {
+        Token t = peek();
         if (t.is("lateral")) {
             throw unsupported("LATERAL is");
         }
         if (t.is("only")) {
             throw unsupported("FROM ONLY is");
+        }
+        if (t.kind() == Kind.LPAREN) {
+            if (queryAhead(1)) {
+                at++;
+                SqlAst.Statement query = statement();
+                expect(Kind.RPAREN);
+                Alias alias = alias();
+                return new SqlAst.SubqueryFrom(query, alias.name(), alias.columns(), t.pos());
+            }
+            at++;
+            SqlAst.FromItem inner = fromItem();
+            expect(Kind.RPAREN);
+            if (peek().is("as") || isName(peek()) && !isKeyword(peek())) {
+                throw unsupported("an alias for a parenthesized join is");
+            }
+            return inner;
         }
         List<SqlAst.Ident> name = qualifiedName();
         if (accept(Kind.LPAREN)) {
@@ -273,12 +454,24 @@ public final class SqlParser {
             if (peek().is("with") && peekAt(1).is("ordinality")) {
                 throw unsupported("WITH ORDINALITY is");
             }
-            return new SqlAst.TableFunction(name, args, tableAlias(), t.pos());
+            Alias alias = alias();
+            return new SqlAst.TableFunction(name, args, alias.name(), alias.columns(), t.pos());
         }
         if (peek().is("tablesample")) {
             throw unsupported("TABLESAMPLE is");
         }
-        return new SqlAst.TableName(name, tableAlias(), t.pos());
+        Alias alias = alias();
+        return new SqlAst.TableName(name, alias.name(), alias.columns(), t.pos());
+    }
+
+    /** True iff the tokens from {@code ahead} on, past any opening parentheses, begin a query. */
+    private boolean queryAhead(int ahead) {
+        int i = ahead;
+        while (peekAt(i).kind() == Kind.LPAREN) {
+            i++;
+        }
+        Token t = peekAt(i);
+        return t.is("select") || t.is("with") || t.is("values") || t.is("table");
     }
 
     private SqlAst.Arg arg() {
@@ -290,17 +483,104 @@ public final class SqlParser {
         return new SqlAst.Arg(null, expr());
     }
 
-    private SqlAst.@com.legend.base.Nullable Ident tableAlias() {
-        SqlAst.Ident alias = null;
+    /** An alias and its column names: {@code [AS] name [(column, ...)]}. */
+    private record Alias(SqlAst.@com.legend.base.Nullable Ident name, List<SqlAst.Ident> columns) {
+    }
+
+    private Alias alias() {
+        SqlAst.Ident name = null;
         if (acceptWord("as")) {
-            alias = ident(expectName());
+            name = ident(expectName());
         } else if (isName(peek()) && !isKeyword(peek())) {
-            alias = ident(next());
+            name = ident(next());
         }
-        if (alias != null && peek().kind() == Kind.LPAREN) {
-            throw unsupported("column alias lists in FROM are");
+        List<SqlAst.Ident> columns = new ArrayList<>();
+        if (name != null && accept(Kind.LPAREN)) {
+            do {
+                columns.add(ident(expectName()));
+            } while (accept(Kind.COMMA));
+            expect(Kind.RPAREN);
         }
-        return alias;
+        return new Alias(name, columns);
+    }
+
+    // ------------------------------------------------------------------ windows
+
+    /** The inside of {@code OVER ( ... )} or of a WINDOW clause's {@code AS ( ... )}, through its closing
+     *  parenthesis: {@code [base] [PARTITION BY ...] [ORDER BY ...] [frame]}. */
+    private SqlAst.WindowSpec windowSpec(SqlAst.Pos pos) {
+        SqlAst.Ident base = null;
+        if (isName(peek()) && !peek().is("partition") && !peek().is("order") && !peek().is("rows")
+                && !peek().is("range") && !peek().is("groups")) {
+            base = ident(next());
+        }
+        List<SqlAst.Expr> partitionBy = new ArrayList<>();
+        if (acceptWord("partition")) {
+            expectWord("by");
+            do {
+                partitionBy.add(expr());
+            } while (accept(Kind.COMMA));
+        }
+        List<SqlAst.SortItem> orderBy = new ArrayList<>();
+        if (acceptWord("order")) {
+            expectWord("by");
+            do {
+                orderBy.add(sortItem());
+            } while (accept(Kind.COMMA));
+        }
+        SqlAst.Frame frame = null;
+        if (peek().is("rows") || peek().is("range") || peek().is("groups")) {
+            Token unit = next();
+            SqlAst.FrameUnit u = unit.is("rows") ? SqlAst.FrameUnit.ROWS : unit.is("range") ? SqlAst.FrameUnit.RANGE
+                    : SqlAst.FrameUnit.GROUPS;
+            SqlAst.FrameBound start;
+            SqlAst.FrameBound end;
+            if (acceptWord("between")) {
+                start = frameBound();
+                expectWord("and");
+                end = frameBound();
+            } else {
+                start = frameBound();
+                end = new SqlAst.FrameBound(SqlAst.BoundKind.CURRENT_ROW, null);
+            }
+            String exclude = null;
+            if (acceptWord("exclude")) {
+                if (acceptWord("current")) {
+                    expectWord("row");
+                    exclude = "CURRENT ROW";
+                } else if (acceptWord("group")) {
+                    exclude = "GROUP";
+                } else if (acceptWord("ties")) {
+                    exclude = "TIES";
+                } else {
+                    expectWord("no");
+                    expectWord("others");
+                }
+            }
+            frame = new SqlAst.Frame(u, start, end, exclude, unit.pos());
+        }
+        expect(Kind.RPAREN);
+        return new SqlAst.WindowSpec(base, partitionBy, orderBy, frame, pos);
+    }
+
+    private SqlAst.FrameBound frameBound() {
+        if (acceptWord("unbounded")) {
+            if (acceptWord("preceding")) {
+                return new SqlAst.FrameBound(SqlAst.BoundKind.UNBOUNDED_PRECEDING, null);
+            }
+            expectWord("following");
+            return new SqlAst.FrameBound(SqlAst.BoundKind.UNBOUNDED_FOLLOWING, null);
+        }
+        if (acceptWord("current")) {
+            expectWord("row");
+            return new SqlAst.FrameBound(SqlAst.BoundKind.CURRENT_ROW, null);
+        }
+        SqlAst.Expr offset = expr();
+        if (acceptWord("preceding")) {
+            return new SqlAst.FrameBound(SqlAst.BoundKind.PRECEDING, offset);
+        }
+        expectWord("following");
+        return new SqlAst.FrameBound(SqlAst.BoundKind.FOLLOWING, offset);
     }
 
     // ------------------------------------------------------------------ expressions
@@ -374,7 +654,18 @@ public final class SqlParser {
         }
         Token t = next();
         if (peek().is("any") || peek().is("some") || peek().is("all")) {
-            throw unsupported("quantified comparisons (ANY, SOME, ALL) are");
+            Token quantifier = next();
+            if (peek().kind() != Kind.LPAREN || !queryAhead(1)) {
+                throw unsupported("ANY, SOME and ALL over an array are");
+            }
+            at++;
+            SqlAst.Statement query = statement();
+            expect(Kind.RPAREN);
+            SqlAst.Expr quantified = new SqlAst.Quantified(op, quantifier.is("all"), left, query, t.pos());
+            if (comparisonOp(peek()) != null) {
+                throw unexpected();
+            }
+            return quantified;
         }
         SqlAst.Expr result = new SqlAst.Binary(op, left, predicate(), t.pos());
         if (comparisonOp(peek()) != null) {
@@ -421,10 +712,13 @@ public final class SqlParser {
         }
         if (t.is("in")) {
             at++;
-            expect(Kind.LPAREN);
-            if (peek().is("select") || peek().is("with") || peek().is("values")) {
-                throw unsupported("subqueries are");
+            if (peek().kind() == Kind.LPAREN && queryAhead(1)) {
+                at++;
+                SqlAst.Statement query = statement();
+                expect(Kind.RPAREN);
+                return new SqlAst.InSubquery(left, query, negated, t.pos());
             }
+            expect(Kind.LPAREN);
             List<SqlAst.Expr> values = new ArrayList<>();
             do {
                 values.add(expr());
@@ -549,10 +843,13 @@ public final class SqlParser {
                 return new SqlAst.Param(Integer.parseInt(t.text()), t.pos());
             }
             case LPAREN -> {
-                at++;
-                if (peek().is("select") || peek().is("with") || peek().is("values")) {
-                    throw unsupported("subqueries are");
+                if (queryAhead(1)) {
+                    at++;
+                    SqlAst.Statement query = statement();
+                    expect(Kind.RPAREN);
+                    return new SqlAst.ScalarSubquery(query, t.pos());
                 }
+                at++;
                 SqlAst.Expr inner = expr();
                 if (peek().kind() == Kind.COMMA) {
                     throw unsupported("row constructors are");
@@ -593,7 +890,15 @@ public final class SqlParser {
                 expect(Kind.RPAREN);
                 return new SqlAst.Cast(operand, type, t.pos());
             }
-            case "exists" -> throw unsupported("EXISTS subqueries are");
+            case "exists" -> {
+                if (peekAt(1).kind() != Kind.LPAREN || !queryAhead(2)) {
+                    return nameOrCall();
+                }
+                at += 2;
+                SqlAst.Statement query = statement();
+                expect(Kind.RPAREN);
+                return new SqlAst.Exists(query, t.pos());
+            }
             case "array" -> throw unsupported("ARRAY constructors are");
             case "interval" -> throw unsupported("INTERVAL constants are");
             case "row" -> throw unsupported("ROW constructors are");
@@ -823,10 +1128,17 @@ public final class SqlParser {
         if (peek().is("filter")) {
             throw unsupported("FILTER (WHERE ...) is");
         }
-        if (peek().is("over")) {
-            throw unsupported("window functions (OVER) are");
+        SqlAst.FunctionCall call = new SqlAst.FunctionCall(name, args, distinct, star, first.pos());
+        if (acceptWord("over")) {
+            Token over = tokens.get(at - 1);
+            if (accept(Kind.LPAREN)) {
+                return new SqlAst.Window(call, windowSpec(over.pos()), first.pos());
+            }
+            SqlAst.Ident named = ident(expectName());
+            return new SqlAst.Window(call, new SqlAst.WindowSpec(named, List.of(), List.of(), null, named.pos()),
+                    first.pos());
         }
-        return new SqlAst.FunctionCall(name, args, distinct, star, first.pos());
+        return call;
     }
 
     private SqlAst.Expr caseExpr() {
@@ -923,10 +1235,6 @@ public final class SqlParser {
         return RESERVED.contains(word) || TYPE_FUNC_NAME.contains(word);
     }
 
-    private static boolean isJoinWord(Token t) {
-        return t.is("join") || t.is("inner") || t.is("left") || t.is("right") || t.is("full") || t.is("cross")
-                || t.is("natural");
-    }
 
     /** An identifier usable as a name: quoted, or unquoted and not reserved. */
     private static boolean isName(Token t) {
