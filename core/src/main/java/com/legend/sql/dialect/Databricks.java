@@ -720,6 +720,15 @@ public final class Databricks extends AnsiSqlRenderer {
         return List.of(view.sql());
     }
 
+    /** A pure collection holds no empties: {@code array_compact} drops the NULL elements -- not {@code filter}'s lambda,
+     *  which Spark refuses around a subquery (no higher-order function's argument may hold one, measured: the mixed
+     *  sort's ordered subquery under the PCT root's compaction). The same rows: a NULL list stays NULL, an empty one
+     *  empty, a nested list's own NULLs kept (measured). */
+    @Override
+    protected SqlWriter compactList(SqlWriter writer, SqlExpr.CompactList cl, int parentPrec) {
+        return writer.append("array_compact(").piece(list(cl.list())).append(")");
+    }
+
     /** Spark DDL: a nullable column says nothing (an explicit NULL is a syntax error, measured). */
     @Override
     protected String ddlNullability(boolean notNull) {

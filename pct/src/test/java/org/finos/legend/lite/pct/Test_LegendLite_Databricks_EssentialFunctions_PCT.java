@@ -63,10 +63,7 @@ public class Test_LegendLite_Databricks_EssentialFunctions_PCT extends PCTReport
             one("meta::pure::functions::date::tests::testAdjustByWeeksBigNumber_Function_1__Boolean_1_", "[DATETIME_OVERFLOW] Datetime operation overflow: add 12345678912L WEEK to TIMESTAMP '2016-02-29 00:00:00'."),
             // DATABRICKS' OWN LIMIT: the driver hands a BC date-time back as the Timestamp's text, its sign lost
             // (measured: 21458-01-08 for -21457-01-08)
-            one("meta::pure::functions::date::tests::testAdjustByMinutesBigNumber_Function_1__Boolean_1_", "\"\nexpected: %-21457-01-08T20:48:00+0000\nactual:   %21458-01-08T20:48:00+0000\""),
-            // DATABRICKS' OWN LIMIT: the lowering's subquery sits inside a higher-order function, which Spark refuses
-            // (pinned on the Postgres lane too, by its own refusal)
-            one("meta::pure::functions::collection::tests::sort::testMixedSortNoComparator_Function_1__Boolean_1_", "[UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.HIGHER_ORDER_FUNCTION] Unsupported subquery expression: Subquery expressions are not supported within higher-order functions. Please remove all subquery expre")
+            one("meta::pure::functions::date::tests::testAdjustByMinutesBigNumber_Function_1__Boolean_1_", "\"\nexpected: %-21457-01-08T20:48:00+0000\nactual:   %21458-01-08T20:48:00+0000\"")
     );
 
     public static Test suite() {

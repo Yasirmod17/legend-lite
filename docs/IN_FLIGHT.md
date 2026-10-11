@@ -762,9 +762,11 @@ SQL, DuckDB's bits, on Snowflake and Databricks alike -- Databricks 44 -> 42; th
 edits: `exec/Executor.java` (the timestamp re-fetch keeps the Timestamp when the driver refuses the java.time read) and
 `exec/SqlTypeCensus.java` (Snowflake's `NUMBER(p,0)` and `OBJECT` deliver integer and struct/map labels);
 `tools/census/RenderCensus.java` renders Snowflake.
-**2026-10-11, Databricks 41 -> 36** (the plan's §8): an as-of join is a LEFT JOIN with a window pick in the select's
-QUALIFY (`Databricks.asOf`; `CarrierStrategies.asOfKey` shared with the portable form), and a list's variance and
-standard deviation DuckDB's own update in an `aggregate` (`Databricks.moments`).
+**2026-10-11, Databricks 41 -> 35** (the plan's §8): an as-of join is a LEFT JOIN with a window pick in the select's
+QUALIFY (`Databricks.asOf`; `CarrierStrategies.asOfKey` shared with the portable form), a list's variance and
+standard deviation DuckDB's own update in an `aggregate` (`Databricks.moments`), a list's compaction `array_compact`.
+Snowflake and Databricks are each at 35, one row beyond the DuckDB lane's: the BC date-time, designed in §15 (not
+built).
 **2026-10-11, BigQuery landed on the branch** (all five suites green on the account, 83 pinned of 1,250): new
 `sql/dialect/BigQuery.java` and `sql/dialect/ExplosionMarkers.java` (the explosion passes, moved out of `Snowflake`
 and shared); rows in `Lexicon`, `TypeNames`, `Spellings`, `CarrierStrategies.Caps`; arms in `database/Databases.java`

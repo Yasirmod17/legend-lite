@@ -91,7 +91,7 @@ measured on the account before it is trusted (execution beats documentation).
   (`StorelessRuntime.declaring`).
 - **The suites**: `Test_LegendLite_<Cloud>_<Suite>Functions_PCT`, fifteen classes with EMPTY expected-failure lists:
   the first run on each account fills them.
-- **Databricks: done** (2026-10-11, §8): the dialect, all five suites green on the account with 36 pinned rows of
+- **Databricks: done** (2026-10-11, §8): the dialect, all five suites green on the account with 35 pinned rows of
   1,250 tests, the census at 0 divergence (no ceiling raised).
 - **Snowflake: done** (2026-10-11, §9): the dialect, all five suites green on the account with 35 pinned rows of
   1,250 tests, the census at 0 divergence (no ceiling raised).
@@ -225,21 +225,22 @@ runtime fallback between engines) and the bundle budget.
 
 ## 8. Databricks, measured (2026-10-11)
 
-**Result:** all five suites pass on the account, each failure pinned by its message: 1,249 tests, 36 pinned (Grammar
-9 of 137, Essential 26 of 345, Relation 1 of 469, Standard 0 of 205, Unclassified 0 of 93), the census divergence 0
+**Result:** all five suites pass on the account, each failure pinned by its message: 1,249 tests, 35 pinned (Grammar
+9 of 137, Essential 25 of 345, Relation 1 of 469, Standard 0 of 205, Unclassified 0 of 93), the census divergence 0
 in every suite. Burned down in six runs from 185 failing (the first run: Grammar 10, Essential 77, Relation 77,
 Standard 18, Unclassified 3); 44 -> 42 later the same day, when Jaro-Winkler was written exactly (§9; Unclassified
 re-run on the account, 93 green); 42 -> 41 when the system database came to the server (§14; Grammar re-run on the
 account, 137 green); 41 -> 36 when the as-of join became a window pick and a list's moments DuckDB's own update
-(below; Relation and Standard re-run on the account, 469 and 205 green). A run of the five is about 10.5 minutes
-with three suites at a time.
+(below; Relation and Standard re-run on the account, 469 and 205 green); 36 -> 35 when a list's compaction became
+`array_compact` (below; all five re-run on the account, 1,249 green). Every row but one is now pinned on the DuckDB
+lane too (by test): the one is the BC date-time (§15). A run of the five is about 10.5 minutes with three suites at
+a time.
 
-What the 36 are: 30 are the platform's own, pinned on the DuckDB lane by the same cause (instance identity, fold name
+What the 35 are: 30 are the platform's own, pinned on the DuckDB lane by the same cause (instance identity, fold name
 resolution, error positions and messages, the 0-based `indexOf`, `testBigFloatAbs`, the class `toString`, the
-variant-array `joinStrings`, the ExtendedInteger type, the harness's lost `$address`); the other 6 are Databricks'
-own, each measured: a date-time past Spark's range overflows (4), the driver gives a BC date-time back as the
-Timestamp's text with its sign lost (1), and the lowering's subquery inside a higher-order function (1; Postgres
-refuses it too).
+variant-array `joinStrings`, the ExtendedInteger type, the harness's lost `$address`); the other 5 are Databricks'
+own, each measured: a date-time past Spark's range overflows (4; the DuckDB lane pins the same tests, by its own
+messages), and the driver gives a BC date-time back as the Timestamp's text with its sign lost (1, §15).
 
 The account: a Databricks SQL warehouse (`dbsql_version` 2026.39); the JDBC driver (databricks-jdbc 3.4.3) reports the
 product `SparkSQL` (`Sessions.jdbcProduct`). Every spelling in `core/.../sql/dialect/Databricks.java` was measured there
@@ -265,6 +266,7 @@ answer:
 | `CAST(struct AS VARIANT)` is refused; `to_variant_object` converts; a variant takes no `[...]` subscript; object keys come back sorted | variant navigation casts to `MAP<STRING, VARIANT>` / `ARRAY<VARIANT>` (`try_element_at`) |
 | arrays, structs, maps and variants arrive over JDBC as JSON text; `getObject(i, LocalDateTime.class)` answers a String | the executor's JSON carrier parses lists; a struct's text is decoded by the dialect's `normalize`; the timestamp re-fetch keeps the driver's `Timestamp` when the driver answers another class |
 | no as-of join, and a correlated scalar subquery in a join condition (the portable form's correlated MAX) is refused | an as-of join is a LEFT JOIN on its condition whose select keeps, per left row, the matches with the extreme right key: `QUALIFY k = MAX(k) OVER (PARTITION BY every left column) OR MAX(k) OVER (...) IS NULL` (MIN when bounded below; the portable form's rows, ties included; only under a select that filters, groups and windows nothing of its own) |
+| no subquery inside a higher-order function's arguments (`UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.HIGHER_ORDER_FUNCTION`): the mixed sort's ordered subquery sat under the PCT root's NULL-dropping `filter` | a list's compaction is `array_compact` (no lambda; the same rows: a NULL list NULL, an empty one empty, a nested list's NULLs kept) |
 | Spark's variance and standard deviation are another update than DuckDB's, equal in algebra but not in rounding (3.14's came back 3.1399999999999997) | a list's moments are DuckDB's own update in an `aggregate` whose finish is the result (40 values over 10 lists equal to DuckDB's, measured) |
 | `QUALIFY`, `SELECT * EXCEPT`, native `PIVOT` (columns named by the `IN` aliases), `listagg ... WITHIN GROUP`, `median`, `mode`, `percentile_cont/disc ... WITHIN GROUP`, `max_by`, `max(boolean)`, `explode`, correlated `(SELECT agg FROM explode(t.xs))` | used as they are |
 
@@ -563,3 +565,43 @@ engine has none, so the test was pinned on every server lane ("no in-memory inst
 one green but MySQL's open list); its pin is gone from those lanes and from Postgres. **Postgres is not verified
 here**: the embedded Postgres refuses to start as root, and this session runs as root, so its lane runs only in CI.
 
+
+## 15. Design (not built): a BC date-time on Snowflake and Databricks
+
+**The one failure each cloud has beyond the platform's own** is `testAdjustByMinutesBigNumber`: a date-time in the
+year -21457. The database computes it right; the JDBC driver reads it wrong (measured 2026-10-11):
+
+| Read | Snowflake (snowflake-jdbc 4.4.0) | Databricks (databricks-jdbc 3.4.3) |
+|---|---|---|
+| the value as text, in SQL | `-21457-01-08 20:48:00` (`TO_VARCHAR`) | `-21457-01-08 20:48:00` (`CAST(.. AS STRING)`) |
+| `getString` | `21458-06-30 17:39:38.000` | the year's sign dropped (`21458-01-08 20:48:00`) |
+| `getTimestamp` | epoch -21457-01-18T17:39:38Z (ten days and three hours off) | the same text, sign dropped |
+| `getObject(i, LocalDateTime.class)` | refused (a plain `SQLException`) | the `Timestamp`'s text |
+
+So no read of a TIMESTAMP cell can recover it: the executor's BC-safe re-fetch (`Executor.fetch`, the `java.time`
+carrier) has nothing faithful to re-fetch on these drivers. The value survives only as text written by the database.
+
+**The design: on these two dialects, a result's TIMESTAMP column is delivered as its text**, which the executor
+already decodes -- a temporal-labelled VARCHAR cell is the precision-faithful string convention and parses
+(`Executor.unwrap`: `PureDateLiteral.parse`), the label unchanged. The text must be what the driver path would have
+produced for an AD value, so nothing else moves: `PureDateLiteral.fromLocalDateTime` writes no fraction when the
+nanoseconds are zero, else the fraction with its trailing zeros stripped. Measured, both warehouses write exactly that:
+
+- Databricks: `CAST(ts AS STRING)` -- `2016-02-29 01:02:03`, `2016-02-29 01:02:03.456`, `-21457-01-08 20:48:00`;
+- Snowflake: `RTRIM(RTRIM(TO_VARCHAR(ts, 'YYYY-MM-DD HH24:MI:SS.FF9'), '0'), '.')` -- the same three, and
+  `0010-01-01 00:00:00` (a four-digit year kept).
+
+**Where:** each dialect's root select, where it already rewrites a result column for the wire (Snowflake's root JSON
+column is `TO_JSON(..)` under its VARCHAR label, `Snowflake.rootLabels`). Chosen by KIND (every root TIMESTAMP
+column), never by value: the executor's rule (`Executor.fetch`: "one carrier, chosen by kind").
+
+**What to check when it is built:**
+1. the census: a TIMESTAMP label delivered as VARCHAR must read as the string convention, not a divergence (every
+   suite's census must stay at 0);
+2. the PCT wire's TDS text already writes its temporals in SQL, so only a scalar or a non-TDS read changes; a struct or
+   list leaf keeps the driver's carrier (out of scope, as `Executor.unwrap` says of leaves today);
+3. all five suites on both accounts, and the DuckDB, H2 and Postgres lanes untouched (no shared code changes).
+
+**What it gains:** the one pin on Snowflake (35 -> 34, the DuckDB lane's count) and one on Databricks; and outside
+PCT, every query reading a date-time before year 1 from these warehouses, which today reads wrong silently (a year
+past 9999 is not measured).
