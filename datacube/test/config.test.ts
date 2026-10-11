@@ -352,7 +352,7 @@ describe('Column Properties > Display as link reaches the grid', () => {
   });
 });
 
-(await describe('renaming a calculated column that is in use', async () => {
+describe('renaming a calculated column that is in use', async () => {
   // Renaming one the cube was grouped, pivoted, sorted or filtered by
   // left those naming a column that no longer existed, and the planner
   // refused the rename.
@@ -393,7 +393,7 @@ describe('Column Properties > Display as link reaches the grid', () => {
     assert.equal(r.columns['big'], undefined);
     assert.deepEqual(r.columnOrder, ['region', 'large', 'qty']);
   });
-}));
+});
 
 describe('what the count counts', () => {
   const base: CubeSnapshot = {

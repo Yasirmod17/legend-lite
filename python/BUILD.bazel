@@ -19,6 +19,7 @@ py_library(
     srcs = glob(
         ["legend_lite/**/*.py"],
         exclude = [
+            "legend_lite/_headless.py",
             "legend_lite/datacube.py",
             "legend_lite/engine.py",
             "legend_lite/frames.py",
@@ -47,6 +48,22 @@ py_library(
     deps = [
         ":compiler",
         "@pypi//duckdb",
+        "@pypi//pyarrow",
+    ],
+)
+
+# DataCube's own non-screen code in V8 (docs/DATACUBE_HEADLESS_PYTHON_DESIGN_2026_10_11.md; the wheel's `datacube` extra,
+# step 4): mini-racer's V8, the native library's planner and Python's DuckDB, no WebAssembly. Its bundle is
+# //datacube:headless_bundle; its lane //datacube:headless_test.
+py_library(
+    name = "headless",
+    srcs = ["legend_lite/_headless.py"],
+    imports = ["."],
+    visibility = ["//datacube:__pkg__"],
+    deps = [
+        ":compiler",
+        "@pypi//duckdb",
+        "@pypi//mini_racer",
         "@pypi//pyarrow",
     ],
 )

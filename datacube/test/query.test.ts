@@ -1050,7 +1050,7 @@ describe('a calculated column aggregates as DECLARED', () => {
   });
 });
 
-(await describe('the GRAND TOTAL of a cube with no explicit measures', async () => {
+describe('the GRAND TOTAL of a cube with no explicit measures', async () => {
   // Every uploaded file has no measures configured. Its level-0 query
   // was `t->limit(1001)` -- raw rows -- so "Show root aggregation"
   // put the FIRST TRADE's values in the Total row and raised a false
@@ -1066,7 +1066,7 @@ describe('a calculated column aggregates as DECLARED', () => {
   it('is one row, so it carries no row cap', () => {
     assert.doesNotMatch(q, /limit\(/);
   });
-}));
+});
 
 describe('C3: a column pivot carries CALCULATED measures', () => {
   // The pivot's measure set read the source columns only, so a

@@ -1278,6 +1278,8 @@ TEST_IMPORTS = {
         "src/treeview.ts",
     ],
     "guardrails": [],
+    "headless-assert": [],
+    "headless-test-runner": [],
     "headless-web": [
         "src/headless/url.ts",
         "src/headless/web.ts",
