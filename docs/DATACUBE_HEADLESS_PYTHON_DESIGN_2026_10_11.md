@@ -1,0 +1,189 @@
+# DataCube headless in Python: DataCube's own code, embedded, with no WebAssembly (design, 2026-10-11)
+
+**Status: proposed, for the user's agreement.** The user, 2026-10-11, on the measurement: "this is so awesome lets do
+it". Builds on `docs/DATACUBE_PYTHON_SHOW_DESIGN_2026_10_08.md` (the engine in Python, the notebook cube),
+`docs/DATACUBE_PYTHON_PAGES_DESIGN_2026_10_09.md` (pages built in code) and `docs/DATACUBE_MODEL_DESIGN_2026_10_10.md`
+(§13's model plan; §15.5's Python). Evidence: `docs/datacube-headless-evidence-2026-10-11/`.
+
+## 0. In one paragraph
+
+DataCube's meaning lives in its own TypeScript, which turns a grid's settings into Pure, runs a grid's levels, totals
+and pivots, and writes exports. That code needs two things, a **planner** and a **database**. It does not need a
+browser, and it does not need WebAssembly. In the browser both happen to be WebAssembly: legend-lite's planner built by
+TeaVM, and DuckDB-WASM. In Python they are legend-lite's native library (the same Java, built by GraalVM) and Python's
+own DuckDB. So Python runs DataCube's non-screen code in an embedded JavaScript engine (V8, through `mini-racer`). It
+plans through the native library and runs its queries on Python's DuckDB.
+
+Measured: 1,123 of the 1,138 tests of DataCube's non-screen code pass in V8 as in Node. All 15 that do not pass need the
+network (the fetch API) or are one test's own plumbing; none is DataCube misbehaving. There is one implementation of
+DataCube's meaning, never copied into Python. It is reachable from scripts, CI and notebooks, without a screen.
+
+## 1. What binds this design (the user's rulings, 2026-10-11)
+
+- **The feature boundary is the relation.** Create a Class takes a relation, which is legend-lite's writer in core.
+  DataCube's job is turning clicks into a relation. Python's job is turning code into one, or using a frame as it is.
+- **DataCube's logic is DataCube's TypeScript, wherever it runs.** It is not copied into Python and not ported to Java.
+  Python reuses it by running it.
+- **Faithful to production.** The code under test runs the production paths. Test tooling may differ, but only in
+  how it builds its inputs, never in what it tests. No recorded answers stand in for a computation.
+- **The tests' synchronous fixture parses are a test habit, not a product need.** They become asynchronous as part of
+  this design, not before (§6).
+- **No WebAssembly in the Python process.**
+
+## 2. What was measured (`docs/datacube-headless-evidence-2026-10-11/README.md`)
+
+- **The query builder.** In V8 and QuickJS it is byte-identical to Node: on the WASM differential's 49 grids, on the
+  same grids through the page-document path, and on 15,000 fuzzed builds.
+- **DataCube's own tests, three engines.** In the 67 files of non-screen code: Node 1,138 passing, V8 1,123, QuickJS
+  1,101; none passing outside Node that fails in it.
+  - V8 loses 15: 14 need the fetch API (the remote planner's, the engine executor's and the warehouse sign-in's HTTP
+    clients), and 1 is a test reading a DuckDB file synchronously.
+  - QuickJS loses those and 23 more, for `Intl` (number and date formatting).
+- **The engines.**
+  - V8 (`mini-racer` 0.14, V8 14.4): wheels for all five targets, +15-22 MB, +51 MB of memory, `Intl` built in,
+    about 7x faster than QuickJS on heavy JavaScript.
+  - quickjs-ng: +0.5-2.6 MB, +7 MB; no `Intl`; no macOS x86_64 wheel; its binding one person's.
+- **The choice: V8.** It formats as the browser does, it is fast, and it is packaged for every target. Its cost is
+  size, and memory beside Python.
+
+## 3. The shape
+
+```
+Python process
+├── legend_lite (native library, GraalVM)   the compiler and planner: the same Java as the tab's WASM module
+├── duckdb (Python)                          the database: the frames, the classes' tables
+└── V8 (mini-racer), on its own thread       DataCube's non-screen bundle
+      ├── WasmPlanner ── worker transport ──► native library      (asynchronous; the browser's production path)
+      ├── DuckDbEngine ── connection ──────► Python's DuckDB      (asynchronous; Arrow IPC)
+      └── the host's web layer               URL, TextEncoder/Decoder, AbortController, events, timers, crypto.subtle
+```
+
+- **The planner.** It is DataCube's `WasmPlanner`, unchanged, over its worker transport. The browser already runs its
+  module in a Web Worker (`planner-worker.ts`); here the "worker" is the host, which answers each message with the
+  native library's function of the same name (`lite_hold_model`, `lite_plan_json_held`, ...). `planHeld` (the plan of a
+  query written as Pure text) is served by `lite_plan_text` over the held model's text. `testDataSql` has no native
+  function yet; one is added (§8).
+  - `WasmPlanner` names how the browser delivers its module, not what it is. Renamed `LitePlanner` with this design (the
+    Plan Gen / Exec Split line's boundary, so it decides).
+- **The database.** It is DataCube's `DuckDbEngine`, unchanged, over a connection whose `query(sql)` runs on Python's
+  DuckDB and answers Arrow IPC, read by `apache-arrow`. DuckDB-WASM's file functions (`registerFileBuffer`, ...) are
+  answered by writing into a folder of the host's own, which Python's DuckDB reads.
+- **Big data does not cross into JavaScript.** A grid's view goes through DataCube's code as a grid shows it: levels
+  capped, as on screen. A whole result goes another way. For `grid.to_pandas()` DataCube answers the query, and
+  Python's DuckDB returns the Arrow table to Python directly.
+- **The web layer** is a small module of the host's. The browser supplies these things and V8 alone does not:
+  - `URL` and `URLSearchParams` (`whatwg-url`, the specification's reference implementation);
+  - `TextEncoder` and `TextDecoder` (UTF-8);
+  - `EventTarget`, `Event`, `DOMException`, `AbortController` and `AbortSignal`;
+  - timers, on the host's own loop;
+  - `crypto.subtle.digest`, by Python's `hashlib`.
+
+  Each is held to its standard by a conformance test of its own (§6). The fetch API is left out, since nothing in
+  Python needs DataCube's HTTP clients.
+
+## 4. The headless API (what a developer types)
+
+```python
+page = ll.Page('Trades')
+trades = page.grid(trades_df, name='trades').filter(...).calculate('big', 'x|$x.notional > 100').group('region')
+
+trades.view()               # what the grid shows: its rows, levels, totals and truncation, as DataCube computes them
+trades.relation             # its rows as a relation (Pure), at the finest level, as Create a Class makes it
+trades.to_pandas()          # the relation's whole result, from Python's DuckDB
+trades.create_class('Trade', package='trades')       # a class of the grid as DataCube means it, in the same cell
+page.export('trades.xlsx')  # a page's export, as the screen writes it
+```
+
+- **One grid** is almost there. A grid's run loop is already screen-free: `CubeController.run(state)` produces its view
+  (rows, tree, truncation, total rows), driven by the state owner (`state-owner.ts`); the screen (`app.ts`) wires them
+  to the DOM. The headless grid assembles the two, behind an entry point of the bundle's.
+- **A page** needs more. Its orchestration of several grids, their charts and sheets is in screen modules today
+  (`page/page-app.ts`, `page/cube-page.ts`). The design's second step moves what is not drawing into a screen-free
+  page engine, which the screen and Python then share. That is the largest piece of new work, and a good refactor in
+  its own right.
+- **`create_class` from a grid now works in code, in the same cell.** It uses DataCube's builder, so the grid's
+  filters and calculated columns go into the class's function. This removes §15.5's limit, under which Python made
+  classes from frames or written relations only. Those two ways stay too.
+
+## 5. The asynchronous boundary, and notebooks
+
+- `mini-racer` runs V8 on its own thread, and every call from JavaScript into Python is asynchronous (a Promise).
+  DataCube's production paths are asynchronous already, so this costs nothing in them.
+- Python's API is **synchronous** to the developer and safe in Jupyter. legend-lite owns one event loop on a
+  background thread for the engine; a call such as `grid.view()` is posted to it and waited for. It never calls
+  `asyncio.run()`, which fails inside Jupyter's own running loop. Asynchronous variants (`await grid.view_async()`) are
+  offered for code already in a loop.
+- **One engine per process, one call at a time** into DataCube's state, as on screen, where one state owner holds a
+  grid's state. `mini-racer` serializes calls into one context (measured: one context from four threads, correct). Making
+  contexts on several threads at once crashed it (measured), so the engine's context is made once, on its own thread.
+  Its memory is capped (`set_hard_memory_limit`), so a runaway grid fails its call instead of the process.
+
+## 6. Keeping it proven: the lane
+
+The measurement becomes a lane, `//datacube:headless_test`, run on all three platforms:
+
+- DataCube's non-screen test files, run in V8 by Python, through the production paths of §3.
+- **The test helpers made asynchronous**, landing for real: `datacube/test/lite-compiler.ts` and
+  `pure-protocol/test/lite.ts`, as the overlay did (`overlay.patch`: their callers in 18 files, 232 awaits once a wrapper
+  that awaits is awaited in turn, by the codemod and three hand fixes). The same tests then run unchanged in Node and in V8.
+- **The host's hooks become supported options** instead of the overlay's patches:
+  - the planner's worker factory: `WasmPlanner`'s option, not a global `Worker`;
+  - the DuckDB connection the tests open;
+  - the runfiles placeholder.
+- **Conformance tests for the web layer**, each against its standard's own test vectors where they exist (`URL`:
+  whatwg-url's; UTF-8: the Encoding standard's).
+- **A guard:** the headless bundle imports nothing of the DOM or of Node (esbuild `--platform=neutral`, and the lane's
+  run).
+- **An opportunity, not a commitment:** with the lane, DataCube's unit tests no longer need Node to run (the "no Node in
+  legend-lite" goal).
+
+## 7. Packaging
+
+- **One package with an extra: `pip install legend-lite[datacube]`** (recommended; the user's to rule). The extra
+  brings `mini-racer` (V8), and the wheel carries DataCube's headless bundle (small), built by Bazel's esbuild.
+- Two wheels (`legend-lite` and `legend-lite-datacube`) would keep the same parts apart. But the bundle and the native
+  library must agree on their interface exactly, so two wheels would need a pinned pair and a version handshake. One
+  package has one version.
+- The existing `notebook` extra is the same pattern.
+- **An interface check at start:** the bundle states the module interface it expects (the planner's functions and the
+  protocol's version), and the native library states its own. A mismatch fails at once with both named.
+
+## 8. What it costs, and the risks
+
+- **The page engine (§4)** is the largest new piece: the screen's orchestration moved into screen-free modules.
+- **Three runtimes in one process:** Python, GraalVM's native library and V8. That means +51 MB, start-up of the order
+  of a hundred milliseconds (to be measured), and errors that cross three languages. A V8 out-of-memory failure kills
+  the process unless capped (§5).
+- **The same DataCube is not the same database.** The browser's DuckDB-WASM and Python's DuckDB are different
+  releases: an edge-case type or an error's words can differ. `Intl` follows the ICU data bundled with `mini-racer`'s
+  V8. It matched Node's in all 23 measured formatting tests, and may differ from a user's Chrome in an edge case.
+- **A dependency to own:** `mini-racer`, its V8 upgrades and security releases at its pace. The JavaScript run is ours,
+  never a user's, which lowers the exposure.
+- **`testDataSql` has no native function.** It is added to the native library beside its other `Boundary` functions,
+  so the headless planner answers what the browser's does.
+- **Size:** +15-22 MB for the extra's users.
+
+## 9. The plan (in order; each a landing of its own)
+
+1. **The lane (§6).**
+   - The test helpers made asynchronous; the hooks made supported options; the web layer with its conformance tests;
+     `testDataSql` natively.
+   - Reviews: the Compiler Rewrite line for the BUILD lines and the new pinned Python dependency (`mini-racer` in
+     `@pypi`); the Plan Gen / Exec Split line for the planner's hooks and the rename.
+2. **The headless grid** (§4: the bundle's entry point; `grid.view()`, `grid.relation`, `grid.to_pandas()`), and the
+   engine's loop thread (§5).
+3. **The page engine** (§4): the page's orchestration moved out of the screen, shared by the screen and Python; then
+   `page.export(...)`.
+4. **Packaging** (§7): the `datacube` extra, the interface check, the wheels on all five targets.
+5. **The model plan's Python step** (§15.5) rides on it: `grid.create_class`, `create_association` and
+   `create_data_space`, from grids, relations and frames.
+
+**Where it goes relative to the model plan** is the user's to place. Recommended: steps 1-2 before §15.5's Python
+calls, since `grid.create_class` depends on them. Steps 3-4 can follow the model plan's step 3 (dashboards on classes).
+
+## 10. For the user to rule
+
+1. One package with a `datacube` extra (recommended), or two wheels.
+2. V8's size for the extra's users (+15-22 MB, +51 MB of memory), against QuickJS (+2 MB, no `Intl`, slower).
+3. The order relative to the model plan (§9).
+4. The rename of `WasmPlanner` to `LitePlanner` (with the Plan Gen / Exec Split line).
