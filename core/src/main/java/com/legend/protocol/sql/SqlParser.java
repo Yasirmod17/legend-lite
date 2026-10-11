@@ -628,7 +628,151 @@ public final class SqlParser {
         if (TYPE_FUNC_NAME.contains(word) && peekAt(1).kind() != Kind.LPAREN) {
             throw unexpected();
         }
+        if (peekAt(1).kind() == Kind.LPAREN) {
+            SqlAst.Expr special = switch (word) {
+                case "extract" -> extract();
+                case "substring" -> substring();
+                case "position" -> position();
+                case "overlay" -> overlay();
+                case "trim" -> trim();
+                default -> null;
+            };
+            if (special != null) {
+                return special;
+            }
+        }
         return nameOrCall();
+    }
+
+    // ------------------------------------------------------------------ SQL's special call syntax
+
+    /** {@code EXTRACT(field FROM x)}: Postgres's {@code extract('field', x)}. Null when the parentheses hold an
+     *  ordinary argument list. */
+    private SqlAst.@com.legend.base.Nullable Expr extract() {
+        Token name = peek();
+        if (!(peekAt(2).kind() == Kind.IDENT || peekAt(2).kind() == Kind.STRING) || !peekAt(3).is("from")) {
+            return null;
+        }
+        at += 2;
+        Token field = next();
+        at++;
+        SqlAst.Expr source = expr();
+        expect(Kind.RPAREN);
+        String f = field.kind() == Kind.STRING ? field.text() : field.text().toLowerCase(Locale.ROOT);
+        return call(name, "extract", List.of(new SqlAst.StringLit(f, field.pos()), source));
+    }
+
+    /** {@code SUBSTRING(x FROM a [FOR b])}, {@code SUBSTRING(x FOR b [FROM a])}: Postgres's
+     *  {@code substring(x, a[, b])}, {@code substring(x, 1, b)}. */
+    private SqlAst.@com.legend.base.Nullable Expr substring() {
+        int mark = at;
+        Token name = next();
+        at++;
+        SqlAst.Expr string = expr();
+        SqlAst.Expr from = null;
+        SqlAst.Expr length = null;
+        if (peek().is("similar")) {
+            throw unsupported("SUBSTRING ... SIMILAR is");
+        }
+        if (!peek().is("from") && !peek().is("for")) {
+            at = mark;
+            return null;
+        }
+        while (peek().is("from") || peek().is("for")) {
+            boolean isFrom = next().is("from");
+            if (isFrom) {
+                from = expr();
+            } else {
+                length = expr();
+            }
+        }
+        expect(Kind.RPAREN);
+        List<SqlAst.Expr> args = new ArrayList<>(List.of(string));
+        if (from == null) {
+            args.add(new SqlAst.IntegerLit(BigInteger.ONE, name.pos()));
+        } else {
+            args.add(from);
+        }
+        if (length != null) {
+            args.add(length);
+        }
+        return call(name, "substring", args);
+    }
+
+    /** {@code POSITION(a IN b)}: Postgres's {@code position(b, a)}, its operands below IN's level ({@code b_expr}). */
+    private SqlAst.@com.legend.base.Nullable Expr position() {
+        int mark = at;
+        Token name = next();
+        at++;
+        SqlAst.Expr needle = other();
+        if (!acceptWord("in")) {
+            at = mark;
+            return null;
+        }
+        SqlAst.Expr haystack = other();
+        expect(Kind.RPAREN);
+        return call(name, "position", List.of(haystack, needle));
+    }
+
+    /** {@code OVERLAY(x PLACING y FROM a [FOR b])}: Postgres's {@code overlay(x, y, a[, b])}. */
+    private SqlAst.@com.legend.base.Nullable Expr overlay() {
+        int mark = at;
+        Token name = next();
+        at++;
+        SqlAst.Expr string = expr();
+        if (!acceptWord("placing")) {
+            at = mark;
+            return null;
+        }
+        List<SqlAst.Expr> args = new ArrayList<>(List.of(string, expr()));
+        expectWord("from");
+        args.add(expr());
+        if (acceptWord("for")) {
+            args.add(expr());
+        }
+        expect(Kind.RPAREN);
+        return call(name, "overlay", args);
+    }
+
+    /** {@code TRIM([BOTH | LEADING | TRAILING] [chars] FROM x)} and {@code TRIM(x[, chars])}: Postgres's
+     *  {@code btrim}, {@code ltrim} or {@code rtrim}, of {@code x} then the characters. */
+    private SqlAst.Expr trim() {
+        Token name = next();
+        at++;
+        String fn = "btrim";
+        if (acceptWord("both")) {
+            fn = "btrim";
+        } else if (acceptWord("leading")) {
+            fn = "ltrim";
+        } else if (acceptWord("trailing")) {
+            fn = "rtrim";
+        }
+        List<SqlAst.Expr> args = new ArrayList<>();
+        if (acceptWord("from")) {
+            do {
+                args.add(expr());
+            } while (accept(Kind.COMMA));
+        } else {
+            SqlAst.Expr first = expr();
+            if (acceptWord("from")) {
+                do {
+                    args.add(expr());
+                } while (accept(Kind.COMMA));
+                args.add(first);
+            } else {
+                args.add(first);
+                while (accept(Kind.COMMA)) {
+                    args.add(expr());
+                }
+            }
+        }
+        expect(Kind.RPAREN);
+        return call(name, fn, args);
+    }
+
+    private static SqlAst.FunctionCall call(Token name, String fn, List<SqlAst.Expr> args) {
+        return new SqlAst.FunctionCall(List.of(new SqlAst.Ident(fn, false, name.pos())), args, false, false,
+                name.pos());
     }
 
     /** A column reference ({@code a}, {@code t.a}) or a function call ({@code f(...)}, {@code s.f(...)}). */

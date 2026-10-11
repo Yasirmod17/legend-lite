@@ -19,6 +19,7 @@ import com.legend.protocol.spec.ValueSpecification;
 import com.legend.protocol.spec.Variable;
 import com.legend.values.PureDateLiteral;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -261,6 +262,11 @@ public final class SqlToPure {
             }
             SqlAst.Ident name = parts.get(parts.size() - 1);
             String found = resolve(name, names(), "column");
+            if (found == null && parts.size() == 1 && resolve(name, List.of(qualifier.text()), "table") != null) {
+                // Postgres reads a FROM item's name as its whole row (row_to_json(persons))
+                throw SqlTranslationException.unsupported("whole-row references (\"" + name.text() + "\" as a value)"
+                        + " are not supported yet", name.pos());
+            }
             if (found == null) {
                 throw SqlTranslationException.invalid("column \"" + name.text() + "\" does not exist"
                         + hint(name, names()), name.pos());
@@ -852,11 +858,19 @@ public final class SqlToPure {
 
     /** A WHERE, HAVING or WHEN condition: the rows where it is TRUE (NULL and FALSE alike are not TRUE). */
     private ValueSpecification condition(SqlAst.Expr e, Scope scope, String clause) {
-        Tx t = tx(e, scope, ROW);
-        if (t.kind() != Kind.BOOLEAN) {
-            throw SqlTranslationException.invalid("argument of " + clause + " must be type boolean", e.pos());
+        return truth(tx(e, scope, ROW), clause, e.pos()).vs();
+    }
+
+    /** A boolean operand ({@code clause}'s). A NULL constant is Postgres's unknown truth value: neither true nor
+     *  false. */
+    private static Tx truth(Tx t, String clause, SqlAst.Pos pos) {
+        if (t.kind() == Kind.NULL) {
+            return Tx.condition(new CBoolean(false), new CBoolean(false), true);
         }
-        return t.vs();
+        if (t.kind() != Kind.BOOLEAN) {
+            throw SqlTranslationException.invalid("argument of " + clause + " must be type boolean", pos);
+        }
+        return t;
     }
 
     /** A column's value; a boolean column is a condition (TRUE when it holds true, FALSE when it holds false). */
@@ -865,11 +879,16 @@ public final class SqlToPure {
         return c.kind() == Kind.BOOLEAN ? booleanValue(v, c.nullable()) : Tx.value(v, c.kind(), c.nullable());
     }
 
-    /** A boolean VALUE (a column, a CASE, a coalesce) as a condition. */
+    /** A boolean VALUE (a column, a CASE, a coalesce) as a condition. A nullable one's tests say "known and true",
+     *  "known and false" outright: {@code $v == true} would be compared in SQL, NULL for a NULL, where the test must
+     *  be false (Postgres: NULL IS TRUE is false). */
     private static Tx booleanValue(ValueSpecification v, boolean nullable) {
-        return nullable
-                ? Tx.condition(call("equal", v, new CBoolean(true)), call("equal", v, new CBoolean(false)), true)
-                : Tx.condition(v, call("not", v), false);
+        if (!nullable) {
+            return Tx.condition(v, call("not", v), false);
+        }
+        ValueSpecification known = call("isNotEmpty", v);
+        return Tx.condition(call("and", known, call("toOne", v)), call("and", known, call("not", call("toOne", v))),
+                true);
     }
 
     /** An expression's Pure value: a condition becomes true, false, or (when neither holds) no value. */
@@ -944,10 +963,9 @@ public final class SqlToPure {
                     + " supported yet", p.pos());
             case SqlAst.Unary u -> unary(u, scope, row);
             case SqlAst.Binary b -> binary(b, scope, row);
-            case SqlAst.Operator o -> throw SqlTranslationException.unsupported(switch (o.operator()) {
-                case "~", "~*", "!~", "!~*" -> "regular expression operators (~, ~*, !~, !~*) are";
-                default -> "the operator " + o.operator() + " is";
-            } + " not supported yet", o.pos());
+            case SqlAst.Operator o -> throw SqlTranslationException.unsupported((REGEX_OPERATORS.contains(o.operator())
+                    ? "regular expression operators (~, ~*, !~, !~*) are" : "the operator " + o.operator() + " is")
+                    + " not supported yet", o.pos());
             case SqlAst.IsNull n -> {
                 ValueSpecification v = valueOf(tx(n.operand(), scope, row));
                 Tx isNull = Tx.condition(call("isEmpty", v), call("isNotEmpty", v), false);
@@ -967,12 +985,7 @@ public final class SqlToPure {
     private Tx unary(SqlAst.Unary u, Scope scope, String row) {
         Tx operand = tx(u.operand(), scope, row);
         return switch (u.op()) {
-            case NOT -> {
-                if (operand.kind() != Kind.BOOLEAN) {
-                    throw SqlTranslationException.invalid("argument of NOT must be type boolean", u.pos());
-                }
-                yield not(operand);
-            }
+            case NOT -> not(truth(operand, "NOT", u.pos()));
             case MINUS -> {
                 numericOperand(operand, u.operand());
                 yield strict(operand.kind(), List.of(operand), v -> call("minus", v.get(0)));
@@ -987,11 +1000,8 @@ public final class SqlToPure {
     private Tx binary(SqlAst.Binary b, Scope scope, String row) {
         switch (b.op()) {
             case AND, OR -> {
-                Tx l = tx(b.left(), scope, row);
-                Tx r = tx(b.right(), scope, row);
-                if (l.kind() != Kind.BOOLEAN || r.kind() != Kind.BOOLEAN) {
-                    throw SqlTranslationException.invalid("argument of " + b.op() + " must be type boolean", b.pos());
-                }
+                Tx l = truth(tx(b.left(), scope, row), b.op().name(), b.pos());
+                Tx r = truth(tx(b.right(), scope, row), b.op().name(), b.pos());
                 boolean nullable = l.nullable() || r.nullable();
                 // Kleene: AND is TRUE when both are, FALSE when either is; OR the other way round
                 return b.op() == SqlAst.BinaryOp.AND
@@ -1087,6 +1097,18 @@ public final class SqlToPure {
             throw SqlTranslationException.unsupported("arithmetic with a NULL constant is always NULL in Postgres; it"
                     + " is not supported here", e.pos());
         }
+        // Postgres has these operators (an untyped constant takes the other operand's type; date - date, jsonb - key)
+        if (e instanceof SqlAst.StringLit) {
+            throw SqlTranslationException.unsupported("an untyped string constant in arithmetic is not supported yet",
+                    e.pos());
+        }
+        if (isDate(t.kind())) {
+            throw SqlTranslationException.unsupported("date and timestamp arithmetic is not supported yet", e.pos());
+        }
+        if (t.kind() == Kind.OTHER) {
+            throw SqlTranslationException.unsupported("arithmetic on values of this type is not supported yet",
+                    e.pos());
+        }
         if (!t.kind().numeric()) {
             throw SqlTranslationException.invalid("arithmetic needs numbers; this operand is not numeric", e.pos());
         }
@@ -1105,10 +1127,10 @@ public final class SqlToPure {
     private List<Tx> comparableValues(SqlAst.Expr left, SqlAst.Expr right, Scope scope, String row, SqlAst.Pos pos) {
         Tx l = tx(left, scope, row);
         Tx r = tx(right, scope, row);
-        if (left instanceof SqlAst.StringLit s && isDate(r.kind())) {
-            l = dateFromString(s, r.kind());
-        } else if (right instanceof SqlAst.StringLit s && isDate(l.kind())) {
-            r = dateFromString(s, l.kind());
+        if (left instanceof SqlAst.StringLit s && readsStrings(r.kind())) {
+            l = fromString(s, r.kind());
+        } else if (right instanceof SqlAst.StringLit s && readsStrings(l.kind())) {
+            r = fromString(s, l.kind());
         }
         boolean ok = l.kind() == r.kind() || l.kind().numeric() && r.kind().numeric()
                 || isDate(l.kind()) && isDate(r.kind()) || l.kind() == Kind.OTHER || r.kind() == Kind.OTHER;
@@ -1123,12 +1145,104 @@ public final class SqlToPure {
         return k == Kind.DATE || k == Kind.DATETIME;
     }
 
+    /** The kinds an untyped string constant compared with them is read as (Postgres: an "unknown" constant takes the
+     *  other operand's type, read by that type's input rules). */
+    private static boolean readsStrings(Kind k) {
+        return isDate(k) || k == Kind.INTEGER || k == Kind.DECIMAL || k == Kind.FLOAT || k == Kind.BOOLEAN;
+    }
+
+    private static final Set<String> REGEX_OPERATORS = Set.of("~", "~*", "!~", "!~*");
+
+    /** A string constant read as {@code kind}, by Postgres's input rules: dates and timestamps in ISO 8601, integers
+     *  and decimals in their plain spellings (others, which Postgres may read too, are refused), booleans as
+     *  Postgres's boolin reads them (any unambiguous prefix of true/false/yes/no, on/off, 1/0; nothing else). */
+    private static Tx fromString(SqlAst.StringLit s, Kind kind) {
+        String v = s.value();
+        switch (kind) {
+            case DATE, DATETIME -> {
+                return dateFromString(s, kind);
+            }
+            case INTEGER -> {
+                String n = plainNumber(v.strip(), false);
+                if (n != null && new java.math.BigInteger(n).bitLength() < 64) {
+                    return Tx.value(integer(new java.math.BigInteger(n)), Kind.INTEGER, false);
+                }
+            }
+            case DECIMAL, FLOAT -> {
+                String n = plainNumber(v.strip(), true);
+                if (n != null) {
+                    return Tx.value(new CDecimal(new BigDecimal(n)), Kind.DECIMAL, false);
+                }
+            }
+            case BOOLEAN -> {
+                Boolean b = postgresBoolean(v.strip().toLowerCase(Locale.ROOT));
+                if (b == null) {
+                    throw SqlTranslationException.invalid("invalid input syntax for type boolean: \"" + v + "\"",
+                            s.pos());
+                }
+                return booleanValue(new CBoolean(b), false);
+            }
+            default -> {
+            }
+        }
+        throw SqlTranslationException.unsupported("the string '" + v + "' read as " + kind.name()
+                .toLowerCase(Locale.ROOT) + " is not supported yet", s.pos());
+    }
+
+    /** {@code v} when it is a plain number: an optional sign and digits, and (when {@code decimal}) an optional point
+     *  with digits on at least one side and an optional exponent; without its {@code +}. Null otherwise. */
+    private static @com.legend.base.Nullable String plainNumber(String v, boolean decimal) {
+        int i = v.startsWith("+") || v.startsWith("-") ? 1 : 0;
+        int digits = 0;
+        while (i < v.length() && Character.isDigit(v.charAt(i)) && v.charAt(i) < 0x80) {
+            i++;
+            digits++;
+        }
+        if (decimal && i < v.length() && v.charAt(i) == '.') {
+            i++;
+            while (i < v.length() && Character.isDigit(v.charAt(i)) && v.charAt(i) < 0x80) {
+                i++;
+                digits++;
+            }
+        }
+        if (digits == 0) {
+            return null;
+        }
+        if (decimal && i < v.length() && (v.charAt(i) == 'e' || v.charAt(i) == 'E')) {
+            int e = i + 1 < v.length() && (v.charAt(i + 1) == '+' || v.charAt(i + 1) == '-') ? i + 2 : i + 1;
+            int start = e;
+            while (e < v.length() && Character.isDigit(v.charAt(e)) && v.charAt(e) < 0x80) {
+                e++;
+            }
+            if (e == start) {
+                return null;
+            }
+            i = e;
+        }
+        if (i != v.length()) {
+            return null;
+        }
+        return v.startsWith("+") ? v.substring(1) : v;
+    }
+
+    /** Postgres's parse_bool_with_len: true, false, or null for a spelling it refuses. */
+    private static @com.legend.base.Nullable Boolean postgresBoolean(String v) {
+        if (v.isEmpty()) {
+            return null;
+        }
+        if ("true".startsWith(v) || "yes".startsWith(v) || v.equals("on") || v.equals("1")) {
+            return Boolean.TRUE;
+        }
+        if ("false".startsWith(v) || "no".startsWith(v) || v.length() >= 2 && "off".startsWith(v)
+                || v.equals("0")) {
+            return Boolean.FALSE;
+        }
+        return null;
+    }
+
     /** {@code x IS [NOT] TRUE | FALSE | UNKNOWN}: never NULL; UNKNOWN is a NULL condition (neither case holds). */
     private Tx isTruth(SqlAst.IsTruth t, Scope scope, String row) {
-        Tx operand = tx(t.operand(), scope, row);
-        if (operand.kind() != Kind.BOOLEAN) {
-            throw SqlTranslationException.invalid("argument of IS " + t.truth() + " must be type boolean", t.pos());
-        }
+        Tx operand = truth(tx(t.operand(), scope, row), "IS " + t.truth(), t.pos());
         ValueSpecification holds = switch (t.truth()) {
             case TRUE -> operand.vs();
             case FALSE -> operand.falseWhen();
@@ -1310,7 +1424,13 @@ public final class SqlToPure {
             case "upper" -> text1(f, args, "toUpper", Kind.STRING);
             case "lower" -> text1(f, args, "toLower", Kind.STRING);
             case "length", "char_length", "character_length" -> text1(f, args, "length", Kind.INTEGER);
-            case "trim", "btrim" -> text1(f, args, "trim", Kind.STRING);
+            case "trim", "btrim" -> {
+                if (args.size() == 2) {
+                    throw SqlTranslationException.unsupported(fn + " with the characters to trim is not supported yet",
+                            f.pos());
+                }
+                yield text1(f, args, "trim", Kind.STRING);
+            }
             case "abs" -> numeric1(f, args, "abs");
             case "ceil", "ceiling" -> numeric1(f, args, "ceiling");
             case "floor" -> numeric1(f, args, "floor");
@@ -1324,6 +1444,10 @@ public final class SqlToPure {
 
     private static Tx text1(SqlAst.FunctionCall f, List<Tx> args, String pure, Kind result) {
         arity(f, args, 1);
+        if (args.get(0).kind() == Kind.NULL) {
+            throw SqlTranslationException.unsupported("a NULL constant argument makes " + functionName(f.name()
+                    .get(0)) + "(...) NULL in Postgres; it is not supported here", f.pos());
+        }
         if (args.get(0).kind() != Kind.STRING) {
             throw SqlTranslationException.invalid("function " + functionName(f.name().get(0)) + " needs a text"
                     + " value", f.pos());
@@ -1372,10 +1496,12 @@ public final class SqlToPure {
         return kind == Kind.BOOLEAN ? booleanValue(tail, nullable) : Tx.value(tail, kind, nullable);
     }
 
+    /** Refuses another number of arguments as not supported: Postgres may have that overload (btrim(x, chars)). */
     private static void arity(SqlAst.FunctionCall f, List<Tx> args, int n) {
         if (args.size() != n) {
-            throw SqlTranslationException.invalid("function " + functionName(f.name().get(0)) + " takes " + n
-                    + " argument" + (n == 1 ? "" : "s") + " here", f.pos());
+            throw SqlTranslationException.unsupported("function " + functionName(f.name().get(0)) + " with "
+                    + args.size() + " argument" + (args.size() == 1 ? "" : "s") + " is not supported yet; it takes "
+                    + n + " here", f.pos());
         }
     }
 
@@ -1398,16 +1524,54 @@ public final class SqlToPure {
         boolean timestamp = v.length() >= 19 && isoDate(v.substring(0, 10)) && (v.charAt(10) == ' '
                 || v.charAt(10) == 'T') && isoTime(v.substring(11));
         if (target == Kind.DATE && date) {
+            validDate(v, s.pos());
             return Tx.value(new CDate(PureDateLiteral.parse(v), v, null), Kind.DATE, false);
         }
         if (target == Kind.DATETIME && (timestamp || date)) {
             // the Pure spelling of the same instant: yyyy-mm-ddThh:mm:ss[.f]
-            String body = date ? v + "T00:00:00" : v.substring(0, 10) + "T" + v.substring(11);
+            String body = date ? v + "T00:00:00" : timestampBody(v, s.pos());
             return Tx.value(new CDate(PureDateLiteral.parse(body), body, null), Kind.DATETIME, false);
         }
         throw SqlTranslationException.unsupported("'" + v + "' is not an ISO 8601 " + (target == Kind.DATE ? "date"
                 + " (yyyy-mm-dd)" : "timestamp (yyyy-mm-dd hh:mm:ss)") + "; other spellings are not supported",
                 s.pos());
+    }
+
+    /** Refuses a date no calendar has, as Postgres does ({@code 2023-02-30}). */
+    private static java.time.LocalDate validDate(String v, SqlAst.Pos pos) {
+        try {
+            return java.time.LocalDate.of(Integer.parseInt(v.substring(0, 4)), Integer.parseInt(v.substring(5, 7)),
+                    Integer.parseInt(v.substring(8, 10)));
+        } catch (java.time.DateTimeException e) {
+            throw SqlTranslationException.invalid("date/time field value out of range: \"" + v + "\"", pos);
+        }
+    }
+
+    /** An ISO timestamp's Pure spelling, read by Postgres's rules: {@code 24:00:00} is the next day's midnight, and
+     *  a fraction finer than a microsecond is rounded to one (half to even, Postgres's rint), carrying as far as it
+     *  must. */
+    private static String timestampBody(String v, SqlAst.Pos pos) {
+        java.time.LocalDate day = validDate(v.substring(0, 10), pos);
+        int hour = Integer.parseInt(v.substring(11, 13));
+        int minute = Integer.parseInt(v.substring(14, 16));
+        int second = Integer.parseInt(v.substring(17, 19));
+        String fraction = v.length() > 20 ? v.substring(20) : "";
+        boolean zeroFraction = fraction.chars().allMatch(c -> c == '0');
+        if (hour == 24 && minute == 0 && second == 0 && zeroFraction) {
+            return day.plusDays(1) + "T00:00:00";
+        }
+        if (hour > 23 || minute > 59 || second > 59) {
+            throw SqlTranslationException.invalid("date/time field value out of range: \"" + v + "\"", pos);
+        }
+        if (fraction.length() <= 6) {
+            return v.substring(0, 10) + "T" + v.substring(11);
+        }
+        BigDecimal micros = new BigDecimal("0." + fraction).movePointRight(6).setScale(0,
+                java.math.RoundingMode.HALF_EVEN);
+        java.time.LocalDateTime t = day.atTime(hour, minute, second).plusNanos(micros.longValueExact() * 1000);
+        String body = String.format(Locale.ROOT, "%sT%02d:%02d:%02d", t.toLocalDate(), t.getHour(), t.getMinute(),
+                t.getSecond());
+        return t.getNano() == 0 ? body : body + "." + String.format(Locale.ROOT, "%06d", t.getNano() / 1000);
     }
 
     private static boolean isoDate(String v) {

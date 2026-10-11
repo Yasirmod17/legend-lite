@@ -126,7 +126,7 @@ public final class SqlLexer {
                 return new Token(Kind.SEMICOLON, ";", pos);
             }
             case ':' -> {
-                if (text.startsWith("::", at)) {
+                if (at + 1 < text.length() && text.charAt(at + 1) == ':') {
                     advance(2);
                     return new Token(Kind.OP, "::", pos);
                 }
@@ -235,21 +235,15 @@ public final class SqlLexer {
     private Token number(SqlAst.Pos pos) {
         int start = at;
         char c = text.charAt(at);
-        int radix = c != '0' || at + 1 >= text.length() ? 10 : switch (text.charAt(at + 1)) {
-            case 'x', 'X' -> 16;
-            case 'o', 'O' -> 8;
-            case 'b', 'B' -> 2;
-            default -> 10;
-        };
+        char prefix = c == '0' && at + 1 < text.length() ? Character.toLowerCase(text.charAt(at + 1)) : ' ';
+        int radix = prefix == 'x' ? 16 : prefix == 'o' ? 8 : prefix == 'b' ? 2 : 10;
         if (radix != 10) {
             advance(2);
             String digits = digits(radix, true);
             if (digits.isEmpty()) {
-                throw new SqlSyntaxException("invalid " + switch (radix) {
-                    case 16 -> "hexadecimal";
-                    case 8 -> "octal";
-                    default -> "binary";
-                } + " integer at or near \"" + text.substring(start, at) + "\"", pos);
+                String base = radix == 16 ? "hexadecimal" : radix == 8 ? "octal" : "binary";
+                throw new SqlSyntaxException("invalid " + base + " integer at or near \"" + text.substring(start, at)
+                        + "\"", pos);
             }
             if (at < text.length() && isIdentPart(text.charAt(at))) {
                 // 0o19: scan.l reads 0 and then the identifier o19, so it is junk, not 0o1 then 9

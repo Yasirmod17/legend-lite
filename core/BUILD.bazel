@@ -356,6 +356,8 @@ legend_java_library(
         exclude = [
             "src/test/java/com/legend/server/PostgresArmTest.java",
             "src/test/java/com/legend/server/SqlIslandPostgresTest.java",
+            "src/test/java/com/legend/server/SqlParityPostgresTest.java",
+            "src/test/java/com/legend/integration/SqlParityTest.java",
             # the shared test cases are :test_cases's
             "src/test/java/com/legend/testcases/*.java",
             # the toy section grammar and its test are :toy_grammar's and :section_grammar_registry_test's (P3-04)
@@ -370,6 +372,9 @@ legend_java_library(
         # the shadow binding rides :shadow_binding, once; prose is never a test input
         exclude = [
             "**/*.md",
+            # upstream's Postgres parity corpus's answers and ledger: :sql_parity_test's and :sql_parity_postgres_test's
+            # data, read as files
+            "src/test/resources/sql-parity/**",
             "src/test/resources/META-INF/services/com.legend.builtin.DecisionProbe",
             # the toy section grammar's binding is :toy_grammar's, so no other core test loads it (P3-04)
             "src/test/resources/META-INF/services/com.legend.spi.SectionGrammar",
@@ -604,6 +609,65 @@ junit_test(
         "//testing",
         "@maven_test//:org_junit_jupiter_junit_jupiter_api",
         "@maven_test//:org_junit_jupiter_junit_jupiter_params",
+    ],
+    visibility = ["//gates:__pkg__"],
+)
+
+# UPSTREAM'S POSTGRES PARITY CORPUS (docs/LEGEND_SQL_STUDY_2026_10_11.md §1.5): legend-engine's e2e parity cases at the
+# pinned 4.145.0, each a #SQL{...}# island judged against Postgres 16's snapped answers by upstream's rules
+# (testcases/SqlParity.java), each case's status held by the ledger. On DuckDB here; on Postgres itself below, which
+# also checks the snapped answers against Postgres.
+_SQL_PARITY_SCHEMA = "@legend_engine_src//:legend-engine-xts-sql/legend-engine-xt-sql-e2e-tests/src/test/resources/parity-tests/schema.yaml"
+
+_SQL_PARITY_DATA = [
+    "src/test/resources/sql-parity/ledger.tsv",
+    "src/test/resources/sql-parity/postgres-answers.jsonl",
+    "@legend_engine_src//:sql_parity_tests",
+    _SQL_PARITY_SCHEMA,
+]
+
+_SQL_PARITY_FLAGS = [
+    "-Dsql.parity.schema=$(rlocationpath %s)" % _SQL_PARITY_SCHEMA,
+    "-Dsql.parity.answers=$(rlocationpath src/test/resources/sql-parity/postgres-answers.jsonl)",
+    "-Dsql.parity.ledger=$(rlocationpath src/test/resources/sql-parity/ledger.tsv)",
+]
+
+junit_test(
+    name = "sql_parity_test",
+    memory_mb = 1024,
+    size = "medium",
+    srcs = ["src/test/java/com/legend/integration/SqlParityTest.java"],
+    data = _SQL_PARITY_DATA,
+    jvm_flags = _SQL_PARITY_FLAGS,
+    select = ["--select-class=com.legend.integration.SqlParityTest"],
+    runtime_deps = [":drivers"],
+    deps = [
+        ":core",
+        ":test_cases",
+        "//testing",
+        "@maven_test//:org_junit_jupiter_junit_jupiter_api",
+    ],
+    visibility = ["//gates:__pkg__"],
+)
+
+junit_test(
+    name = "sql_parity_postgres_test",
+    memory_mb = 1024,
+    size = "medium",
+    srcs = ["src/test/java/com/legend/server/SqlParityPostgresTest.java"],
+    data = _SQL_PARITY_DATA + [
+        "@embedded_postgres//:pg/PG_ROOT",
+        "@embedded_postgres//:postgres",
+    ],
+    jvm_flags = _SQL_PARITY_FLAGS + ["-Dembedded.postgres.root=$(rlocationpath @embedded_postgres//:pg/PG_ROOT)"],
+    select = ["--select-class=com.legend.server.SqlParityPostgresTest"],
+    runtime_deps = [":drivers"],
+    target_compatible_with = EMBEDDED_POSTGRES_COMPATIBLE,
+    deps = [
+        ":core",
+        ":test_cases",
+        "//testing",
+        "@maven_test//:org_junit_jupiter_junit_jupiter_api",
     ],
     visibility = ["//gates:__pkg__"],
 )

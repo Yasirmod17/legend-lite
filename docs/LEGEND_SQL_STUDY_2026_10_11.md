@@ -39,7 +39,7 @@ upstream repository. Alloy is Legend's internal name, and the thing the user mea
    - the source conventions (`tb`/`func`/`service`/`csv`, the `tb__pkg` schema mangling);
    - the function table, as a spec;
    - above all, the **test corpora**:
-     - 2,340 parity cases with a real-Postgres oracle;
+     - 1,703 parity cases with a real-Postgres oracle at the pinned 4.145.0 (2,340 in a later upstream);
      - 230 SQL→Pure transpile pairs;
      - about 1,060 reverse-PCT triples;
      - 83 parser round-trip cases.
@@ -103,7 +103,7 @@ upstream repository. Alloy is Legend's internal name, and the thing the user mea
 | `#SQL{...}#` expression island | `legend-engine-xts-sql/legend-engine-xt-sql-expression/*` | 1,148 |
 | Postgres wire server (Crate-derived pgwire, Netty) | `legend-engine-xts-sql/legend-engine-xt-sql-postgres-server` | 15,506 main + 5,557 test |
 | reverse-PCT corpus | `legend-engine-xts-sql/.../legend-engine-xt-sql-reversePCT` | 15,244 Pure |
-| e2e parity corpus | `legend-engine-xts-sql/legend-engine-xt-sql-e2e-tests/src/main/resources/parity-tests/` | 73 YAML files, **2,340 cases** |
+| e2e parity corpus | `legend-engine-xts-sql/legend-engine-xt-sql-e2e-tests/src/test/resources/parity-tests/` (4.145.0) | 73 YAML files, **1,703 cases** at the pin (2,340 in a later upstream) |
 
 ### 1.2 Grammar and AST
 
@@ -227,7 +227,8 @@ There is no class, data space or data product source; Legend's object layer is n
 - DDL, DML and SET.
 
 The parity corpus quantifies the gap. Its per-case `expected_rel_status` columns read **1,106 PASS / 1,039
-ERROR / 88 BUG / 45 FAIL / 62 SKIP of 2,340** for the Relation path.
+ERROR / 88 BUG / 45 FAIL / 62 SKIP of 2,340** for the Relation path in a later upstream; at the pinned 4.145.0,
+**1,026 PASS / 518 ERROR / 61 BUG / 36 FAIL / 62 SKIP of 1,703** (§9 compares legend-lite's).
 
 **The `#SQL{...}#` island** (`xt-sql-expression`) makes SQL a Pure *expression*: `#SQL{select a from tb('p::DB.t')}#->filter(x|$x.a==1)`.
 - Lambda variables in scope are visible through `var('name')`.
@@ -287,7 +288,7 @@ Under the reference-checkout tenet these files are **test input**, never runtime
 
 | Corpus | Content | Use |
 |---|---|---|
-| `parity-tests/**/*.yaml` + `schema.yaml` | 2,340 SQL cases over a seeded schema (persons, departments, orders…), categorised (functions 882, operators 638, structural 590, format_tokens 80, compositions 59, window_frames 44, predicates 37), oracle = real Postgres | **The conformance target.** Commit the oracle's answers as fixtures generated once against PG16, so CI needs no Docker, and ratchet statuses as upstream does |
+| `parity-tests/**/*.yaml` + `schema.yaml` | 1,703 SQL cases at the pin (2,340 later) over a seeded schema (persons, departments, orders…), categorised (functions 882, operators 638, structural 590, format_tokens 80, compositions 59, window_frames 44, predicates 37), oracle = real Postgres | **The conformance target.** Commit the oracle's answers as fixtures generated once against PG16, so CI needs no Docker, and ratchet statuses as upstream does |
 | `testTranspile.pure` | 230 SQL → expected Pure pairs (TDS and/or Relation) | Translator unit tests: the Relation half, normalised to legend-lite's canonical Pure text |
 | reverse-PCT | about 1,060 `(PCT id, Pure expr, SQL)` triples, self-contained through `csv()`, plus 259 expected errors | Ties the function table to the PCT lane: each SQL string must agree with the PCT expectation of its Pure twin |
 | `TestSQLRoundTrip.java` | 83 parse/compose cases | Parser round trip, rebased onto a real AST fixpoint |
@@ -732,7 +733,7 @@ Sizes are rough Java line counts, for comparison with upstream (§1.1).
 | **6. Optional** | **L4** (dbt-postgres against pgwire); Legend → dbt export | dbt-postgres's own integration tests | — |
 
 **First slice:** phase 1 alone. It ships Postgres SQL against Legend models over HTTP and inside Pure, and it
-proves the translator against 2,340 oracle cases before any wire or dbt work starts.
+proves the translator against the corpus's oracle cases (1,703 at the pin) before any wire or dbt work starts.
 
 ---
 
@@ -832,6 +833,44 @@ All of this first ran locally on `javac` and JUnit with Maven Central's jars, th
   here uses it) came from `mirror.bazel.build`. The legend-engine 4.145.0 and legend-pure 5.99.0 source archives
   were rebuilt from their git tags with `git archive | gzip -n`, byte-identical to the pinned integrities, and given
   to Bazel through `--distdir`.
+
+**Upstream's parity corpus, run** (2026-10-11; `testcases/SqlParity.java`, `//core:sql_parity_test` on DuckDB and
+`//core:sql_parity_postgres_test` on Postgres 16, both in `//gates:core`):
+- **What runs.** Every one of the 1,703 cases of legend-engine 4.145.0's `parity-tests`, by upstream's own rules:
+  - the tables seeded as its `SchemaManager` seeds them, and its Postgres setup (`pgcrypto`, `test_seq`);
+  - the FROM tables rewritten to `tb('e2e::DB.persons') AS persons`;
+  - both results sorted unless the SQL says ORDER BY;
+  - compared by its `ResultComparator`: names without regard to case, floats within a tolerance.
+- **Postgres's answers, snapped.** Upstream asks a live Postgres (Testcontainers) on every run. Here Postgres 16's
+  answers sit in `core/src/test/resources/sql-parity/postgres-answers.jsonl`, and the Postgres lane checks each one
+  against Postgres itself on every run, so the file cannot drift.
+- **Not snapped:** four volatile cases (`NOW()`-relative, `VERSION()`, `RANDOM()`, the client's port).
+- **Compared unordered:** one case whose ORDER BY leaves tied rows' order to the database.
+- **The ratchet.** `ledger.tsv` holds every case's status in each lane. A changed status fails the test, as
+  upstream's YAML statuses do (REGRESSION, FIX DETECTED, STATUS MISMATCH). `-Dsql.parity.update` rewrites the
+  ledger, `-Dsql.parity.snap` the answers.
+- **The result, identical in both lanes:**
+
+  | legend-lite | count | upstream legend-engine on the same cases (Relation path) |
+  |---|---|---|
+  | PASS: Postgres's rows | 491 | 439 PASS, 13 FAIL, 39 ERROR |
+  | FAIL: other rows (a wrong answer) | **0** | — |
+  | BUG: answers what Postgres rejects | **0** | — |
+  | REFUSED: not supported yet, by name | 1,086 | 586 PASS, 23 FAIL, 477 ERROR |
+  | BOTH_ERROR: Postgres rejects it, and so does legend-lite | 61 | the 61 upstream BUGs |
+  | SKIP: upstream's 62, upstream's joined-model case, and two of the four volatile | 65 | 62 SKIP, 1 PASS, 2 ERROR |
+
+  Upstream passes 1,026, legend-lite 491, but upstream has 36 wrong answers and 61 accepted invalid queries;
+  legend-lite has none. The 586 cases upstream passes and legend-lite refuses are the roadmap: joins, CTEs,
+  subqueries, window functions and the function table.
+- **What running it fixed.** On its first run the corpus found:
+  - two wrong answers: a NULL `x IS TRUE` (a nullable boolean was tested with SQL `=`, so NULL, where Postgres says
+    false), and a timestamp fraction past microseconds (Postgres rounds half to even);
+  - one internal error: `TIMESTAMP '... 24:00:00'`, the next midnight in Postgres;
+  - 43 valid queries refused as invalid. These are now translated (an untyped string compared with a number or a
+    boolean takes its type; NULL is the unknown truth value in AND, OR and NOT) or refused by name
+    (`EXTRACT(... FROM ...)`, `SUBSTRING(... FROM ...)`, `POSITION(... IN ...)`, `OVERLAY`, `TRIM(... FROM ...)` now
+    parse; whole-row references; `jsonb - key`; `date - date`).
 
 **Known differences from Postgres,** each refused or recorded:
 - `avg` returns Pure's Float where Postgres returns numeric (`SqlIslandIntegrationTest.anAverageIsAFloat…`).
