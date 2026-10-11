@@ -261,7 +261,7 @@ answer:
 
 **Result:** all five suites pass on the account, each failure pinned by its message: 1,250 tests, 40 pinned (Grammar
 10 of 137, Essential 27 of 346, Relation 1 of 469, Standard 0 of 205, Unclassified 2 of 93), the census divergence 0
-in every suite. Burned down in six runs from 144 failing (the first run: Essential 70, Relation 35, Standard 34,
+in every suite. Burned down in seven runs from 144 failing (the first run: Essential 70, Relation 35, Standard 34,
 Unclassified 5; Grammar's 10 pinned from the start).
 
 What the 40 are: 34 are the platform's own, pinned on the DuckDB lane by the same cause (instance identity, fold name
@@ -291,7 +291,7 @@ and the dialect's answer:
 | `ASOF JOIN` takes its inequality as a `MATCH_CONDITION`, apart from `ON` | the ON's conjuncts split |
 | a `+HHMM` offset is "not recognized" (`+HH:MM` is) | text to an instant rewrites the offset |
 | `getObject(i, LocalDateTime.class)` throws a plain `SQLException` | the executor keeps the `Timestamp` it already read (the BC sign loss is pinned) |
-| a VARIANT column is a JSON carrier; DuckDB's JSON travels as VARCHAR, which the plan labels | a JSON root column under a VARCHAR label is `TO_JSON(..)`; an exploded NULL list's column takes its label's type |
+| a VARIANT column is a JSON carrier; DuckDB's JSON travels as VARCHAR, which the plan labels; `ARRAY_MIN(NULL)` and `GET(NULL, 0)` are VARIANT columns | a JSON root column under a VARCHAR label is `TO_JSON(..)`; an exploded NULL list's column takes its label's type, and a min, max or element of the NULL list is its label's NULL (the root's labels as planned, before the dialect's passes) |
 | the session: `TIMEZONE = 'UTC'`, `WEEK_START = 1`, `TIMESTAMP_TYPE_MAPPING = 'TIMESTAMP_NTZ'`, `QUOTED_IDENTIFIERS_IGNORE_CASE = FALSE`, `JSON_INDENT = 0`, `STRICT_JSON_OUTPUT = TRUE` | set at session start (`sessionSetup`) |
 | `QUALIFY`, `EXCLUDE`, `MAX_BY`/`MIN_BY`, `BOOLAND_AGG`, `REDUCE`/`TRANSFORM`/`FILTER`, `ARRAY_*`, `OBJECT_*`, `CONVERT_TIMEZONE`, `DATEADD`/`DATEDIFF` | used as they are (with DuckDB's boundary-count `date_diff` per unit) |
 

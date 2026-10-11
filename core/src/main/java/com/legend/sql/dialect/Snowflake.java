@@ -547,7 +547,7 @@ public final class Snowflake extends AnsiSqlRenderer {
             }
             // 1-based, negative from the end, out of range (0 included) NULL, as DuckDB's list_extract; GET is 0-based
             // and raises on a negative index (measured), so the negative branch guards it
-            case LIST_GET -> writer.piece(typed(listGet(xs, a.get(1)), element));
+            case LIST_GET -> writer.piece(typed(listGet(xs, a.get(1)), element != null ? element : result));
             // DuckDB's list_position: 1-based, NULL when absent (ARRAY_POSITION is 0-based, NULL when absent)
             case LIST_POSITION -> writer.append("(ARRAY_POSITION(TO_VARIANT(").expr(a.get(1), 0).append("), ")
                     .expr(xs, 0).append(") + 1)");
@@ -2246,9 +2246,11 @@ public final class Snowflake extends AnsiSqlRenderer {
             } else if (s.projections().isEmpty()) {
                 writer.append("*");
             } else {
-                // a list's min or max over the NULL list is NULL: written as its slot's NULL (ARRAY_MIN(NULL) is a
-                // VARIANT column under the label, measured)
-                boolean aligned = s.outputs().size() == s.projections().size();
+                // a list's element, min or max over the NULL list is NULL: written as its slot's NULL (ARRAY_MIN(NULL)
+                // and GET(NULL, 0) are VARIANT columns under the label, measured)
+                List<com.legend.sql.OutputCol> labels = depth == 0 && rootLabels.size() == s.projections().size()
+                        ? rootLabels : s.outputs();
+                boolean aligned = labels.size() == s.projections().size();
                 for (int i = 0; i < s.projections().size(); i++) {
                     SqlSelect.Projection p = s.projections().get(i);
                     if (i > 0) {
@@ -2259,8 +2261,8 @@ public final class Snowflake extends AnsiSqlRenderer {
                         List<SqlWriter.Piece> star = new ArrayList<>();
                         star(st.table() == null ? s.from() : sourceNamed(s.from(), st.table()), star);
                         writer.join(star, ", ", SqlWriter::piece);
-                    } else if (aligned && extremeOfNullList(p.expr()) && typeOf(p.expr()) == null) {
-                        writer.append("CAST(NULL AS " + castTypeName(s.outputs().get(i).type()) + ")");
+                    } else if (aligned && nullOverNullList(p.expr())) {
+                        writer.append("CAST(NULL AS " + castTypeName(labels.get(i).type()) + ")");
                         writer.append(" AS ").append(aliasIdent(markerColumn(p)));
                     } else {
                         projection(writer, p);
@@ -2389,9 +2391,10 @@ public final class Snowflake extends AnsiSqlRenderer {
                 ? new SqlExpr.Cast(read, SqlType.Scalar.VARCHAR) : read;
     }
 
-    private static boolean extremeOfNullList(SqlExpr e) {
-        return e instanceof SqlExpr.Call c && (c.fn() == SqlFn.LIST_MIN || c.fn() == SqlFn.LIST_MAX)
-                && nullList(c.args().get(0))
+    /** A list's element, min or max over the NULL list: NULL. */
+    private static boolean nullOverNullList(SqlExpr e) {
+        return e instanceof SqlExpr.Call c && (c.fn() == SqlFn.LIST_MIN || c.fn() == SqlFn.LIST_MAX
+                || c.fn() == SqlFn.LIST_GET) && nullList(c.args().get(0))
                 || e instanceof SqlExpr.ReduceCollection rc && (rc.reducer() == SqlAgg.Fn.MIN
                         || rc.reducer() == SqlAgg.Fn.MAX) && nullList(rc.collection());
     }
