@@ -47,18 +47,29 @@ Each dialect is a sibling over `AnsiSqlRenderer`, as `Postgres` is: an exhaustiv
 switches (`Databases.dialect`, `.servers`, `.loadsRowsInBulk`, `Sessions.jdbcProduct`, ...). Every spelling is
 measured on the account before it is trusted (execution beats documentation).
 
-4. **Then, after the three clouds (the user, 2026-10-11): finish SQLite, then MySQL/MariaDB.** Both are local, no
-   account and no Docker:
+4. **Then, after the three clouds, the open ones first (the user's order, 2026-10-11): SQLite, MariaDB/MySQL,
+   Trino, MongoDB, Elasticsearch, then SingleStore.** Each runs locally with no account (embedded, or a Docker
+   image: this container has Docker):
    - **SQLite**: today it is no dialect class, only `Lexicon.SQLITE` handed to `AnsiSqlRenderer`, with the gaps
      that lexicon row's comment lists (no aliased `VALUES`, typed date literals, lists, `QUALIFY`, as-of, pivot). Make
      it a sibling dialect like the others, give it the five PCT suites as a lane over the embedded driver
      (`@sqlite_jdbc`, already a dependency), then pin and burn down. Starting point: `docs/SQLITE_BACKEND.md`.
-   - **MySQL / MariaDB**: one dialect family over `AnsiSqlRenderer`. MariaDB embedded through MariaDB4j, as
+   - **MariaDB / MySQL**: one dialect family over `AnsiSqlRenderer`. MariaDB embedded through MariaDB4j, as
      `docs/MARIADB_BACKEND.md` designs it (a feasibility design measured on MariaDB 11.4, not built); MySQL 8 as
      a sibling where the two differ (JSON functions, their regex engines). Lists have to be JSON arrays (neither has
-     an array type), and neither has `FULL OUTER JOIN` or `QUALIFY`. Lanes `//pct:pct_mariadb_<suite>` and
-     `//pct:pct_mysql_<suite>`.
-   - **Further backends: open, the user's call.** The candidates and the case for each are in §9.
+     an array type), and neither has `FULL OUTER JOIN` or `QUALIFY`.
+   - **Trino**: the `trinodb/trino` image with the memory connector; typed arrays, lambdas and maps, so much of
+     `Databricks` carries over. One dialect covers Presto, Starburst and Athena.
+   - **MongoDB** and **Elasticsearch**: stores that are not SQL, translated from the same `SqlQuery` IR (§9).
+   - **SingleStore**: its Dev Image (`ghcr.io/singlestore-labs/singlestoredb-dev`) runs one aggregator and one leaf
+     with no licence key, for development and functional testing only, under SingleStore's Free Tier licence (not
+     open source); it follows the MySQL dialect.
+   - **On the AWS account** (an inventory of the `DB_AWS_*` credentials, secret names only, 2026-10-11): a
+     **Redshift Serverless** workgroup (`default`, us-east-1) with integration and developer user secrets
+     (`redshift.SERVERLESS_REDSHIFT_*`), set up like the Snowflake and BigQuery ones, so Redshift is reachable on top
+     of the `Postgres` dialect; **Athena**'s `primary` workgroup (every account has it; whether these credentials
+     may query it is not checked); and a secret named `mongoDbPassword...` (us-west-2, beside CI secrets, so likely
+     not a test database). Not in the order above yet: the user's call.
 
 ## 3. What is in place (this branch)
 
@@ -241,15 +252,15 @@ answer:
 | a correlated scalar subquery in a join condition is refused | the as-of join is a wall (a window-based form is possible later) |
 | `QUALIFY`, `SELECT * EXCEPT`, native `PIVOT` (columns named by the `IN` aliases), `listagg ... WITHIN GROUP`, `median`, `mode`, `percentile_cont/disc ... WITHIN GROUP`, `max_by`, `max(boolean)`, `explode`, correlated `(SELECT agg FROM explode(t.xs))` | used as they are |
 
-## 9. Further backends: candidates (open, the user's call)
+## 9. Further backends: candidates
 
-Nothing here is decided. legend-lite replaces legend-engine, so the first list is the relational databases the
-engine supports that are not on the plan yet (`DynaFn` names several: MemSQL, Spanner, Trino), ordered by how much an
-existing dialect carries over and by what users run:
+The order for the open ones is decided (§2, item 4); the rest of this list is not. legend-lite replaces
+legend-engine, so the first list is the relational databases the engine supports (`DynaFn` names several: MemSQL,
+Spanner, Trino), ordered by how much an existing dialect carries over and by what users run:
 
 | Backend | Carried over from | How it is tested | Notes |
 |---|---|---|---|
-| Redshift | `Postgres` (Redshift forked Postgres 8) | an AWS account (Redshift Serverless has a running cost) | the cheapest to add: mostly walls where Redshift lacks newer Postgres features |
+| Redshift | `Postgres` (Redshift forked Postgres 8) | the account's Redshift Serverless workgroup (§2, item 4; it has a running cost) | the cheapest to add: mostly walls where Redshift lacks newer Postgres features |
 | Trino (Presto, Athena, Starburst) | `Databricks` (typed arrays, lambdas, maps) | the `trinodb/trino` image with the memory connector | one dialect covers Athena too |
 | SQL Server | none | the `mssql/server` image (free Developer edition) | large enterprise use; the hardest of these: no boolean type, `TOP` and `OFFSET ... FETCH`, lists through JSON (`OPENJSON`) |
 | Oracle | none | the `gvenzl/oracle-free` image (23ai) | `''` is NULL, a deep divergence that will pin many tests; BOOLEAN only since 23ai |
