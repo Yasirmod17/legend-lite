@@ -139,7 +139,16 @@ with the compiler's plan/execution split**, in this order:
    landed 2026-10-11 (6e57d350c; run 38118975945; GATES "Create an Association…, Create a Data Space…")** -- beyond
    the announced list, in `core/`: the engine check's pins, `core/src/test/resources/upstream-api/model-writer/` (its
    recorder `docs/datacube-model-homework-2026-10-11/record-upstream.sh`); next in step 2: Python's create_class,
-   create_association, create_data_space. **Step 2's second landing announced 2026-10-11 (rule 5; branch `datacube-m3`; the design's §15.6a,
+   create_association, create_data_space. **DataCube headless in Python landed 2026-10-11, ahead of those (the user's
+   ruling; `docs/DATACUBE_HEADLESS_PYTHON_DESIGN_2026_10_11.md`; runs 38177320130 and 38178422811; GATES "DataCube
+   headless in Python")** -- no `core/` file. Beyond this line's directories: comment-only edits in
+   `wasm/src/main/java/planner/Boundary.java`, `wasm/README.md`, `tools/teavm/TeaVmCompile.java`,
+   `query/src/backend/cube-planner.ts`, `engine-client/src/model-data.ts` (the rename, `WasmPlanner` to `LitePlanner`);
+   `engine-client/src/arrow-ipc.ts` (new); `pure-protocol/test/lite.ts` and `twins.test.ts` (awaited); `gates/BUILD.bazel`
+   (the warehouse lane's two tests); `tools/python/requirements.in`, its lock and `MODULE.bazel.lock` (mini-racer). The
+   native entry points (`lite_plan_text_held`, `lite_relation_type_text_held`, `lite_test_data_sql`) are `native/`'s,
+   over `Boundary`'s existing functions, reviewed by the Plan Gen / Exec Split line; the build by the Compiler Rewrite
+   line. **Step 2's second landing announced 2026-10-11 (rule 5; branch `datacube-m3`; the design's §15.6a,
    agreed with the user): a cross-area edit in `core/`** -- the route renamed and two more beside it,
    `/api/lite/v1/model/createClass` (was `/api/lite/v1/relational/promoteRelationToModel`), `createAssociation`,
    `createDataSpace`, one atomic writer under them. Core files: `core/src/main/java/com/legend/server/`

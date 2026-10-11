@@ -8706,3 +8706,62 @@ compiled in lite and failed in the engine.
    ("Unsupported type"), the same `validateType`. Lite's message names the rule and the type where the engine reports
    "Can't find the packageable element '<descriptor>'" at the class mapping (its id conversion fails and the raw text is
    looked up): a deliberate difference, so an engine-fixture comparison of this case sees two messages.
+
+## 2026-10-11 — DataCube headless in Python: DataCube's own code in V8, planned by the native library, run on Python's DuckDB, no WebAssembly (the DataCube + Python line)
+
+The design is `docs/DATACUBE_HEADLESS_PYTHON_DESIGN_2026_10_11.md`. The user agreed it and ruled §10: one package, V8,
+before the model plan's Python calls, the rename. It was reviewed by the Plan Gen / Exec Split and Compiler Rewrite
+lines. The evidence is in `docs/datacube-headless-evidence-2026-10-11/`. Branch `datacube-headless`, 25 commits and this one.
+CI: run 38177320130 (warehouse, checks, datacube, ui and parser_equivalence on all platforms) green but for Windows'
+datacube lane, a Windows-only path in the new runner test, fixed and run again in 38178422811 (datacube on all
+platforms), green; the only change after them is main's IN_FLIGHT line, rebased onto. `//gates:local` green before.
+
+1. **What it is.**
+   - Python runs DataCube's non-screen TypeScript in V8 (mini-racer 0.14.1).
+   - DataCube's own planner plans over its worker protocol (`datacube/src/planner-protocol.ts`). The host answers each
+     request kind with the native library's function that delegates to the same `Boundary` function as the tab's
+     export. Three were added for this: `lite_plan_text_held`, `lite_relation_type_text_held`, `lite_test_data_sql`.
+   - Its queries run on Python's DuckDB, through `DuckDbEngine` and Arrow IPC.
+   - WebAssembly is deleted from the V8 context before anything loads.
+   - DataCube's side is `datacube/src/headless/`: the web layer to its standards, the host's worker and connection, and
+     the grid. Python's side is `legend_lite/_headless.py`: V8 on a loop of legend-lite's own, and the one table of
+     request kinds, which is also the start-up check against the library's exports.
+2. **What a person gets.**
+   - `grid.view()`: what a page's grid shows, as DataCube computes it, with its configuration folded in and its columns
+     laid out as the screen lays them out.
+   - `grid.relation`: its rows at their finest level, as Create a Class makes them.
+   - `grid.to_pandas()`: every one of those rows, from the frames' own database.
+   - These are safe inside a notebook's running loop.
+   - `pip install legend-lite[datacube]` gives this; the wheel carries the bundle.
+   - `WasmPlanner` is renamed `LitePlanner`, with Plan Gen.
+3. **The lane, `//datacube:headless_test`, in `//gates:warehouse`.**
+   - **67 of DataCube's test files, 1,122 tests, all passing**, the same count Node runs for them. Each runs through the
+     production paths, built with a `headless` condition (`#test-host`) that swaps only where a test's planner and
+     database come from.
+   - The 14 files that mixed screen, HTTP or Node-reference tests were each split in two (`-dom`, `-http`, `-node`):
+     324 tests, as before.
+   - `headless_roster_test` keeps every test file in the lane, left out by name with a reason, or Node-only by what it
+     imports.
+   - **The judges are held to Node's own:**
+     - `node-assert.ts` against `node:assert/strict`, over 66+ value pairs and every expectation kind;
+     - `node-test.ts` against Node's own node:test, which runs the same suite in a child Node, and its mock timers too;
+     - the web layer against Node's built-ins, and against the DOM standard alone where Node 22 departs from it.
+   - The lane asserts no test was skipped.
+   - The host's own checks: the request kinds both ways, no WebAssembly, a plan through the worker run on DuckDB, the
+     memory cap, a timeout, every `setTimeout` form, and a registered file's folder.
+4. **Reviews and audit.**
+   - Plan Gen: found two worker kinds answered by other functions than the tab's (`plan`, `relationType`); now closed.
+   - Compiler Rewrite: the lane in warehouse, the roster guard, parser_equivalence in CI.
+   - The branch's audit: 2 blockers (the grid's configuration not folded in; two locks in opposite orders) and 9
+     should-fix, every one answered (design §14).
+   - Windows CI found the test-imports generator's command line past 8191 characters with the split's files. It now
+     takes a `params_file`. And the live node:test comparison handed Node its reporter as a drive path, which a module
+     specifier cannot be; it is now a `file:` URL.
+5. **Upstream.** mini-racer's `setTimeout` throws for a delay of 0 or less and never fires with none
+   (https://github.com/bpcreech/PyMiniRacer/issues/97: not by design, not reported before, not fixed in 0.14.1). The
+   host holds each delay to a millisecond until the pin moves past the fix.
+6. **Left for later:**
+   - the design's step 3, the page engine (`page.export`);
+   - step 5, the model plan's Python `create_*`;
+   - the TeaVM unmodifiable-collections fix, the Compiler Rewrite line's, which the user rules on: a 200-class page's
+     tab compile goes from 4.2 s to 73 ms with it.
