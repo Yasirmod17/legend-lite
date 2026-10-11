@@ -139,7 +139,16 @@ with the compiler's plan/execution split**, in this order:
    landed 2026-10-11 (6e57d350c; run 38118975945; GATES "Create an Association…, Create a Data Space…")** -- beyond
    the announced list, in `core/`: the engine check's pins, `core/src/test/resources/upstream-api/model-writer/` (its
    recorder `docs/datacube-model-homework-2026-10-11/record-upstream.sh`); next in step 2: Python's create_class,
-   create_association, create_data_space. **Step 2's second landing announced 2026-10-11 (rule 5; branch `datacube-m3`; the design's §15.6a,
+   create_association, create_data_space. **DataCube headless in Python landed 2026-10-11, ahead of those (the user's
+   ruling; `docs/DATACUBE_HEADLESS_PYTHON_DESIGN_2026_10_11.md`; runs 38177320130 and 38178422811; GATES "DataCube
+   headless in Python")** -- no `core/` file. Beyond this line's directories: comment-only edits in
+   `wasm/src/main/java/planner/Boundary.java`, `wasm/README.md`, `tools/teavm/TeaVmCompile.java`,
+   `query/src/backend/cube-planner.ts`, `engine-client/src/model-data.ts` (the rename, `WasmPlanner` to `LitePlanner`);
+   `engine-client/src/arrow-ipc.ts` (new); `pure-protocol/test/lite.ts` and `twins.test.ts` (awaited); `gates/BUILD.bazel`
+   (the warehouse lane's two tests); `tools/python/requirements.in`, its lock and `MODULE.bazel.lock` (mini-racer). The
+   native entry points (`lite_plan_text_held`, `lite_relation_type_text_held`, `lite_test_data_sql`) are `native/`'s,
+   over `Boundary`'s existing functions, reviewed by the Plan Gen / Exec Split line; the build by the Compiler Rewrite
+   line. **Step 2's second landing announced 2026-10-11 (rule 5; branch `datacube-m3`; the design's §15.6a,
    agreed with the user): a cross-area edit in `core/`** -- the route renamed and two more beside it,
    `/api/lite/v1/model/createClass` (was `/api/lite/v1/relational/promoteRelationToModel`), `createAssociation`,
    `createDataSpace`, one atomic writer under them. Core files: `core/src/main/java/com/legend/server/`
@@ -691,6 +700,40 @@ measurements; it is W3.1's territory (`docs/EXECUTION_PLAN_2026_09_26.md`). That
   `python/legend_lite/page.py` (new), `datacube.py`, `notebook.py`, `python/tests/test_page.py`.
 - **The notebook widget**, `DataCube(df)`: the same two calls over the notebook's widget channel.
 - Later: model handles and `execute` from Python, typed Pythonic queries, the shared warehouse from Python.
+
+## A seventh line, 2026-10-11: Postgres SQL in Pure, the `#SQL{...}#` island (the user's ask, rule 5)
+
+Session "AlloySQL porting and exploration", branch `claude/loving-euler-gjta59`; the study and plan are
+`docs/LEGEND_SQL_STUDY_2026_10_11.md` (on the branch, landing with it). Phase 1's translator: a Postgres `SELECT`
+inside any Pure query becomes an ordinary Relation expression, typed once by the Typer.
+
+**Announced 2026-10-11, before landing: a cross-area edit in `core/`.** It lands as one merge of the branch, after one
+full CI run on it.
+- **New files.**
+  - `protocol/sql/`: `SqlAst`, `SqlLexer`, `SqlParser`, `SqlSyntaxException`, `SqlToPure`, `SqlTranslationException`.
+  - `protocol/spec/SqlIsland.java`, `compiler/spec/SqlIslands.java` (the seam), `error/IslandSyntaxException.java`.
+- **Edits.**
+  - `compiler/NameResolver.java` and `compiler/spec/Typer.java`: the island's arm.
+  - `lowering/Lowerer.java`: four lowering fixes the island's cases found, each with a test that fails without it:
+    - a union's sorted or limited branch becomes a subselect;
+    - `exists` over a sliced relation is isolated first (it was a silent wrong answer);
+    - a join condition reads an enclosing row through the enclosing scopes;
+    - a relation `map` used as a value pushes the enclosing row.
+- **Tests.**
+  - `CodeShapeGuardrailTest`: five scanner and counter fields allowlisted, dated.
+  - `integration/` `ConcatenateFlattenCheckerTest`, `CorrelatedRelationCheckerTest`, `SqlIslandIntegrationTest`,
+    `SqlParityTest`.
+  - `server/` `SqlIslandPostgresTest`, `SqlParityPostgresTest`; `testcases/` `SqlIslandCases`, `SqlParity`.
+  - `protocol/sql/` `SqlParserTest`, `SqlToPureTest`.
+  - `src/test/resources/sql-parity/`: the ledger, the answers snapped from Postgres 16, and the `lite/` cases.
+- **Build.**
+  - `core/BUILD.bazel`: `sql_island_postgres_test`, `sql_parity_test`, `sql_parity_postgres_test`.
+  - `gates/BUILD.bazel`: the core suite gains the three.
+  - `third_party/legend_engine_src.BUILD`: the `sql_parity_tests` filegroup, upstream's parity corpus as test input.
+- **Docs.** `docs/SEMANTICS_REGISTER.md` (S43 to S47), `docs/GATES.md`.
+
+Not touched: the database owner's `lowering/` files (`Render`, `WireRender`, `LiteralSpelling`, `Fold`, `Scalars`,
+`MixedEncoding`), `sql/dialect/`, the parser.
 
 ## Rules between sessions
 
