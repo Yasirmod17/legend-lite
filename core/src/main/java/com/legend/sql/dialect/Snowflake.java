@@ -69,6 +69,30 @@ public final class Snowflake extends AnsiSqlRenderer {
      * ({@code JSON_INDENT = 0}; {@code STRICT_JSON_OUTPUT} prints a SQL NULL element as {@code null}, never
      * {@code undefined}, which the platform's JSON reader cannot read). All measured.
      */
+    /** The labels of the statement being rendered, as planned (its root's outputs before this dialect's passes):
+     *  the contract the executor reads, and the census checks, the root's columns against. */
+    private List<com.legend.sql.OutputCol> rootLabels = List.of();
+
+    @Override
+    public String render(SqlQuery query) {
+        rootLabels = query.outputs();
+        try {
+            return super.render(query);
+        } finally {
+            rootLabels = List.of();
+        }
+    }
+
+    @Override
+    public RenderedStatement renderStatement(SqlQuery query) {
+        rootLabels = query.outputs();
+        try {
+            return super.renderStatement(query);
+        } finally {
+            rootLabels = List.of();
+        }
+    }
+
     @Override
     public List<String> sessionSetup() {
         return List.of("ALTER SESSION SET TIMEZONE = 'UTC', WEEK_START = 1, WEEK_OF_YEAR_POLICY = 1,"
@@ -2195,10 +2219,13 @@ public final class Snowflake extends AnsiSqlRenderer {
         if (isMarker(s)) {
             String alias = freshName("u");
             List<SqlSelect.Projection> ps = new ArrayList<>();
-            boolean aligned = s.outputs().size() == s.projections().size();
+            // the root's slots are the plan's own labels, before this dialect's passes re-typed its expressions
+            List<com.legend.sql.OutputCol> labels = depth == 0 && rootLabels.size() == s.projections().size()
+                    ? rootLabels : s.outputs();
+            boolean aligned = labels.size() == s.projections().size();
             for (int i = 0; i < s.projections().size(); i++) {
                 SqlSelect.Projection p = s.projections().get(i);
-                SqlType slot = aligned ? s.outputs().get(i).type() : p.out() != null ? p.out().type() : null;
+                SqlType slot = aligned ? labels.get(i).type() : p.out() != null ? p.out().type() : null;
                 ps.add(new SqlSelect.Projection(explodedRead(alias, p, slot), markerColumn(p), p.out()));
             }
             return select(writer, new SqlSelect(ps, false, new SqlSource.Subselect(s, alias, null), null, List.of(),

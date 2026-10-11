@@ -64,7 +64,7 @@ measured on the account before it is trusted (execution beats documentation).
      `arrayFilter`, `arrayFold`), maps and tuples, so it builds on the Trino and Databricks work. Not in
      legend-engine, so no reference dialect to compare against; its own quirks first (a column is non-NULL unless
      `Nullable(T)`, `join_use_nulls` for SQL's outer-join NULLs, case-sensitive function names).
-   - **MongoDB** and **Elasticsearch**: stores that are not SQL, translated from the same `SqlQuery` IR (§9).
+   - **MongoDB** and **Elasticsearch**: stores that are not SQL, translated from the same `SqlQuery` IR (§10).
    - **SingleStore**: its Dev Image (`ghcr.io/singlestore-labs/singlestoredb-dev`) runs one aggregator and one leaf
      with no licence key, for development and functional testing only, under SingleStore's Free Tier licence (not
      open source); it follows the MySQL dialect.
@@ -93,8 +93,9 @@ measured on the account before it is trusted (execution beats documentation).
   the first run on each account fills them.
 - **Databricks: done** (2026-10-11, §8): the dialect, all five suites green on the account with 44 pinned rows of
   1,250 tests, the census at 0 divergence (no ceiling raised).
-- **Not yet**: the Snowflake and BigQuery dialects (drafts measured against their accounts, not yet in the tree), the
-  CI workflow.
+- **Snowflake: done** (2026-10-11, §9): the dialect, all five suites green on the account with 40 pinned rows of
+  1,250 tests, the census at 0 divergence (no ceiling raised).
+- **Not yet**: the BigQuery dialect (a draft measured against its account, not yet in the tree), the CI workflow.
 
 ## 4. The properties file
 
@@ -256,7 +257,45 @@ answer:
 | a correlated scalar subquery in a join condition is refused | the as-of join is a wall (a window-based form is possible later) |
 | `QUALIFY`, `SELECT * EXCEPT`, native `PIVOT` (columns named by the `IN` aliases), `listagg ... WITHIN GROUP`, `median`, `mode`, `percentile_cont/disc ... WITHIN GROUP`, `max_by`, `max(boolean)`, `explode`, correlated `(SELECT agg FROM explode(t.xs))` | used as they are |
 
-## 9. Further backends: candidates
+## 9. Snowflake, measured (2026-10-11)
+
+**Result:** all five suites pass on the account, each failure pinned by its message: 1,250 tests, 40 pinned (Grammar
+10 of 137, Essential 27 of 346, Relation 1 of 469, Standard 0 of 205, Unclassified 2 of 93), the census divergence 0
+in every suite. Burned down in six runs from 144 failing (the first run: Essential 70, Relation 35, Standard 34,
+Unclassified 5; Grammar's 10 pinned from the start).
+
+What the 40 are: 34 are the platform's own, pinned on the DuckDB lane by the same cause (instance identity, fold name
+resolution, error positions and messages, the 0-based `indexOf`, `testBigFloatAbs`, the class `toString`, the
+variant-array `joinStrings`, the ExtendedInteger type, the harness's lost `$address`, a date-time out of range); the
+other 6 are Snowflake's own, each measured: `JAROWINKLER_SIMILARITY` answers an integer percentage (2), a lambda cannot
+read an enclosing lambda's parameter, which the comparator dedup needs (2), the driver's Timestamp drops a BC year's
+sign (1), and `Class.all()` over the platform's in-process metamodel (1).
+
+The account: warehouse `INTEGRATION_WH1`, database `INTEGRATION_DB1`, key-pair login; the JDBC driver
+(snowflake-jdbc 4.4.0) reports the product `Snowflake` (`Sessions.jdbcProduct`), version 10.36. Every spelling in
+`core/.../sql/dialect/Snowflake.java` was measured there first with the scratch JDBC probe. What differs from DuckDB,
+and the dialect's answer:
+
+| Measured | Consequence |
+|---|---|
+| an unquoted identifier folds to UPPER case | every identifier is quoted |
+| an integer is a `NUMBER(p,0)` at the value's own precision, which the driver hands back as a `Long`; `17.0` and `1.0` are `NUMBER(2,0)` (a trailing zero's scale is dropped, so their text is `17`) | the census reads `NUMBER(p,0)` as delivering an integer label; a decimal cell read as a `Long` becomes a `BigDecimal` (`normalize`); a Float or Decimal literal with a trailing zero spells its type (`CAST(17.0 AS NUMBER(3,1))`) |
+| a DOUBLE's text drops an integral value's `.0` (`-1`, not DuckDB's `-1.0`) | a Float cast to text appends it (`REGEXP_REPLACE(..., '^(-?[0-9]+)$', '\\1.0')`) |
+| lists are semi-structured `ARRAY`s of `VARIANT`; `ARRAY_AGG` drops a NULL, `OBJECT_INSERT` drops a NULL value's key; an `OBJECT`'s keys compare in name order | elements are cast where read; NULLs kept as JSON null; a list of structs sorts as an `ARRAY` of its fields in declared order (minBy/maxBy, sort with a key) |
+| a lambda reads no enclosing lambda's parameter; a correlated subquery over `FLATTEN` (scalar or lateral) is refused (`Unsupported subquery type`) | list statistics are `REDUCE`s: variance and standard deviation as DuckDB's own Welford update, mode as runs over the sorted elements (the earliest-seen on a tie, as DuckDB), median and `quantile_cont`; an explosion is a bare `LATERAL FLATTEN` over the positions, `SELECT *` over it spelled out; the comparator dedup is pinned |
+| regular expressions are POSIX: no `(?:`, no lazy quantifier, no inline flags | flags become parameters; `(?:` a plain group where no numbered group follows; `regexpIndexOf` is `REGEXP_INSTR` of the original pattern (its lowering's lazy prefix cannot run here) |
+| no printf | `format`'s `%s`, `%d` and `%.Nf` are unrolled (`%f` keeps Java's `-0.00`) |
+| `LISTAGG`, `MEDIAN` and the percentiles take no ordered window; `WITHIN GROUP` is refused beside an `OVER`'s `ORDER BY`; an `ARRAY_AGG` over an ordered whole-partition frame keeps no order | a cumulative ordered string aggregate is `ARRAY_TO_STRING(ARRAY_AGG(..) OVER (...))`; a whole-partition one the partition's `LISTAGG ... WITHIN GROUP` |
+| `FIRST_VALUE`/`LAST_VALUE`/`NTH_VALUE` refuse a cumulative frame, and default to the whole partition (not ANSI's) | first: the partition's first; last: the current row (ROWS) or the last of its peers (RANGE); nth: the partition's nth once the frame holds n rows |
+| a frame needs an `ORDER BY`; `RANGE` `CURRENT ROW` to `CURRENT ROW` over a date or timestamp is refused | a whole-partition frame without one is no frame; the peers are the zero-interval frame |
+| `ASOF JOIN` takes its inequality as a `MATCH_CONDITION`, apart from `ON` | the ON's conjuncts split |
+| a `+HHMM` offset is "not recognized" (`+HH:MM` is) | text to an instant rewrites the offset |
+| `getObject(i, LocalDateTime.class)` throws a plain `SQLException` | the executor keeps the `Timestamp` it already read (the BC sign loss is pinned) |
+| a VARIANT column is a JSON carrier; DuckDB's JSON travels as VARCHAR, which the plan labels | a JSON root column under a VARCHAR label is `TO_JSON(..)`; an exploded NULL list's column takes its label's type |
+| the session: `TIMEZONE = 'UTC'`, `WEEK_START = 1`, `TIMESTAMP_TYPE_MAPPING = 'TIMESTAMP_NTZ'`, `QUOTED_IDENTIFIERS_IGNORE_CASE = FALSE`, `JSON_INDENT = 0`, `STRICT_JSON_OUTPUT = TRUE` | set at session start (`sessionSetup`) |
+| `QUALIFY`, `EXCLUDE`, `MAX_BY`/`MIN_BY`, `BOOLAND_AGG`, `REDUCE`/`TRANSFORM`/`FILTER`, `ARRAY_*`, `OBJECT_*`, `CONVERT_TIMEZONE`, `DATEADD`/`DATEDIFF` | used as they are (with DuckDB's boundary-count `date_diff` per unit) |
+
+## 10. Further backends: candidates
 
 The order for the open ones is decided (§2, item 4); the rest of this list is not. legend-lite replaces
 legend-engine, so the first list is the relational databases the engine supports (`DynaFn` names several: MemSQL,
