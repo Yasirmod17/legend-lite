@@ -10,12 +10,14 @@ package com.legend.protocol.sql;
  */
 public final class SqlSyntaxException extends RuntimeException {
 
+    private final String reason;
     private final int line;
     private final int column;
     private final boolean unsupported;
 
     public SqlSyntaxException(String message, int line, int column, boolean unsupported) {
         super(message);
+        this.reason = message;
         this.line = line;
         this.column = column;
         this.unsupported = unsupported;
@@ -29,6 +31,11 @@ public final class SqlSyntaxException extends RuntimeException {
     /** Postgres SQL this reader does not accept yet: the input may be fine, the feature is not built. */
     public static SqlSyntaxException unsupported(String message, SqlAst.Pos pos) {
         return new SqlSyntaxException(message, pos.line(), pos.column(), true);
+    }
+
+    /** The message, never null (unlike {@link #getMessage()}'s declared type). */
+    public String reason() {
+        return reason;
     }
 
     public int line() {

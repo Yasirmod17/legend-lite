@@ -84,7 +84,7 @@ public final class SqlToPure {
             statement = SqlParser.parse(sql);
         } catch (SqlSyntaxException e) {
             throw new SqlTranslationException(e.unsupported() ? SqlTranslationException.Kind.UNSUPPORTED
-                    : SqlTranslationException.Kind.SYNTAX, e.getMessage(), e.line(), e.column());
+                    : SqlTranslationException.Kind.SYNTAX, e.reason(), e.line(), e.column());
         }
         return switch (statement) {
             case SqlAst.Select s -> new SqlToPure(sources).select(s);
