@@ -2,7 +2,7 @@
 
 **Status: agreed by the user, 2026-10-11. Reviewed by the Plan Gen / Exec Split line (yes, with one gap, closed in
 §3: the plan of a query over a held model natively) and by the Compiler Rewrite line (no blocker; the lane in
-`//gates:warehouse`, and the build's shape, §6).**
+`//gates:warehouse`, and the build's shape, §6). Steps 0, 1, 2 and 4 built on branch datacube-headless (§11, §12).**
 The user, on the measurement: "this is so awesome lets do it"; on §10: "yes one one package, v8 for sure, yes do this
 before create*; yes rename would helpful". Builds on `docs/DATACUBE_PYTHON_SHOW_DESIGN_2026_10_08.md` (the engine in Python, the notebook cube),
 `docs/DATACUBE_PYTHON_PAGES_DESIGN_2026_10_09.md` (pages built in code) and `docs/DATACUBE_MODEL_DESIGN_2026_10_10.md`
@@ -285,3 +285,31 @@ commits; what they settled beyond §3 and §6:
   - **Made web-standard in four tests:** two describes no longer awaited, and two load-time fixtures moved into `before`
     hooks, because a script bundle cannot await at load. Three tests that read Node's `Buffer` now use `atob` and
     `TextDecoder`.
+
+## 12. Steps 2 and 4, as built (2026-10-11, on branch datacube-headless)
+
+- **Step 2, the headless grid** (15099302d).
+  - `datacube/src/headless/grid.ts` holds the bundle's `gridView`, `gridRelation` and `gridSql`. A page's cube is opened
+    over its source as the compiler types it now (`openCube`, as a page opens a saved cube). It is run by
+    `CubeController.run` on the tab's own pair: `LitePlanner` over the host's worker, `DuckDbEngine` over the host's
+    connection.
+  - Nothing is held between calls: the cube document Python's page keeps is the grid's state.
+  - Python: `Grid.view()` gives a `GridView` (columns, rows, tree, what the cap cut, the query and its SQL,
+    `to_pandas()`); `Grid.relation` gives Pure; `Grid.to_pandas()` gives every row of the relation from the frames'
+    own database, never through V8.
+  - The session's `Headless` is made on first use over its `Frames`' connection, where the frames are.
+  - **What "the finest level" is:** the grid's innermost grouping, as Create a Class makes a class of it
+    (`classLambda`). A grouped grid's relation groups by its innermost group, so a class of it has one row per group;
+    a flat grid's relation is its rows. §4's "before any grouping" reading was wrong, and the tests say so.
+  - **A view is what the grid shows:** a grouped grid's first column is `__tree`, its groups' labels, as on screen.
+  - **Values cross exactly:** an integer past 2^53 and a non-finite float are tagged, and each value is typed by its
+    column in Python (a Decimal a `Decimal`, a Float a `float`).
+  - Safe inside a running event loop (a notebook cell's): `//python:headless_test`.
+- **Step 4, packaging** (ede6ce1f9), **ahead of step 3:** it needs nothing of the page engine, and without it the
+  feature cannot be used outside this repository.
+  - The wheel carries the bundle (`legend_lite/_datacube/`) and `_headless.py`.
+  - `pip install legend-lite[datacube]` adds mini-racer.
+  - `//python:wheel_test` views a grid from an offline install of the wheel alone.
+- **Left for later:** step 3, the page engine (the page's orchestration out of the screen, then `page.export`); step 5,
+  the model plan's Python `create_*` (§15.5), which rides on step 2. A grid's view from Python is read-only for now: a
+  grid is changed through the page builder (`grid.filter`, `grid.group`, ...), then viewed.
