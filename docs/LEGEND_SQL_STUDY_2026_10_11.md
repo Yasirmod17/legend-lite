@@ -879,12 +879,85 @@ All of this first ran locally on `javac` and JUnit with Maven Central's jars, th
 - Duplicate output names are refused: a Pure relation needs distinct column names.
 - `NULL` in an `IN` list and comparison with a `NULL` constant are refused.
 
+### 9.1 Steps 2 to 5: joins, subqueries, windows, functions (built 2026-10-11, on the branch)
+
+Each step lands with its own Postgres-judged cases in `core/src/test/resources/sql-parity/lite/`, beside upstream's
+corpus. Their answers are snapped from Postgres 16 and held by the same ledger and lanes: `joins.yaml` (32 cases),
+`subqueries.yaml` (53), `windows.yaml` (44) and `functions.yaml` (49). Every case either answers what Postgres
+answers, is refused by name, or is an invalid query both reject.
+
+**What the translator now reads:**
+- **Several relations.**
+  - Joins: INNER, LEFT, RIGHT, FULL and CROSS, with ON, USING and NATURAL; FULL coalesces the merged column.
+  - FROM subqueries with column aliases, and non-recursive WITH.
+  - `UNION [ALL]`, `INTERSECT`, `EXCEPT`.
+  - The right side of a join renames its colliding columns to `<qualifier>_<name>`. Names resolve by Postgres's
+    scope rules (ambiguous columns, a missing FROM-clause entry).
+- **Subqueries in expressions,** correlated to any enclosing level. A subquery is one level down: its rows are
+  `r1`, and an enclosing column is read from that level's row.
+  - `EXISTS`: `exists(rel, s|true)`.
+  - `[NOT] IN` and `op ANY|SOME|ALL`: two `exists` calls over the strict comparison, so Postgres's three-valued
+    answer holds. ANY is FALSE over no rows, ALL is TRUE over no rows, and NOT IN with a NULL row is never TRUE.
+  - A scalar subquery: `rel->map(s|$s.c)->toOne()`, nullable. It stays a SQL scalar subquery, so more than one row
+    is the database's error, as it is Postgres's.
+- **Window functions,** computed after WHERE (and after grouping and HAVING), before the select list, each as
+  `extend(over(...), ~col:{p, w, r | ...})`.
+  - Ranking: `row_number`, `rank`, `dense_rank`, `percent_rank`, `cume_dist`, `ntile`.
+  - Value: `lag`/`lead` with an offset, `first_value`, `last_value`, `nth_value`.
+  - The aggregates over a frame.
+  - Frames: ROWS frames; RANGE frames with numeric offsets. Postgres's default frame (RANGE to the current row's
+    last peer) is written as none, which is every database's default too.
+  - Named windows.
+- **The function table,** a catalog keyed by Postgres's names (`SqlToPure.FUNCTIONS`):
+  - the math functions, `mod`, `round` (half away from zero, spelled with floor and ceiling);
+  - `nullif`, `concat`, `greatest`/`least` (NULLs ignored), `num_nulls`;
+  - the text functions with Pure equivalents, `md5`;
+  - `extract`/`date_part` for the whole-number fields;
+  - the `stddev` and `variance` families, grouped and over windows.
+- **Casts** where one Pure function gives Postgres's answer. A string constant is read by the type's input rules.
+
+**Refused by name, each because Pure's answer would differ:**
+- **Rounding:** `round(x, n)` for n other than 0 (Pure's round is half to even, by its spec), a double's round and
+  its cast to an integer (half to even in Postgres).
+- **Errors Postgres raises:** casts to the 4-byte integer from numeric or text (Postgres's range error).
+- **Fixed precision:** text to numeric (Pure's `parseDecimal` lowers to a fixed `DECIMAL(5, 2)`).
+- **Pure's semantics differ:** `split_part` (0-based in Pure, and not lowered for Postgres). `strpos` and
+  `position` (Pure's `indexOf` is 0-based by its spec, but legend-lite lowers it to raw `strpos`; PCT already pins
+  this).
+- **No Pure spelling yet:** `extract(second | epoch)`, `INTERSECT ALL`, `EXCEPT ALL`, an aggregate of only an
+  enclosing query's columns, GROUPS frames, `EXCLUDE`, `lag`/`lead` defaults.
+
+**Core lowering bugs the cases found,** each fixed with a regression test that fails without its fix
+(`ConcatenateFlattenCheckerTest`, `CorrelatedRelationCheckerTest`):
+- A concatenate whose branch sorts or limits rendered `... LIMIT 2 UNION ALL ...`, which no database accepts. It is
+  now a subselect.
+- `exists` over a limited relation merged its predicate below the LIMIT: a silent wrong answer. It is now isolated
+  first.
+- A join condition read an enclosing row's `$p.id` as the right side's own `id`. Enclosing rows now resolve
+  through the enclosing scopes.
+- A correlated `map->toOne` could not see the enclosing row. It now pushes it, as the `exists` and `size` arms do.
+
+**The ledger now,** identical in both lanes:
+
+  | | upstream's 1,703 cases | legend-lite's own 177 | upstream legend-engine on its cases (Relation path) |
+  |---|---|---|---|
+  | PASS: Postgres's rows | 951 | 144 | 1,026 |
+  | FAIL: a wrong answer | **0** | **0** | 36 |
+  | BUG: answers what Postgres rejects | **0** | **0** | 61 |
+  | ERROR: errs where Postgres answers | **0** | **0** | 518 |
+  | REFUSED: not supported yet, by name | 626 | 18 | — |
+  | BOTH_ERROR: Postgres rejects it, and so does legend-lite | 61 | 15 | — |
+  | SKIP | 65 | 0 | 62 |
+
+  Of the 951, upstream passes 801, errs on 133 and answers 17 wrongly. Of the 224 that upstream passes and
+  legend-lite refuses, most need arrays, JSON operators, regular expressions (Postgres's dialect, not DuckDB's),
+  intervals, LATERAL, `generate_series` and other functions in FROM, and queries without FROM.
+
 **Next steps, by size:**
-1. Joins and subqueries in FROM.
-2. `func(...)`, `csv(...)` and CTE sources.
-3. Casts, and the rest of upstream's function table.
-4. `FILTER`, window functions.
-5. Set operations, which need `intersect`/`except` natives.
+1. LATERAL (Pure has `lateral`), queries without FROM, `func(...)` sources (`generate_series`).
+2. Intervals and date arithmetic.
+3. Core: lower `indexOf` 0-based (then `strpos`), a half-away-from-zero `round(x, n)`.
+4. Regular expressions, judged per pattern feature.
 
 Then the HTTP routes (`/api/sql/v1/...`), then the wire.
 
