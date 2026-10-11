@@ -318,16 +318,138 @@ public class MariaDb extends AnsiSqlRenderer {
             }
             return select(writer, over, depth);
         }
+        Map<SqlExpr, SqlExpr> counts = new LinkedHashMap<>();
+        SqlSelect counted = modesCounted(s, counts);
+        if (counted != s) {
+            Map<SqlSelect, Boolean> top = rootSelects.peek();
+            if (top != null && top.containsKey(s)) {
+                top.put(counted, top.get(s));
+            }
+            s = counted;
+        }
         Map<String, Map<String, SqlExpr>> scope = new LinkedHashMap<>();
         lateralsOf(s.from(), scope);
         SqlSelect spelled = delivered(scope.isEmpty() ? s : starsSpelled(s));
         laterals.push(scope);
+        modeCounts.push(counts);
         try {
             return super.select(writer, spelled.offset() != null && spelled.limit() == null
                     ? spelled.withLimit(Long.MAX_VALUE) : spelled, depth);
         } finally {
+            modeCounts.pop();
             laterals.pop();
         }
+    }
+
+    /** Per select being written, each counted MODE in it and the column counting its value's rows
+     *  ({@link #modesCounted}). */
+    private final java.util.Deque<Map<SqlExpr, SqlExpr>> modeCounts = new java.util.ArrayDeque<>();
+
+    /** Whether a GROUPED mode is counted too ({@link #modesCounted}); a windowed one always is. MariaDB reads a group's
+     *  values through {@code JSON_TABLE} over their array; MySQL takes no aggregate as a table function's argument
+     *  ("Incorrect arguments to JSON_TABLE", measured). */
+    protected boolean groupedModesCounted() {
+        return false;
+    }
+
+    /**
+     * {@code s}, its FROM given a count per MODE (2026-10-11, as BigQuery's): a mode is no window function here, and
+     * MySQL's grouped one reads its group through no table function. A mode is the most frequent non-NULL value; each
+     * one's value is counted over its group's rows (a grouped mode: the select's GROUP BY keys) or its partition's (a
+     * window mode), {@code COUNT(v) OVER (PARTITION BY keys, v)}, in a select over the FROM under the FROM's own alias, so
+     * every reference of {@code s} still reads it. The mode is then the value of the most counted row, the least on a
+     * tie, written where it is ({@link #modeArm}). An ordered or framed window's mode is not counted (its window
+     * call refuses it).
+     */
+    private SqlSelect modesCounted(SqlSelect s, Map<SqlExpr, SqlExpr> counts) {
+        Map<SqlExpr, List<SqlExpr>> modes = new LinkedHashMap<>();
+        List<SqlExpr> roots = new ArrayList<>();
+        s.projections().forEach(p -> roots.add(p.expr()));
+        if (s.having() != null) {
+            roots.add(s.having());
+        }
+        if (s.qualify() != null) {
+            roots.add(s.qualify());
+        }
+        for (SqlExpr e : roots) {
+            collectModes(e, s.groupBy(), modes);
+        }
+        if (modes.isEmpty()) {
+            return s;
+        }
+        SqlSource from = s.from();
+        String alias = from.alias();
+        if (from instanceof SqlSource.Join || alias == null || from.outputs().isEmpty()) {
+            throw new DialectCapability("a MODE over a " + from.getClass().getSimpleName() + " reached " + product()
+                    + ": its counts are a select over one aliased source");
+        }
+        List<SqlSelect.Projection> ps = new ArrayList<>();
+        for (com.legend.sql.OutputCol oc : from.outputs()) {
+            ps.add(new SqlSelect.Projection(SqlExpr.Column.of(alias, oc), oc.name(), oc));
+        }
+        int k = 0;
+        for (var m : modes.entrySet()) {
+            String name = "__mc" + k++;
+            List<SqlExpr> partition = new ArrayList<>(m.getValue());
+            partition.add(modeValue(m.getKey()));
+            ps.add(new SqlSelect.Projection(new SqlExpr.WindowCall(new SqlAgg.Reducer(SqlAgg.Fn.COUNT,
+                    List.of(modeValue(m.getKey())), false, List.of()), partition, List.of(), null), name, null));
+            counts.put(m.getKey(), SqlExpr.Column.derived(alias, name));
+        }
+        SqlSelect countedRows = new SqlSelect(ps, false, from, null, List.of(), null, null, List.of(), null, null,
+                List.of());
+        return s.withFrom(new SqlSource.Subselect(countedRows, alias, null));
+    }
+
+    /** Each MODE under {@code e} to count: a grouped reducer with the select's keys (where {@link #groupedModesCounted}),
+     *  an unordered, unframed window call with its partition. */
+    private void collectModes(SqlExpr e, List<SqlExpr> groupBy, Map<SqlExpr, List<SqlExpr>> out) {
+        if (e instanceof SqlAgg.Reducer r && r.fn() == SqlAgg.Fn.MODE) {
+            if (groupedModesCounted()) {
+                out.put(r, groupBy);
+            }
+            return;
+        }
+        if (e instanceof SqlExpr.WindowCall w && w.fn() instanceof SqlAgg.Reducer r && r.fn() == SqlAgg.Fn.MODE) {
+            if (w.orderBy().isEmpty() && w.frame() == null) {
+                out.put(w, w.partitionBy());
+            }
+            return;
+        }
+        for (SqlExpr c : e.children()) {
+            collectModes(c, groupBy, out);
+        }
+    }
+
+    /** The value a mode counts. */
+    private SqlExpr modeValue(SqlExpr mode) {
+        SqlAgg.Reducer r = mode instanceof SqlExpr.WindowCall w ? (SqlAgg.Reducer) w.fn() : (SqlAgg.Reducer) mode;
+        if (r.args().size() != 1 || r.distinct()) {
+            throw new DialectCapability("a mode of " + r.args().size() + " arguments reached " + product());
+        }
+        return r.args().get(0);
+    }
+
+    /** A counted mode where it is written: the value of its most counted row, the least value on a tie (a NULL's
+     *  count is 0, so it is last), NULL when every value is -- over a window, {@code FIRST_VALUE(v) OVER (PARTITION BY ..
+     *  ORDER BY count DESC, v)} over the whole partition; grouped, the first of the group's values in that order. */
+    private SqlWriter modeArm(SqlWriter writer, SqlExpr mode) {
+        SqlExpr count = modeCounts.isEmpty() ? null : modeCounts.peek().get(mode);
+        if (count == null) {
+            throw new IllegalStateException("a MODE reached " + product() + "'s writer uncounted: modesCounted did not"
+                    + " run");
+        }
+        SqlExpr v = modeValue(mode);
+        if (mode instanceof SqlExpr.WindowCall w) {
+            writer.append("FIRST_VALUE(").expr(v, 0).append(") OVER (");
+            if (!w.partitionBy().isEmpty()) {
+                writer.append("PARTITION BY ").list(w.partitionBy()).append(" ");
+            }
+            return writer.append("ORDER BY ").expr(count, 0).append(" DESC, ").expr(v, 0)
+                    .append(" ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)");
+        }
+        SqlWriter.Piece first = arrayAgg(false, json(v), o -> o.expr(count, 0).append(" DESC, ").expr(v, 0), true);
+        return writer.piece(valueAt(first, w -> w.append("'$[0]'"), typeOf(v)));
     }
 
     /**
@@ -2613,6 +2735,9 @@ public class MariaDb extends AnsiSqlRenderer {
             // the most frequent non-NULL value, the least among ties: the group's values as a JSON array, grouped by a
             // subquery over it (an outer aggregate inside a correlated table function, measured)
             case MODE -> {
+                if (groupedModesCounted()) {
+                    yield modeArm(writer, r);
+                }
                 SqlExpr x = r.args().get(0);
                 String type = columnType(typeOf(x));
                 yield writer.append("(SELECT __m.\"v\" FROM JSON_TABLE(JSON_ARRAYAGG(").piece(json(x))
@@ -2713,6 +2838,9 @@ public class MariaDb extends AnsiSqlRenderer {
                 }
                 writer.append(") WITHIN GROUP (ORDER BY ").expr(x, 0).append(desc ? " DESC)" : ")");
                 return windowOver(writer, w);
+            }
+            case SqlAgg.Reducer r when r.fn() == SqlAgg.Fn.MODE && w.orderBy().isEmpty() && w.frame() == null -> {
+                return modeArm(writer, w);
             }
             case SqlAgg.Reducer r when ORDERED_SETS.contains(r.fn()) ->
                     throw new DialectCapability(r.fn() + " over an ordered or framed window reached " + product());

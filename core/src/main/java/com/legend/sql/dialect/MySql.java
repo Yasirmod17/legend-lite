@@ -168,6 +168,13 @@ public final class MySql extends MariaDb {
                 .append(")), ' ')");
     }
 
+    /** A grouped mode is counted too: a table function's argument may be no aggregate here ("Incorrect arguments to
+     *  JSON_TABLE", measured), so MariaDB's array of the group's values cannot be read. */
+    @Override
+    protected boolean groupedModesCounted() {
+        return true;
+    }
+
     @Override
     protected String groupRef(int n) {
         return "$" + n;
