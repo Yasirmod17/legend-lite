@@ -30,6 +30,22 @@ public class Test_LegendLite_MySQL_GrammarFunctions_PCT extends PCTReportConfigu
     // Pinned by a STABLE part of the message (the runner matches by containment): no per-run id.
     // First measured 2026-10-11 (MySQL 8.4.11, the pinned server).
     private static final MutableList<ExclusionSpecification> expectedFailures = Lists.mutable.with(
+            // INSTANCE IDENTITY (as on DuckDB): the asserts want the interpreter's ORIGINAL instances back, or eq/==
+            // by reference; the harness inlines captured instances BY VALUE, so identity is erased before the wire
+            one("meta::pure::functions::collection::tests::filter::testFilterInstance_Function_1__Boolean_1_", "instanceOf meta::pure::functions::collection::tests::model::CO_Person"),
+            one("meta::pure::functions::collection::tests::first::testFirstComplex_Function_1__Boolean_1_", "instanceOf meta::pure::functions::collection::tests::model::CO_Person"),
+            one("meta::pure::functions::collection::tests::map::testMapRelationshipFromManyToMany_Function_1__Boolean_1_", "instanceOf meta::pure::functions::collection::tests::map::model::M_Location"),
+            one("meta::pure::functions::collection::tests::map::testMapRelationshipFromManyToOne_Function_1__Boolean_1_", "instanceOf meta::pure::functions::collection::tests::map::model::M_Address"),
+            // THE PLATFORM'S OWN (each pinned on the DuckDB lane too, by the same cause): name resolution, lowering
+            // and harness limits, the 0-based indexOf, error positions and messages
+            one("meta::pure::functions::boolean::tests::equality::eq::testEqNonPrimitive_Function_1__Boolean_1_", "\"Assert failed\""),
+            one("meta::pure::functions::boolean::tests::equality::eq::testEqPrimitiveExtension_Function_1__Boolean_1_", "\"unknown type 'meta::pure::functions::boolean::tests::equalitymodel::ExtendedInteger' in @meta::pure::functions::boolean::tests::equalitymodel::ExtendedInteger\""),
+            one("meta::pure::functions::boolean::tests::equality::equal::testEqualNonPrimitive_Function_1__Boolean_1_", "\"Assert failed\""),
+            one("meta::pure::functions::boolean::tests::equality::equal::testEqualPrimitiveExtension_Function_1__Boolean_1_", "\"unknown type 'meta::pure::functions::boolean::tests::equalitymodel::ExtendedInteger' in @meta::pure::functions::boolean::tests::equalitymodel::ExtendedInteger\""),
+            one("meta::pure::functions::collection::tests::map::testMapRelationshipFromOneToOne_Function_1__Boolean_1_", "\"unbound variable '$address'\""),
+            // MYSQL'S OWN LIMIT: a DATE or DATETIME is of the years 1000-9999 (a five-digit year has no value; raised
+            // where an interval is added, a wrong comparison where a literal is one)
+            one("meta::pure::functions::lang::tests::compare::testDateCompare_Function_1__Boolean_1_", "\"Assert failed\"")
     );
 
     public static Test suite() {

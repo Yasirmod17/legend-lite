@@ -55,18 +55,28 @@ final class ChannelBLane {
             // no engine manifest for SQLite: every wire bug is a true one (10 of Relation's 12 a regular expression
             // with a non-literal pattern, 2 a pivot's column order)
             "sqlite", Map.of(
-                    "Essential", new Pins(332, 1, 1),
+                    // 332 -> 333 (2026-10-11): the mixed sort's statement fits the 1 MB cap (FLOAT_CANON's text bound once)
+                    "Essential", new Pins(333, 1, 1),
                     "Grammar", new Pins(133, 0, 0),
                     "Relation", new Pins(456, 12, 12),
                     "Standard", new Pins(203, 0, 0),
                     "Unclassified", new Pins(87, 0, 0)),
-            // no engine manifest for MariaDB. Essential's testMixedSortNoComparator takes the server past 12 GB (the
-            // OOM killer ends it; the harness restarts it, so that test fails alone)
+            // no engine manifest for MariaDB. 325 -> 330 and 201 -> 204 (2026-10-11): a Float's text written once (the
+            // mixed sort no longer takes the server past 12 GB), and a windowed mode counted per value
             "mariadb", Map.of(
-                    "Essential", new Pins(325, 2, 2),
+                    "Essential", new Pins(330, 2, 2),
                     "Grammar", new Pins(135, 0, 0),
                     "Relation", new Pins(440, 17, 17),
-                    "Standard", new Pins(201, 1, 1),
+                    "Standard", new Pins(204, 1, 1),
+                    "Unclassified", new Pins(91, 0, 0)),
+            // no engine manifest for MySQL. Relation's 32: 21 window tests whose rows come back in another order (no
+            // ORDER BY: SQL promises none; channel A's comparison is unordered), 9 regular expressions with a
+            // non-literal pattern, 2 pivots' column order
+            "mysql", Map.of(
+                    "Essential", new Pins(331, 1, 1),
+                    "Grammar", new Pins(136, 0, 0),
+                    "Relation", new Pins(422, 32, 32),
+                    "Standard", new Pins(204, 1, 1),
                     "Unclassified", new Pins(91, 0, 0)),
             // the clouds, on the accounts (§4): Databricks' 10 Relation wire bugs fail with no detail from the
             // server; BigQuery's 13 are 10 regular expressions with a non-literal pattern, 2 pivots' column order and

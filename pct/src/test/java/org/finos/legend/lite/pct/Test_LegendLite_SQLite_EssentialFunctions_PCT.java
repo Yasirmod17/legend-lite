@@ -64,10 +64,7 @@ public class Test_LegendLite_SQLite_EssentialFunctions_PCT extends PCTReportConf
             // raised here; a five-digit year compares as text)
             one("meta::pure::functions::date::tests::testAdjustByMinutesBigNumber_Function_1__Boolean_1_", "\"a date past the years 0000-9999 has no SQLite value\""),
             // SQLITE'S OWN LIMIT: no time zones but UTC
-            one("meta::pure::functions::string::tests::format::testFormatDate_Function_1__Boolean_1_", "\"TIMEZONE reached SQLite: SQLite has no time zones but UTC\""),
-            // SQLITE'S OWN LIMIT: a statement is at most 1,000,000 bytes; a mixed list's sort compares each Float by
-            // its text canon, whose regular-expression walks (one per capture group, no two equal) exceed it
-            one("meta::pure::functions::collection::tests::sort::testMixedSortNoComparator_Function_1__Boolean_1_", "\"[SQLITE_TOOBIG] String or BLOB exceeds size limit (statement too long)\"")
+            one("meta::pure::functions::string::tests::format::testFormatDate_Function_1__Boolean_1_", "\"TIMEZONE reached SQLite: SQLite has no time zones but UTC\"")
     );
 
     public static Test suite() {

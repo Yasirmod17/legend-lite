@@ -30,11 +30,6 @@ public class Test_LegendLite_MariaDB_StandardFunctions_PCT extends PCTReportConf
     // Pinned by a STABLE part of the message (the runner matches by containment): no per-run id.
     // First measured 2026-10-11 (MariaDB 11.4.13, the pinned server).
     private static final MutableList<ExclusionSpecification> expectedFailures = Lists.mutable.with(
-            // MARIADB'S OWN LIMIT: GROUP_CONCAT, JSON_ARRAYAGG and a mode are no window functions (measured), so a
-            // windowed string aggregate or mode has no spelling
-            one("meta::pure::functions::math::tests::mode::testMode_Floats_Relation_Window_Function_1__Boolean_1_", "\"MODE over an ordered or framed window reached MariaDB\""),
-            one("meta::pure::functions::math::tests::mode::testMode_Integer_Relation_Window_Function_1__Boolean_1_", "\"MODE over an ordered or framed window reached MariaDB\""),
-            one("meta::pure::functions::math::tests::mode::testMode_Number_Relation_Window_Function_1__Boolean_1_", "\"MODE over an ordered or framed window reached MariaDB\"")
     );
 
     public static Test suite() {

@@ -139,8 +139,14 @@ public final class MySql extends MariaDb {
         SqlWriter.Piece digits = switch (conversion) {
             case 's' -> asText(x);
             case 'd', 'i' -> w -> w.append("CAST(CAST(").expr(x, 0).append(" AS SIGNED) AS CHAR)");
-            case 'f', 'F' -> w -> w.append("CAST(CAST(").expr(x, 0).append(" AS DECIMAL(65,")
-                    .append(precision == null ? "6" : precision).append(")) AS CHAR)");
+            // a negative value that rounds to zero keeps its sign ('-0.00', as Java's and DuckDB's printf): a DECIMAL
+            // zero has none (measured 2026-10-11, testFormatFloatWithRounding)
+            case 'f', 'F' -> {
+                String scale = precision == null ? "6" : precision;
+                yield w -> w.append("CONCAT(CASE WHEN ").expr(x, 4).append(" < 0 AND CAST(").expr(x, 0)
+                        .append(" AS DECIMAL(65," + scale + ")) = 0 THEN '-' ELSE '' END, CAST(CAST(").expr(x, 0)
+                        .append(" AS DECIMAL(65," + scale + ")) AS CHAR))");
+            }
             case 'x' -> w -> w.append("LOWER(CONV(").expr(x, 0).append(", 10, 16))");
             case 'X' -> w -> w.append("CONV(").expr(x, 0).append(", 10, 16)");
             case 'o' -> w -> w.append("CONV(").expr(x, 0).append(", 10, 8)");
@@ -170,6 +176,31 @@ public final class MySql extends MariaDb {
 
     /** A grouped mode is counted too: a table function's argument may be no aggregate here ("Incorrect arguments to
      *  JSON_TABLE", measured), so MariaDB's array of the group's values cannot be read. */
+    /** A bare integer past a signed BIGINT that fits an unsigned one is a BIGINT UNSIGNED here, and its arithmetic
+     *  stays one (9223372036854775898 - 132 reads BIGINT, measured 2026-10-11 by the census): a HUGEINT literal is a
+     *  DECIMAL, as MariaDB delivers it. */
+    @Override
+    protected String hugeIntLiteral(java.math.BigDecimal v) {
+        return "CAST(" + v.toPlainString() + " AS DECIMAL(38,0))";
+    }
+
+    /** YEAR() answers in MySQL's own YEAR type here, which the driver reads as a date (measured 2026-10-11: testYear's
+     *  "StrictDate cannot be cast to Integer", the census's BIGINT label over a YEAR column): an integer by its cast. */
+    @Override
+    protected SqlWriter.Piece yearOf(SqlExpr t) {
+        return w -> w.append("CAST(YEAR(").expr(t, 0).append(") AS SIGNED)");
+    }
+
+    /** A JSON value's text puts a space after every ',' and ':' outside a string here, and only there (MySQL stores
+     *  JSON parsed; measured 2026-10-11 by channel B: a Variant's text '[1, 2, 3]' where Pure writes '[1,2,3]'): a
+     *  string-aware replace drops exactly those, as Postgres's (a string, with its escapes, is matched whole and kept).
+     *  Only where a JSON value BECOMES text: inside JSON_ARRAY or JSON_OBJECT the value stays JSON. */
+    @Override
+    protected SqlWriter.Piece jsonAsText(SqlWriter.Piece json) {
+        return w -> w.append("REGEXP_REPLACE(CAST(").piece(json).append(" AS CHAR), ")
+                .append(stringLit("(\"(?:[^\"\\\\]|\\\\.)*\")|([,:]) ")).append(", '$1$2')");
+    }
+
     @Override
     protected boolean bindsCorrelated() {
         return correlatesDerived();
@@ -191,13 +222,20 @@ public final class MySql extends MariaDb {
         return "INT";
     }
 
-    /** No PERCENTILE_CONT, PERCENTILE_DISC or MEDIAN here (measured): a windowed median or quantile is a wall; the
-     *  grouped ones are MariaDB's (a sorted array, indexed). */
+    /** No PERCENTILE_CONT, PERCENTILE_DISC or MEDIAN here (measured): a whole partition's median or quantile is read
+     *  from each row's rank (MariaDb.rankedQuantile, 2026-10-11); an ordered or framed one is a wall; the grouped ones
+     *  are MariaDB's (a sorted array, indexed). */
+    @Override
+    protected boolean windowQuantilesNative() {
+        return false;
+    }
+
     @Override
     protected SqlWriter windowCall(SqlWriter writer, SqlExpr.WindowCall w) {
         if (w.fn() instanceof SqlAgg.Reducer r && (r.fn() == SqlAgg.Fn.MEDIAN || r.fn() == SqlAgg.Fn.QUANTILE_CONT
-                || r.fn() == SqlAgg.Fn.QUANTILE_DISC)) {
-            throw new DialectCapability("a windowed " + r.fn() + " reached MySQL, which has no PERCENTILE_CONT");
+                || r.fn() == SqlAgg.Fn.QUANTILE_DISC) && (!w.orderBy().isEmpty() || w.frame() != null)) {
+            throw new DialectCapability("a windowed " + r.fn() + " over an ordered or framed window reached MySQL,"
+                    + " which has no PERCENTILE_CONT");
         }
         return super.windowCall(writer, w);
     }

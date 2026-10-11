@@ -55,9 +55,8 @@ measured on the account before it is trusted (execution beats documentation).
      `Lexicon.SQLITE` handed to `AnsiSqlRenderer`.
    - **MariaDB: done** (§13): a sibling dialect, the five PCT suites as a lane over a real MariaDB 11.4 server that
      Bazel unpacks (not MariaDB4j, as `docs/MARIADB_BACKEND.md` designed it), pinned and burned down.
-   - **MySQL**: a sibling of the MariaDB dialect where the two differ (JSON functions, their regex engines), over
-     MySQL 8.4's server tarball. Lists have to be JSON arrays (neither has an array type), and neither has
-     `FULL OUTER JOIN` or `QUALIFY`.
+   - **MySQL: done** (§17): a sibling of the MariaDB dialect where the two differ (JSON functions, their regex
+     engines, `YEAR()`'s type), over MySQL 8.4's server tarball, pinned and burned down.
    - **Trino**: the `trinodb/trino` image with the memory connector; typed arrays, lambdas and maps, so much of
      `Databricks` carries over. One dialect covers Presto, Starburst and Athena.
    - **ClickHouse** (Apache-2.0): the `clickhouse/clickhouse-server` image; typed arrays, lambdas (`arrayMap`,
@@ -426,7 +425,8 @@ every suite (no ceiling raised). SQLite was a lexicon row over `AnsiSqlRenderer`
 on its first lane run. The dialect class's first run failed 144 (Essential 42, Grammar 15, Relation 26, Standard 24,
 Unclassified 37), and it was burned down from there to the 52 in fifteen runs; 52 -> 50 when the portable carrier
 strategies read a lambda parameter's field as the folded element's (§10's burn-down; `testFilterInstance` now fails
-on instance identity, as on DuckDB).
+on instance identity, as on DuckDB); 50 -> 49 when a Float's text was written once (§17: the mixed sort's statement,
+1.6 MB, fits the 1 MB cap at 258 KB).
 
 What the 50 are: 34 are the platform's own, pinned on the DuckDB lane by the same cause. The other 16 are SQLite's own
 limits, each measured:
@@ -491,7 +491,8 @@ started once per test JVM on a free loopback port with its data in the test's te
 of 345, Grammar 10 of 137, Relation 13 of 469, Standard 3 of 205, Unclassified 2 of 93), the census divergence 0 in
 every suite (no ceiling raised); 62 -> 61 when the system database came to the server (§14; Grammar re-run, 137
 green); 61 -> 59 when the portable carrier strategies read a lambda parameter's field as the folded element's (§10's
-burn-down; `testFilterInstance` now fails on instance identity, as on DuckDB).
+burn-down; `testFilterInstance` now fails on instance identity, as on DuckDB). 59 -> 51 (§17, 2026-10-11): a Float's text written once (the five statement-memory pins: the mixed sort and four
+`format`s, whose statements now fit) and a windowed mode counted per value (3).
 
 What the 59 are: 34 are the platform's own, pinned on the DuckDB lane by the same cause (7 of them instance
 identity). The other 25 are MariaDB's own limits, each measured:
@@ -645,13 +646,15 @@ manual as their channel A lanes, all in `//gates:heavy`.
 | DuckDB (reference) | 336 / 0 / 0 | 137 / 0 / 0 | 469 / 0 / 0 | 205 / 0 / 0 | 93 / 0 / 0 |
 | H2 | -- | -- | 429 / 14 / 12 | -- | -- |
 | Postgres | 285 / 2 / 0 | 128 / 3 / 0 | 464 / 3 / 1 | 186 / 1 / 0 | 83 / 0 / 0 |
-| SQLite | 332 / 1 / 1 | 133 / 0 / 0 | 456 / 12 / 12 | 203 / 0 / 0 | 87 / 0 / 0 |
-| MariaDB | 325 / 2 / 2 | 135 / 0 / 0 | 440 / 17 / 17 | 201 / 1 / 1 | 91 / 0 / 0 |
+| SQLite | 333 / 1 / 1 | 133 / 0 / 0 | 456 / 12 / 12 | 203 / 0 / 0 | 87 / 0 / 0 |
+| MariaDB | 330 / 2 / 2 | 135 / 0 / 0 | 440 / 17 / 17 | 204 / 1 / 1 | 91 / 0 / 0 |
+| MySQL | 331 / 1 / 1 | 136 / 0 / 0 | 422 / 32 / 32 | 204 / 1 / 1 | 91 / 0 / 0 |
 | Databricks | 334 / 2 / 1 | 135 / 2 / 0 | 459 / 10 / 10 | 205 / 0 / 0 | 93 / 0 / 0 |
 | Snowflake | 334 / 1 / 0 | 133 / 2 / 0 | 467 / 2 / 2 | 204 / 1 / 0 | 93 / 0 / 0 |
 | BigQuery | 330 / 2 / 2 | 135 / 0 / 0 | 455 / 13 / 13 | 205 / 0 / 0 | 91 / 0 / 0 |
 
-(H2's channel A lane runs the Relation suite only, so channel B's does too. MySQL's waits for its channel A pins.)
+(H2's channel A lane runs the Relation suite only, so channel B's does too. SQLite, MariaDB and MySQL as re-measured
+with §17's changes.)
 
 **What the disagreements are.** Every one is a test channel A passes because the interpreter evaluates part of its
 body in Java, which channel B sends to the database:
@@ -677,5 +680,64 @@ body in Java, which channel B sends to the database:
   `--max-session-mem-used` does not count, and the kernel's OOM killer ends it. It failed every later test until the
   embedded MariaDB and MySQL learned to restart a server a statement killed (`EmbeddedMariaDb.shared`, said on stderr
   with the dead server's log), so the test fails alone. Several MariaDB lanes run at once can exceed the machine
-  together: run them one at a time (`--local_test_jobs=1`). The statement's size is the bug to fix (channel A pins the
-  same test by its "Out of memory").
+  together: run them one at a time (`--local_test_jobs=1`). The statement's size was the bug, fixed the same day
+  (§17: a Float's text written once; the statement is 36 KB and the test passes on both channels).
+
+## 17. MySQL, measured (2026-10-11)
+
+The third of the open ones (§2, item 4): MySQL 8.4.11, the server Bazel unpacks from MySQL's own Linux tarball
+(`@embedded_mysql`, `tools/mysql/`), started per test JVM as MariaDB's is (`testing/.../EmbeddedMySql.java`); the driver
+is MariaDB Connector/J, which speaks to MySQL too. The dialect, `MySql`, is `MariaDb` where the two agree and its hooks
+where they differ.
+
+**Result:** all five suites pass on MySQL, each failure pinned by its message: 1,249 tests, 54 pinned (Essential 26 of
+345, Grammar 10 of 137, Relation 16 of 469, Standard 0 of 205, Unclassified 2 of 93), the census divergence 0 in every
+suite (no ceiling raised). 34 are the platform's own, pinned on the DuckDB lane by the same cause (7 of them instance
+identity); 20 are MySQL's own limits, each measured:
+
+- GROUP_CONCAT and an ordered JSON_ARRAYAGG are no window functions (11): a windowed string aggregate;
+- a date past the years 1000-9999 (3);
+- a JSON value is stored parsed, an object's keys sorted (3): the values are right, the printed key order is not;
+- no Jaro-Winkler function (2, as on SQLite, MariaDB, Postgres and the clouds);
+- no named time zone without the server's zone tables (1).
+
+**The blocker, and the fix for every dialect.** The first full run never finished Essential: the PCT's
+`testMixedSortNoComparator` (`[342, 5.0, -2.0, 171, 1]->sort()`) planned for 15 minutes and the suite timed out, so
+274 of 345 tests never ran (on MariaDB the same statement took the server past 12 GB, §16). The lowering spelled a
+Float's Pure text (the kind-faithful carrier's, docs/F10_CARRIER_DESIGN.md) by reading the value's text some fifty
+times, cheap where a double's text is a CAST (DuckDB: the literal is 8 KB) and multiplied where it is a long expression
+(MariaDB and MySQL cannot print a double as Pure does, 1.6 KB each: the bare literal 545 KB, the sort 6.5 MB). Spelling a
+literal in Java would need Java to format a double (the parser keeps a Float as a double, not its text) and is what the
+charter's Clause 4 refuses (`docs/TENET_CHARTER.md`), so the database still computes every spelling, written once:
+
+- `SqlFn.FLOAT_CANON`: one call per value; the portable spelling moved unchanged to `dialect/FloatCanonText`, expanded
+  by the first render pass, so every later pass sees the tree it saw before (DuckDB's SQL is byte-identical);
+- MariaDB and MySQL spell it themselves, the value read once through their one-row JSON_TABLE (the literal 545 KB ->
+  2.8 KB, the sort 6.5 MB -> 36 KB on MariaDB, 85 KB on MySQL); SQLite and BigQuery bind the double's text once in a
+  one-row derived table (SQLite's sort 1.6 MB -> 258 KB, under its 1 MB cap; BigQuery's 436 KB -> 47 KB);
+- `CommonSubexpressions` on every dialect (the user's call): full on DuckDB, Postgres, MySQL, SQLite and BigQuery;
+  constants only where a derived table reads no outer row (MariaDB, H2, Snowflake, Databricks); never inside a lambda
+  body that names its parameters (DuckDB reads no lambda parameter in a subquery: measured on core's tests); not on the
+  engine-text printer, whose text is legend-engine's.
+
+It moved: MariaDB 59 -> 51 (the five statement-memory pins, and 3 windowed modes below), SQLite 50 -> 49 (the mixed
+sort); every other lane unchanged on both channels.
+
+**What else differs from MariaDB, and the dialect's answer:**
+
+| Measured | Consequence |
+|---|---|
+| no aggregate as JSON_TABLE's argument ("Incorrect arguments to JSON_TABLE") | a grouped mode is counted per value, `COUNT(v) OVER (PARTITION BY keys, v)`, then the most counted value, the least on a tie (as BigQuery's); a windowed mode is counted so on MariaDB too (its 3 pins gone) |
+| no PERCENTILE_CONT, PERCENTILE_DISC or MEDIAN | a whole partition's median or quantile from each row's rank and the partition's count, the values at the ranks around the position interpolated as the grouped one reads its sorted array (Standard: 0 pins) |
+| `YEAR(d)` answers in MySQL's YEAR type, which the driver reads as a date | `CAST(YEAR(d) AS SIGNED)` |
+| an integer past a signed BIGINT that fits an unsigned one is a BIGINT UNSIGNED, its arithmetic too | a HUGEINT literal is `CAST(n AS DECIMAL(38,0))` (the census's BIGINT-under-HUGEINT gone) |
+| a negative DECIMAL that rounds to zero has no sign | `%.2f` of -0.000553 writes its `-` (`-0.00`, as Java's printf) |
+| a JSON value's text puts a space after each `,` and `:` | where a JSON value becomes text, a string-aware replace drops exactly those (as Postgres's); inside JSON_ARRAY or JSON_OBJECT it stays JSON (channel B Relation 59 -> 32) |
+| no JSON_COMPACT, ORDER BY or DISTINCT in JSON_ARRAYAGG, negative JSON index; ICU regular expressions | MariaDB's hooks, spelled as MySQL needs them (`MySql`) |
+
+**Channel B on MySQL** (§16): 331 / 1 / 1, 136 / 0 / 0, 422 / 32 / 32, 204 / 1 / 1, 91 / 0 / 0. Relation's 32 are 21
+window tests whose rows come back in another order (no ORDER BY, so SQL promises none, and channel A's comparison is
+unordered), 9 regular expressions with a non-literal pattern (the `chunk` family), 2 pivots' column order.
+
+The lanes run from a desk with `bazel test //pct:pct_mysql` (`--local_test_jobs` low: each suite starts its own server).
+Linux x86_64 only, as MariaDB's.

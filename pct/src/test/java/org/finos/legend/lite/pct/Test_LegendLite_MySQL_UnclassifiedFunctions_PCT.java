@@ -30,6 +30,9 @@ public class Test_LegendLite_MySQL_UnclassifiedFunctions_PCT extends PCTReportCo
     // Pinned by a STABLE part of the message (the runner matches by containment): no per-run id.
     // First measured 2026-10-11 (MySQL 8.4.11, the pinned server).
     private static final MutableList<ExclusionSpecification> expectedFailures = Lists.mutable.with(
+            // MYSQL'S OWN LIMIT: no Jaro-Winkler similarity function (as on SQLite, MariaDB, Postgres and the clouds)
+            one("meta::pure::functions::string::tests::jaroWinklerSimilarity::testJaroWinklerSimilarityEqual_Function_1__Boolean_1_", "\"JARO_WINKLER reached MySQL: MySQL has no string-distance function\""),
+            one("meta::pure::functions::string::tests::jaroWinklerSimilarity::testJaroWinklerSimilarityNotEqual_Function_1__Boolean_1_", "\"JARO_WINKLER reached MySQL: MySQL has no string-distance function\"")
     );
 
     public static Test suite() {

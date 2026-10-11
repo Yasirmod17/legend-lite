@@ -118,6 +118,11 @@ public class AnsiSqlRenderer implements SqlDialect {
         return java.util.List.copyOf(ps);
     }
 
+    /** A HUGEINT-fact integer literal (past a signed BIGINT): bare, the database types it by its magnitude. */
+    protected String hugeIntLiteral(java.math.BigDecimal v) {
+        return v.toPlainString();
+    }
+
     /** Whether this dialect writes {@link com.legend.sql.SqlFn#FLOAT_CANON} itself; else it is expanded before every
      *  other pass ({@link FloatCanonText.Expansion}) to the portable spelling over the double's text. */
     protected boolean spellsFloatCanon() {
@@ -559,6 +564,9 @@ public class AnsiSqlRenderer implements SqlDialect {
                                     .Decimal dd && dd.scale() == 0
                     ? "CAST(" + d.value().toPlainString() + " AS DECIMAL("
                             + dd.precision() + ",0))"
+                    : d.type() instanceof com.legend.sql.TypeFact.Typed h
+                            && h.type() == com.legend.sql.SqlType.Scalar.HUGEINT
+                    ? hugeIntLiteral(d.value())
                     : d.value().toPlainString());
             case SqlExpr.BoolLit b -> writer.append(boolLit(b.value()));
             case SqlExpr.NullLit n -> writer.append("NULL");

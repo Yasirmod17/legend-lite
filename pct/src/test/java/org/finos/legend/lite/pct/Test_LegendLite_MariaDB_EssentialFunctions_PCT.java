@@ -63,15 +63,7 @@ public class Test_LegendLite_MariaDB_EssentialFunctions_PCT extends PCTReportCon
             one("meta::pure::functions::date::tests::testAdjustByMinutesBigNumber_Function_1__Boolean_1_", "\"a date past the year 9999 has no MariaDB value\""),
             // MARIADB'S OWN LIMIT: no named time zone without the server's zone tables (loaded from the host's
             // zoneinfo, which a hermetic server does not read)
-            one("meta::pure::functions::string::tests::format::testFormatDate_Function_1__Boolean_1_", "\"TIMEZONE reached MariaDB: MariaDB knows no named time zone but UTC without its zone tables\""),
-            // MARIADB'S OWN LIMIT: a statement's memory (the server's session cap, 2 GB, and its 16 MB statement
-            // text): a Float's text canon, written out in each of a format's arguments and in each comparison of a
-            // mixed list's sort, exceeds them
-            one("meta::pure::functions::collection::tests::sort::testMixedSortNoComparator_Function_1__Boolean_1_", "Out of memory (Needed"),
-            one("meta::pure::functions::string::tests::format::testFormatFloatWithRounding_Function_1__Boolean_1_", "The MariaDB server is running with the --max-session-mem-used=2147483648 option so it cannot execute this statement\""),
-            one("meta::pure::functions::string::tests::format::testFormatFloatWithTruncation_Function_1__Boolean_1_", "The MariaDB server is running with the --max-session-mem-used=2147483648 option so it cannot execute this statement\""),
-            one("meta::pure::functions::string::tests::format::testFormatFloatWithZeroPadding_Function_1__Boolean_1_", "The MariaDB server is running with the --max-session-mem-used=2147483648 option so it cannot execute this statement\""),
-            one("meta::pure::functions::string::tests::format::testFormatFloat_Function_1__Boolean_1_", "Socket error\"")
+            one("meta::pure::functions::string::tests::format::testFormatDate_Function_1__Boolean_1_", "\"TIMEZONE reached MariaDB: MariaDB knows no named time zone but UTC without its zone tables\"")
     );
 
     public static Test suite() {

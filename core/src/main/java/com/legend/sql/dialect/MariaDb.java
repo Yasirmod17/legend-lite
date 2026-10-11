@@ -332,7 +332,7 @@ public class MariaDb extends AnsiSqlRenderer {
             }
             return select(writer, over, depth);
         }
-        Map<SqlExpr, SqlExpr> counts = new LinkedHashMap<>();
+        Map<SqlExpr, List<SqlExpr>> counts = new LinkedHashMap<>();
         SqlSelect counted = modesCounted(s, counts);
         if (counted != s) {
             Map<SqlSelect, Boolean> top = rootSelects.peek();
@@ -357,7 +357,13 @@ public class MariaDb extends AnsiSqlRenderer {
 
     /** Per select being written, each counted MODE in it and the column counting its value's rows
      *  ({@link #modesCounted}). */
-    private final java.util.Deque<Map<SqlExpr, SqlExpr>> modeCounts = new java.util.ArrayDeque<>();
+    private final java.util.Deque<Map<SqlExpr, List<SqlExpr>>> modeCounts = new java.util.ArrayDeque<>();
+
+    /** Whether a whole partition's median or quantile is a native window function ({@code PERCENTILE_CONT(q) WITHIN
+     *  GROUP (ORDER BY x) OVER (...)}); else it is read from each row's rank in its partition ({@link #modesCounted}). */
+    protected boolean windowQuantilesNative() {
+        return true;
+    }
 
     /** Whether a GROUPED mode is counted too ({@link #modesCounted}); a windowed one always is. MariaDB reads a group's
      *  values through {@code JSON_TABLE} over their array; MySQL takes no aggregate as a table function's argument
@@ -375,7 +381,7 @@ public class MariaDb extends AnsiSqlRenderer {
      * tie, written where it is ({@link #modeArm}). An ordered or framed window's mode is not counted (its window
      * call refuses it).
      */
-    private SqlSelect modesCounted(SqlSelect s, Map<SqlExpr, SqlExpr> counts) {
+    private SqlSelect modesCounted(SqlSelect s, Map<SqlExpr, List<SqlExpr>> counts) {
         Map<SqlExpr, List<SqlExpr>> modes = new LinkedHashMap<>();
         List<SqlExpr> roots = new ArrayList<>();
         s.projections().forEach(p -> roots.add(p.expr()));
@@ -404,11 +410,27 @@ public class MariaDb extends AnsiSqlRenderer {
         int k = 0;
         for (var m : modes.entrySet()) {
             String name = "__mc" + k++;
+            SqlAgg.Reducer r = m.getKey() instanceof SqlExpr.WindowCall w ? (SqlAgg.Reducer) w.fn()
+                    : (SqlAgg.Reducer) m.getKey();
+            if (r.fn() != SqlAgg.Fn.MODE) {
+                // a quantile: the row's rank by its value in its partition (NULLs last, the quantile's direction),
+                // and the partition's count of values
+                SqlExpr v = r.args().get(0);
+                boolean desc = !r.orderBy().isEmpty() && !r.orderBy().get(0).ascending();
+                ps.add(new SqlSelect.Projection(new SqlExpr.WindowCall(new SqlAgg.RankingFn(SqlAgg.Fn.ROW_NUMBER, List.of()),
+                        m.getValue(), List.of(new SqlSelect.SortKey(v, !desc, SqlSelect.SortKey.NullOrder.NULLS_LAST,
+                                null)), null), name + "r", null));
+                ps.add(new SqlSelect.Projection(new SqlExpr.WindowCall(new SqlAgg.Reducer(SqlAgg.Fn.COUNT,
+                        List.of(v), false, List.of()), m.getValue(), List.of(), null), name + "n", null));
+                counts.put(m.getKey(), List.of(SqlExpr.Column.derived(alias, name + "r"),
+                        SqlExpr.Column.derived(alias, name + "n")));
+                continue;
+            }
             List<SqlExpr> partition = new ArrayList<>(m.getValue());
             partition.add(modeValue(m.getKey()));
             ps.add(new SqlSelect.Projection(new SqlExpr.WindowCall(new SqlAgg.Reducer(SqlAgg.Fn.COUNT,
                     List.of(modeValue(m.getKey())), false, List.of()), partition, List.of(), null), name, null));
-            counts.put(m.getKey(), SqlExpr.Column.derived(alias, name));
+            counts.put(m.getKey(), List.of(SqlExpr.Column.derived(alias, name)));
         }
         SqlSelect countedRows = new SqlSelect(ps, false, from, null, List.of(), null, null, List.of(), null, null,
                 List.of());
@@ -430,6 +452,12 @@ public class MariaDb extends AnsiSqlRenderer {
             }
             return;
         }
+        if (e instanceof SqlExpr.WindowCall w && w.fn() instanceof SqlAgg.Reducer r && !windowQuantilesNative()
+                && (r.fn() == SqlAgg.Fn.MEDIAN || r.fn() == SqlAgg.Fn.QUANTILE_CONT || r.fn() == SqlAgg.Fn.QUANTILE_DISC)
+                && w.orderBy().isEmpty() && w.frame() == null) {
+            out.put(w, w.partitionBy());
+            return;
+        }
         for (SqlExpr c : e.children()) {
             collectModes(c, groupBy, out);
         }
@@ -448,7 +476,8 @@ public class MariaDb extends AnsiSqlRenderer {
      *  count is 0, so it is last), NULL when every value is -- over a window, {@code FIRST_VALUE(v) OVER (PARTITION BY ..
      *  ORDER BY count DESC, v)} over the whole partition; grouped, the first of the group's values in that order. */
     private SqlWriter modeArm(SqlWriter writer, SqlExpr mode) {
-        SqlExpr count = modeCounts.isEmpty() ? null : modeCounts.peek().get(mode);
+        List<SqlExpr> counted = modeCounts.isEmpty() ? null : modeCounts.peek().get(mode);
+        SqlExpr count = counted == null ? null : counted.get(0);
         if (count == null) {
             throw new IllegalStateException("a MODE reached " + product() + "'s writer uncounted: modesCounted did not"
                     + " run");
@@ -938,6 +967,11 @@ public class MariaDb extends AnsiSqlRenderer {
     private static boolean nested(@com.legend.base.Nullable SqlType t) {
         return t instanceof SqlType.Array || t instanceof SqlType.Struct || t instanceof SqlType.Map
                 || t == SqlType.Scalar.JSON;
+    }
+
+    /** A JSON value as its text, compact as Pure and DuckDB print JSON: a JSON value is text here, already so. */
+    protected SqlWriter.Piece jsonAsText(SqlWriter.Piece json) {
+        return json;
     }
 
     /** A value as a JSON container holds it ({@link #jsonOf}). */
@@ -1493,11 +1527,11 @@ public class MariaDb extends AnsiSqlRenderer {
         // CAST(json AS VARCHAR) keeps a string's quotes)
         boolean member = v instanceof SqlExpr.Call call && call.fn() == SqlFn.VARIANT_GET;
         if ((to == SqlType.Scalar.VARCHAR || to == SqlType.Scalar.LITERAL) && !member) {
-            return w -> w.expr(v, 0);
+            return jsonAsText(w -> w.expr(v, 0));
         }
         if (to == SqlType.Scalar.VARCHAR || to == SqlType.Scalar.LITERAL) {
             return w -> w.append("(CASE WHEN JSON_TYPE(").expr(v, 0).append(") = 'STRING' THEN JSON_UNQUOTE(")
-                    .expr(v, 0).append(") ELSE ").expr(v, 0).append(" END)");
+                    .expr(v, 0).append(") ELSE ").piece(jsonAsText(x -> x.expr(v, 0))).append(" END)");
         }
         if (to == SqlType.Scalar.BOOLEAN) {
             // a JSON boolean's JSON_VALUE is '1' or '0' (measured; MySQL's 'true' or 'false')
@@ -2468,6 +2502,9 @@ public class MariaDb extends AnsiSqlRenderer {
     private SqlWriter.Piece extract(List<SqlExpr> a) {
         Part part = part(a.get(0), "an EXTRACT part");
         SqlExpr t = a.get(1);
+        if (part == Part.YEAR) {
+            return yearOf(t);
+        }
         String fn = switch (part) {
             case YEAR -> "YEAR(";
             case QUARTER -> "QUARTER(";
@@ -2491,6 +2528,11 @@ public class MariaDb extends AnsiSqlRenderer {
             case YEAR, QUARTER, MONTH, DAY, HOUR, MINUTE, SECOND, DOY, MICROSECOND ->
                     throw new IllegalStateException("named: " + part);
         };
+    }
+
+    /** A date's year, an integer. */
+    protected SqlWriter.Piece yearOf(SqlExpr t) {
+        return w -> w.append("YEAR(").expr(t, 0).append(")");
     }
 
     /** The base's contract: year/quarter/month/week deliver a DATE, finer parts a date-time; DuckDB's week starts on
@@ -2839,6 +2881,44 @@ public class MariaDb extends AnsiSqlRenderer {
                 .piece(pos).append(" - FLOOR(").piece(pos).append(")))");
     }
 
+    /**
+     * A whole partition's median or quantile from each row's rank ({@link #modesCounted}, 2026-10-11: MySQL has no
+     * PERCENTILE_CONT): the values at the ranks around the position, as the grouped {@link #quantile} reads its sorted
+     * array -- continuous, {@code lo + (hi - lo) * (pos - FLOOR(pos))} at {@code pos = q * (n - 1)}; discrete, the value
+     * at {@code GREATEST(CEIL(n * q) - 1, 0)} -- each value spread over the partition by a windowed MAX.
+     */
+    private SqlWriter.Piece rankedQuantile(SqlAgg.Reducer r, SqlExpr.WindowCall w) {
+        List<SqlExpr> counted = modeCounts.isEmpty() ? null : modeCounts.peek().get(w);
+        if (counted == null) {
+            throw new IllegalStateException("a windowed " + r.fn() + " reached " + product() + "'s writer unranked:"
+                    + " modesCounted did not run");
+        }
+        SqlExpr rank = counted.get(0);
+        SqlExpr n = counted.get(1);
+        SqlExpr x = r.args().get(0);
+        SqlWriter.Piece q = r.fn() == SqlAgg.Fn.MEDIAN ? v -> v.append("0.5") : v -> v.expr(r.args().get(1), 0);
+        SqlWriter.Piece over = v -> {
+            v.append(" OVER (");
+            if (!w.partitionBy().isEmpty()) {
+                v.append("PARTITION BY ").list(w.partitionBy());
+            }
+            v.append(")");
+        };
+        java.util.function.Function<SqlWriter.Piece, SqlWriter.Piece> at = i -> v -> v.append("MAX(CASE WHEN ")
+                .expr(rank, 0).append(" = ").piece(i).append(" + 1 THEN ")
+                .piece(r.fn() == SqlAgg.Fn.QUANTILE_DISC ? y -> y.expr(x, 0) : y -> y.append("CAST(").expr(x, 0)
+                        .append(" AS DOUBLE)"))
+                .append(" END)").piece(over);
+        if (r.fn() == SqlAgg.Fn.QUANTILE_DISC) {
+            return at.apply(v -> v.append("GREATEST(CEIL(").expr(n, 0).append(" * (").piece(q).append(")) - 1, 0)"));
+        }
+        SqlWriter.Piece pos = v -> v.append("((").piece(q).append(") * (").expr(n, 0).append(" - 1))");
+        SqlWriter.Piece lo = at.apply(v -> v.append("FLOOR(").piece(pos).append(")"));
+        SqlWriter.Piece hi = at.apply(v -> v.append("CEIL(").piece(pos).append(")"));
+        return v -> v.append("(").piece(lo).append(" + (").piece(hi).append(" - ").piece(lo).append(") * (")
+                .piece(pos).append(" - FLOOR(").piece(pos).append(")))");
+    }
+
     private static final Set<SqlAgg.Fn> ORDERED_SETS = Set.of(SqlAgg.Fn.MEDIAN, SqlAgg.Fn.MODE,
             SqlAgg.Fn.QUANTILE_CONT, SqlAgg.Fn.QUANTILE_DISC);
 
@@ -2851,6 +2931,11 @@ public class MariaDb extends AnsiSqlRenderer {
     @Override
     protected SqlWriter windowCall(SqlWriter writer, SqlExpr.WindowCall w) {
         switch (w.fn()) {
+            case SqlAgg.Reducer r when !windowQuantilesNative() && (r.fn() == SqlAgg.Fn.MEDIAN
+                    || r.fn() == SqlAgg.Fn.QUANTILE_CONT || r.fn() == SqlAgg.Fn.QUANTILE_DISC) && w.orderBy().isEmpty()
+                    && w.frame() == null -> {
+                return writer.piece(rankedQuantile(r, w));
+            }
             case SqlAgg.Reducer r when (r.fn() == SqlAgg.Fn.MEDIAN || r.fn() == SqlAgg.Fn.QUANTILE_CONT
                     || r.fn() == SqlAgg.Fn.QUANTILE_DISC) && w.orderBy().isEmpty() && w.frame() == null -> {
                 SqlExpr x = r.args().get(0);
