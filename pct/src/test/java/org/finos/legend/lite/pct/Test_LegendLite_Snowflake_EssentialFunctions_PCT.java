@@ -60,10 +60,6 @@ public class Test_LegendLite_Snowflake_EssentialFunctions_PCT extends PCTReportC
             one("meta::pure::functions::string::tests::indexOf::testFromIndex_Function_1__Boolean_1_", "\"\nexpected: 1\nactual:   2\""),
             one("meta::pure::functions::string::tests::indexOf::testSimple_Function_1__Boolean_1_", "\"\nexpected: 4\nactual:   5\""),
             one("meta::pure::functions::string::tests::toString::testComplexClassToString_Function_1__Boolean_1_", "\"a field '__id' of unknown type reached Snowflake\""),
-            // SNOWFLAKE'S OWN LIMIT: a lambda cannot read an enclosing lambda's parameter (measured: invalid
-            // identifier), which the comparator dedup's nested FILTER does
-            one("meta::pure::functions::collection::tests::removeDuplicates::testRemoveDuplicatesPrimitiveNonStandardFunction_Function_1__Boolean_1_", "\"a lambda reading the parameter '_rx0' of an enclosing lambda reached Snowflake, whose lambdas cannot (measured: invalid identifier)\""),
-            one("meta::pure::functions::collection::tests::removeDuplicates::testRemoveDuplicatesPrimitiveStandardFunctionExplicit_Function_1__Boolean_1_", "\"a lambda reading the parameter '_rx0' of an enclosing lambda reached Snowflake, whose lambdas cannot (measured: invalid identifier)\""),
             // SNOWFLAKE'S OWN LIMIT: the driver refuses the java.time re-fetch, and its Timestamp drops a BC year's
             // sign (measured: 21458 for -21457)
             one("meta::pure::functions::date::tests::testAdjustByMinutesBigNumber_Function_1__Boolean_1_", "\"\nexpected: %-21457-01-08T20:48:00+0000\nactual:   %21458-06-30T17:39:38+0000\"")

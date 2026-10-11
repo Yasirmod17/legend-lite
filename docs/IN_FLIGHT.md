@@ -754,7 +754,8 @@ renderer's composite type names as hooks (`AnsiSqlRenderer.arrayTypeName`/`mapTy
 byte-identical for every other dialect); arms in `database/Databases.java` and `exec/Sessions.java`; two exec edits:
 `exec/Executor.java` (the timestamp re-fetch keeps the driver's Timestamp when the driver answers another class) and
 `exec/SqlTypeCensus.java` (Spark's type names are spellings); `tools/census/RenderCensus.java` renders Databricks.
-**2026-10-11, Snowflake landed on the branch** (all five suites green on the account, 40 pinned of 1,250): new
+**2026-10-11, Snowflake landed on the branch** (all five suites green on the account, 40 pinned of 1,250; 38 later the
+same day, the comparator dedup's nested lambda carried through a REDUCE): new
 `sql/dialect/Snowflake.java` (its passes nested in it, marked MOVE TO their own files); rows in `Lexicon`,
 `TypeNames`, `Spellings`, `CarrierStrategies.Caps`; arms in `database/Databases.java` and `exec/Sessions.java`; two exec
 edits: `exec/Executor.java` (the timestamp re-fetch keeps the Timestamp when the driver refuses the java.time read) and

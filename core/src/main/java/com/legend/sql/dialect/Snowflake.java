@@ -46,7 +46,8 @@ import java.util.Set;
  *       reader ({@code Executor.unwrap}) as standard JSON;</li>
  *   <li>a lambda takes ONE parameter (two for REDUCE), has no index parameter (DuckDB's is 1-based: emulated over
  *       {@code ARRAY_GENERATE_RANGE}), and CANNOT read an enclosing lambda's parameter (measured: invalid
- *       identifier) -- such a nesting is refused by name;</li>
+ *       identifier) -- a FILTER or TRANSFORM that does is a REDUCE carrying those values ({@link #carried}); any
+ *       other such nesting is refused by name;</li>
  *   <li>a correlated subquery over FLATTEN is refused ("Unsupported subquery type"), so a list is reduced with
  *       REDUCE / ARRAY_* functions, and exploded only by {@code CROSS JOIN LATERAL FLATTEN} (never with ON);</li>
  *   <li>VALUES takes constants only (no ARRAY_CONSTRUCT, PARSE_JSON): such rows are a UNION ALL of selects;</li>
@@ -510,6 +511,94 @@ public final class Snowflake extends AnsiSqlRenderer {
                 body.apply(w -> w.expr(l.body(), 0))), true);
     }
 
+    /** The names {@code l}'s body reads that an enclosing lambda binds (its parameters, or the names it writes as
+     *  pieces): Snowflake's lambda cannot read them (measured: invalid identifier), so they are carried in
+     *  ({@link #carried}). */
+    private Set<String> captured(SqlExpr.Lambda l) {
+        Set<String> out = new java.util.LinkedHashSet<>();
+        if (!scopes.isEmpty()) {
+            collectCaptured(l.body(), new java.util.HashSet<>(l.params()), out);
+        }
+        return out;
+    }
+
+    private void collectCaptured(SqlExpr e, Set<String> bound, Set<String> out) {
+        if (e instanceof SqlExpr.Lambda inner) {
+            Set<String> b = new java.util.HashSet<>(bound);
+            b.addAll(inner.params());
+            collectCaptured(inner.body(), b, out);
+            return;
+        }
+        if (e instanceof SqlExpr.Column c) {
+            String name = c.table() != null ? c.table() : c.name();
+            if (!bound.contains(name)
+                    && scopes.stream().anyMatch(s -> s.params().contains(name) || s.subs().containsKey(name))) {
+                out.add(name);
+            }
+        }
+        for (SqlExpr k : e.children()) {
+            collectCaptured(k, bound, out);
+        }
+    }
+
+    /** The type a read of {@code name} in {@code e} declares (null: none does, a VARIANT). */
+    private static @com.legend.base.Nullable SqlType capturedType(SqlExpr e, String name) {
+        if (e instanceof SqlExpr.Column c && c.table() == null && c.name().equals(name) && typeOf(c) != null) {
+            return typeOf(c);
+        }
+        for (SqlExpr k : e.children()) {
+            SqlType t = capturedType(k, name);
+            if (t != null) {
+                return t;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * {@code FILTER(xs, p -> body)} or {@code TRANSFORM(xs, p -> body)} whose body reads an enclosing lambda's names
+     * (removeDuplicates' comparator reads the candidate its fold holds): a REDUCE whose accumulator carries those
+     * values -- {@code {'r': the result so far, 'c0': name0, ...}}, its start written where the names are in scope --
+     * and whose lambda reads them off it. Measured: an enclosing lambda's parameter is an invalid identifier inside a
+     * lambda, but not in REDUCE's start; a NULL list reduces to NULL, an empty one to the start.
+     */
+    private SqlWriter.Piece carried(SqlExpr xs, SqlExpr.Lambda l, Set<String> names, boolean filter) {
+        List<String> cs = new ArrayList<>(names);
+        String state = delimited(freshName("s"));
+        Map<String, SqlWriter.Piece> subs = new LinkedHashMap<>();
+        for (int k = 0; k < cs.size(); k++) {
+            SqlType t = capturedType(l.body(), cs.get(k));
+            String key = "'c" + k + "'";
+            SqlWriter.Piece read = w -> w.append("GET(" + state + ", " + key + ")");
+            subs.put(cs.get(k), t == null ? read : typed(read, t));
+        }
+        String element = l.params().get(0);
+        String declared = paramType(listElement(xs));
+        SqlWriter.Piece kept = w -> w.append("CAST(GET(" + state + ", 'r') AS ARRAY)");
+        SqlWriter.Piece next = filter
+                ? w -> w.append("IFF(").expr(l.body(), 0).append(", ARRAY_APPEND(").piece(kept).append(", "
+                        + delimited(element) + "), ").piece(kept).append(")")
+                : w -> w.append("ARRAY_APPEND(").piece(kept).append(", ").expr(l.body(), 0).append(")");
+        SqlWriter.Piece step = w -> {
+            w.append("OBJECT_CONSTRUCT_KEEP_NULL('r', ").piece(next);
+            for (int k = 0; k < cs.size(); k++) {
+                w.append(", 'c" + k + "', GET(" + state + ", 'c" + k + "')");
+            }
+            w.append(")");
+        };
+        SqlWriter.Piece start = w -> {
+            w.append("OBJECT_CONSTRUCT_KEEP_NULL('r', ARRAY_CONSTRUCT()");
+            for (int k = 0; k < cs.size(); k++) {
+                w.append(", 'c" + k + "', ").expr(SqlExpr.Column.derived(null, cs.get(k)), 0);
+            }
+            w.append(")");
+        };
+        return w -> w.append("CAST(GET(REDUCE(").expr(xs, 0).append(", ").piece(start).append(", ")
+                .piece(lambdaOf(List.of(new Param(state.replace("\"", ""), "OBJECT"),
+                        new Param(element, declared != null ? declared : "VARIANT")), subs, step))
+                .append("), 'r') AS ARRAY)");
+    }
+
     /** The positions of {@code xs}, 0-based ({@code NULL} for a NULL list). */
     private static SqlWriter.Piece positions(SqlExpr xs) {
         return w -> w.append("ARRAY_GENERATE_RANGE(0, ARRAY_SIZE(").expr(xs, 0).append("))");
@@ -541,7 +630,12 @@ public final class Snowflake extends AnsiSqlRenderer {
         SqlType element = listElement(xs);
         return switch (fn) {
             case LIST_FILTER -> {
-                Ranged r = ranged(xs, (SqlExpr.Lambda) a.get(1), b -> b);
+                SqlExpr.Lambda fl = (SqlExpr.Lambda) a.get(1);
+                Set<String> carry = captured(fl);
+                if (!carry.isEmpty() && fl.params().size() == 1) {
+                    yield writer.piece(carried(xs, fl, carry, true));
+                }
+                Ranged r = ranged(xs, fl, b -> b);
                 if (!r.positions()) {
                     yield writer.append("FILTER(").piece(r.over()).append(", ").piece(r.lambda()).append(")");
                 }
@@ -551,7 +645,12 @@ public final class Snowflake extends AnsiSqlRenderer {
                         .append(j + " INTEGER -> GET(").expr(xs, 0).append(", " + j + "))");
             }
             case LIST_TRANSFORM -> {
-                Ranged r = ranged(xs, (SqlExpr.Lambda) a.get(1), b -> b);
+                SqlExpr.Lambda tl = (SqlExpr.Lambda) a.get(1);
+                Set<String> carry = captured(tl);
+                if (!carry.isEmpty() && tl.params().size() == 1) {
+                    yield writer.piece(carried(xs, tl, carry, false));
+                }
+                Ranged r = ranged(xs, tl, b -> b);
                 yield writer.append("TRANSFORM(").piece(r.over()).append(", ").piece(r.lambda()).append(")");
             }
             // NULL ++ xs is xs, as DuckDB's list_concat

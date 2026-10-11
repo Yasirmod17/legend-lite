@@ -93,7 +93,7 @@ measured on the account before it is trusted (execution beats documentation).
   the first run on each account fills them.
 - **Databricks: done** (2026-10-11, §8): the dialect, all five suites green on the account with 44 pinned rows of
   1,250 tests, the census at 0 divergence (no ceiling raised).
-- **Snowflake: done** (2026-10-11, §9): the dialect, all five suites green on the account with 40 pinned rows of
+- **Snowflake: done** (2026-10-11, §9): the dialect, all five suites green on the account with 38 pinned rows of
   1,250 tests, the census at 0 divergence (no ceiling raised).
 - **BigQuery: done** (2026-10-11, §10): the dialect, all five suites green on the account with 83 pinned rows of
   1,250 tests, the census at 0 divergence (no ceiling raised).
@@ -263,17 +263,17 @@ answer:
 
 ## 9. Snowflake, measured (2026-10-11)
 
-**Result:** all five suites pass on the account, each failure pinned by its message: 1,250 tests, 40 pinned (Grammar
-10 of 137, Essential 27 of 346, Relation 1 of 469, Standard 0 of 205, Unclassified 2 of 93), the census divergence 0
+**Result:** all five suites pass on the account, each failure pinned by its message: 1,250 tests, 38 pinned (Grammar
+10 of 137, Essential 25 of 345, Relation 1 of 469, Standard 0 of 205, Unclassified 2 of 93), the census divergence 0
 in every suite. Burned down in seven runs from 144 failing (the first run: Essential 70, Relation 35, Standard 34,
-Unclassified 5; Grammar's 10 pinned from the start).
+Unclassified 5; Grammar's 10 pinned from the start); 40 -> 38 later the same day, when the comparator dedup's nested
+lambda was carried (below; Essential re-run on the account, 345 green).
 
-What the 40 are: 34 are the platform's own, pinned on the DuckDB lane by the same cause (instance identity, fold name
+What the 38 are: 34 are the platform's own, pinned on the DuckDB lane by the same cause (instance identity, fold name
 resolution, error positions and messages, the 0-based `indexOf`, `testBigFloatAbs`, the class `toString`, the
 variant-array `joinStrings`, the ExtendedInteger type, the harness's lost `$address`, a date-time out of range); the
-other 6 are Snowflake's own, each measured: `JAROWINKLER_SIMILARITY` answers an integer percentage (2), a lambda cannot
-read an enclosing lambda's parameter, which the comparator dedup needs (2), the driver's Timestamp drops a BC year's
-sign (1), and `Class.all()` over the platform's in-process metamodel (1).
+other 4 are Snowflake's own, each measured: `JAROWINKLER_SIMILARITY` answers an integer percentage (2), the driver's
+Timestamp drops a BC year's sign (1), and `Class.all()` over the platform's in-process metamodel (1).
 
 The account: warehouse `INTEGRATION_WH1`, database `INTEGRATION_DB1`, key-pair login; the JDBC driver
 (snowflake-jdbc 4.4.0) reports the product `Snowflake` (`Sessions.jdbcProduct`), version 10.36. Every spelling in
@@ -286,7 +286,7 @@ and the dialect's answer:
 | an integer is a `NUMBER(p,0)` at the value's own precision, which the driver hands back as a `Long`; `17.0` and `1.0` are `NUMBER(2,0)` (a trailing zero's scale is dropped, so their text is `17`) | the census reads `NUMBER(p,0)` as delivering an integer label; a decimal cell read as a `Long` becomes a `BigDecimal` (`normalize`); a Float or Decimal literal with a trailing zero spells its type (`CAST(17.0 AS NUMBER(3,1))`) |
 | a DOUBLE's text drops an integral value's `.0` (`-1`, not DuckDB's `-1.0`) | a Float cast to text appends it (`REGEXP_REPLACE(..., '^(-?[0-9]+)$', '\\1.0')`) |
 | lists are semi-structured `ARRAY`s of `VARIANT`; `ARRAY_AGG` drops a NULL, `OBJECT_INSERT` drops a NULL value's key; an `OBJECT`'s keys compare in name order | elements are cast where read; NULLs kept as JSON null; a list of structs sorts as an `ARRAY` of its fields in declared order (minBy/maxBy, sort with a key) |
-| a lambda reads no enclosing lambda's parameter; a correlated subquery over `FLATTEN` (scalar or lateral) is refused (`Unsupported subquery type`) | list statistics are `REDUCE`s: variance and standard deviation as DuckDB's own Welford update, mode as runs over the sorted elements (the earliest-seen on a tie, as DuckDB), median and `quantile_cont`; an explosion is a bare `LATERAL FLATTEN` over the positions, `SELECT *` over it spelled out; the comparator dedup is pinned |
+| a lambda reads no enclosing lambda's parameter; a correlated subquery over `FLATTEN` (scalar or lateral) is refused (`Unsupported subquery type`) | list statistics are `REDUCE`s: variance and standard deviation as DuckDB's own Welford update, mode as runs over the sorted elements (the earliest-seen on a tie, as DuckDB), median and `quantile_cont`; an explosion is a bare `LATERAL FLATTEN` over the positions, `SELECT *` over it spelled out; a `FILTER` or `TRANSFORM` whose lambda reads an enclosing lambda's names (the comparator dedup's) is a `REDUCE` whose accumulator carries them, its start written where they are in scope (an enclosing parameter is legal there, measured) |
 | regular expressions are POSIX: no `(?:`, no lazy quantifier, no inline flags | flags become parameters; `(?:` a plain group where no numbered group follows; `regexpIndexOf` is `REGEXP_INSTR` of the original pattern (its lowering's lazy prefix cannot run here) |
 | no printf | `format`'s `%s`, `%d` and `%.Nf` are unrolled (`%f` keeps Java's `-0.00`) |
 | `LISTAGG`, `MEDIAN` and the percentiles take no ordered window; `WITHIN GROUP` is refused beside an `OVER`'s `ORDER BY`; an `ARRAY_AGG` over an ordered whole-partition frame keeps no order | a cumulative ordered string aggregate is `ARRAY_TO_STRING(ARRAY_AGG(..) OVER (...))`; a whole-partition one the partition's `LISTAGG ... WITHIN GROUP` |
