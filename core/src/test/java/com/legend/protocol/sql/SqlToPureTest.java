@@ -241,6 +241,37 @@ class SqlToPureTest {
                 .getMessage());
     }
 
+    // ------------------------------------------------------------------ functions and casts
+
+    @Test
+    void roundIsHalfAwayFromZeroAsPostgresNumericRounds() {
+        // Pure's round breaks ties to even; Postgres's numeric round goes away from zero
+        assertEquals("#>{s::DB.T}#->extend(~[r:r|if($r.ID * 1.5D >= 0, |floor(($r.ID * 1.5D) + 0.5D),"
+                + " |(($r.ID * 1.5D) - 0.5D)->ceiling())])->select(~[r])",
+                pure("select round(ID * 1.5) as r from tb('s::DB.T')"));
+        assertEquals("round(x, n) is not supported yet (Pure's round is half to even, Postgres's half away from zero)",
+                refusal("select round(age * 1.5, 1) from tb('s::DB.T')").getMessage());
+    }
+
+    @Test
+    void nullifAndGreatestSpellPostgresNullsOut() {
+        // greatest ignores a NULL: age's NULL gives ID
+        assertEquals("#>{s::DB.T}#->extend(~[d:r|if($r.dept == 'eng', |[], |$r.dept), g:r|if($r.age->isEmpty(), |$r.ID,"
+                        + " |if($r.ID >= $r.age->toOne(), |$r.ID, |$r.age))])->select(~[d, g])",
+                pure("select nullif(dept, 'eng') as d, greatest(ID, age) as g from tb('s::DB.T')"));
+    }
+
+    @Test
+    void castsConvertWhereOnePureFunctionGivesPostgresAnswer() {
+        assertEquals("#>{s::DB.T}#->extend(~[d:r|%2024-02-29, t:r|$r.ID->toString(), f:r|if($r.age->isEmpty(), |[],"
+                        + " |$r.age->toOne()->toFloat())])->select(~[d, t, f])",
+                pure("select '2024-02-29'::date as d, ID::text as t, age::double precision as f from tb('s::DB.T')"));
+        assertEquals("casts from string to integer are not supported yet",
+                refusal("select dept::integer from tb('s::DB.T')").getMessage());
+        assertEquals("value \"3000000000\" is out of range for type integer",
+                refusal("select '3000000000'::int from tb('s::DB.T')").getMessage());
+    }
+
     // ------------------------------------------------------------------ Postgres's NULL rules
 
     @Test
