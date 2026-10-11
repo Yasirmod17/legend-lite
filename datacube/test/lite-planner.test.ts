@@ -8,8 +8,8 @@ import {
   fileUrlToPath,
   pathToFileUrl,
   PlannerUnavailableError,
-  WasmPlanner,
-} from '../src/wasm-planner.ts';
+  LitePlanner,
+} from '../src/lite-planner.ts';
 
 /** A module's OK answer: the SQL and its result type (here, typing nothing). */
 function ok(sql: string): string {
@@ -85,7 +85,7 @@ function planner(
     model?: string;
   } = {},
 ) {
-  return new WasmPlanner({
+  return new LitePlanner({
     model: extra.model ?? '###Relational\nDatabase trades::DB ( Table T ( a VARCHAR(1) ) )',
     runtime: 'trades::RT',
     ...(extra.cache === undefined ? {} : { cache: extra.cache }),
@@ -93,7 +93,7 @@ function planner(
   });
 }
 
-describe('WasmPlanner', () => {
+describe('LitePlanner', () => {
   it('returns the SQL an OK answer carries', async () => {
     const p = planner(() => ok('SELECT t0.a FROM T AS t0'));
     assert.equal((await p.planText('grammar')).sql,
@@ -313,7 +313,7 @@ describe('WasmPlanner', () => {
       // PlanError means "your query is wrong" and is shown to the
       // user. A missing asset is an operational fault; conflating
       // them files every failed deploy as a bad query.
-      const p = new WasmPlanner({
+      const p = new LitePlanner({
         model: 'm',
         runtime: 'r',
         loadRuntime: () => Promise.reject(new Error('404')),
@@ -328,7 +328,7 @@ describe('WasmPlanner', () => {
 
   it('lets a retry succeed after a transient load failure', async () => {
     let attempt = 0;
-    const p = new WasmPlanner({
+    const p = new LitePlanner({
       model: 'm',
       runtime: 'r',
       loadRuntime: async () => {
@@ -378,7 +378,7 @@ describe('WasmPlanner', () => {
   });
 });
 
-describe('WasmPlanner off the main thread: the models its worker holds', () => {
+describe('LitePlanner off the main thread: the models its worker holds', () => {
   /**
    * A stand-in Worker answering as planner-worker.ts does, over a fake module of its own: each worker its own table of
    * models held, as a real worker's module is. Node has no Worker; the planner uses one when `Worker` exists.
@@ -410,7 +410,7 @@ describe('WasmPlanner off the main thread: the models its worker holds', () => {
     }
   }
   const g = globalThis as unknown as { Worker?: unknown };
-  const workerPlanner = (): WasmPlanner => new WasmPlanner({ model: 'm', runtime: 'r', workerUrl: 'worker.js', cache: false });
+  const workerPlanner = (): LitePlanner => new LitePlanner({ model: 'm', runtime: 'r', workerUrl: 'worker.js', cache: false });
 
   it('dispose lets its model go to the worker running, and starts none to do it', async () => {
     FakeWorker.made = [];
@@ -443,7 +443,7 @@ describe('WasmPlanner off the main thread: the models its worker holds', () => {
   });
 });
 
-describe('WasmPlanner: a plan in flight while its model changes', () => {
+describe('LitePlanner: a plan in flight while its model changes', () => {
   it('is planned against the model and runtime it began with, and not kept for the new model', async () => {
     const asked: string[] = [];
     const p = planner((m, q, r) => { asked.push(`${m}|${q}|${r}`); return ok('SELECT 1'); }, { model: 'old' });
@@ -457,7 +457,7 @@ describe('WasmPlanner: a plan in flight while its model changes', () => {
 });
 
 describe('fileUrlToPath', () => {
-  // Node's own fileURLToPath is the reference; WasmPlanner cannot import
+  // Node's own fileURLToPath is the reference; LitePlanner cannot import
   // it (it is bundled for the browser too). Both platform modes are
   // checked on every platform, so a Windows-only fault fails on a Mac.
   const VALID = [
@@ -510,7 +510,7 @@ describe('pathToFileUrl', () => {
   }
 });
 
-describe('WasmPlanner.withModel: another source on the page, the same module', () => {
+describe('LitePlanner.withModel: another source on the page, the same module', () => {
   it('plans over its own model and runtime, loading the module once', async () => {
     let loads = 0;
     const asked: string[] = [];

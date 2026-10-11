@@ -15,7 +15,7 @@ import {
 } from '../src/saved-queries.ts';
 import type { Query } from '../../query-store/src/wire.ts';
 import { sourceColumns } from '../src/source-columns.ts';
-import { WasmPlanner } from '../src/wasm-planner.ts';
+import { LitePlanner } from '../src/lite-planner.ts';
 import {
   agg, col, colSpecs, findAll, fn, from, isLambda, lambda, toJson, variable, type ValueSpecification,
 } from '../../pure-protocol/src/index.ts';
@@ -56,12 +56,12 @@ after(async () => {
 });
 
 /** The page's steps: parse, bind the saved values, read through the context, enumerations as names. */
-async function opened(q: Query): Promise<{ source: ValueSpecification; planner: WasmPlanner }> {
+async function opened(q: Query): Promise<{ source: ValueSpecification; planner: LitePlanner }> {
   const context = contextOf(q, elements);
   const values = new Map<string, ValueSpecification>();
   for (const v of q.defaultParameterValues ?? []) values.set(v.name, (await parser.parse(`|${v.content}`)).body[0]!);
   let source = sourceOf(await parser.parse(q.content), values);
-  const planner = new WasmPlanner({
+  const planner = new LitePlanner({
     model: MODEL, runtime: context.runtime, mapping: context.mapping,
     enumerations: [...enumerationsOf(elements)], assetBaseUrl: runfileDirUrl('WASM_PLANNER'), cache: false,
   });
@@ -70,7 +70,7 @@ async function opened(q: Query): Promise<{ source: ValueSpecification; planner: 
   return { source, planner };
 }
 
-async function rows(planner: WasmPlanner, query: ValueSpecification): Promise<unknown[][]> {
+async function rows(planner: LitePlanner, query: ValueSpecification): Promise<unknown[][]> {
   const plan = await planner.plan(lambda([], query));
   const table = await engine.run(plan.sql, 0);
   return Array.from({ length: table.rowCount }, (_, i) => table.columns.map((c) => c.values[i]));

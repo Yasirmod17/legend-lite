@@ -450,7 +450,7 @@ write_source_files(
 
 # THE CUBE'S WASM DIFFERENTIAL: DataCube's serialiser writes the queries, the
 # JVM answers them (a build output), and the test plans them through the
-# product's WasmPlanner over //wasm:planner and compares.
+# product's LitePlanner over //wasm:planner and compares.
 js_binary(
     name = "emit_cube_queries",
     data = [":src"],

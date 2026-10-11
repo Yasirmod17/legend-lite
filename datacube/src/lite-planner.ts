@@ -60,7 +60,7 @@ interface TeavmRuntime {
   ): Promise<TeavmModule>;
 }
 
-export interface WasmPlannerOptions {
+export interface LitePlannerOptions {
   /** Pure model source: database, connection, runtime. */
   readonly model: string;
   /** Runtime to plan against, e.g. 'trades::RT'. */
@@ -126,8 +126,12 @@ interface Transport {
   generation: number;
 }
 
-export class WasmPlanner implements Planner, TableModels, ModelWriter {
-  #options: WasmPlannerOptions;
+/**
+ * legend-lite's own planner, in-process: named for what it is, not for how a tab delivers its module (WebAssembly). Its
+ * module answers on a worker, or in-thread (docs/DATACUBE_HEADLESS_PYTHON_DESIGN_2026_10_11.md §3).
+ */
+export class LitePlanner implements Planner, TableModels, ModelWriter {
+  #options: LitePlannerOptions;
   readonly #cache = new Map<string, Plan>();
   readonly #types = new Map<string, PlanColumn[]>();
   /**
@@ -140,7 +144,7 @@ export class WasmPlanner implements Planner, TableModels, ModelWriter {
   /** This planner's model, held by the module (compiled once, every plan against it), and under which module. */
   #held: { readonly handle: Promise<number>; readonly generation: number } | undefined;
 
-  constructor(options: WasmPlannerOptions) {
+  constructor(options: LitePlannerOptions) {
     this.#options = options;
   }
 
@@ -148,8 +152,8 @@ export class WasmPlanner implements Planner, TableModels, ModelWriter {
    * A planner over ANOTHER model -- another source on the page (page/cube-page.ts) -- on the
    * same module and worker as this one, with caches of its own. Nothing is loaded twice.
    */
-  withModel(model: string, runtime: string, how: ModelOptions = {}): WasmPlanner {
-    const other = new WasmPlanner({ ...readsOf(this.#options), model, runtime, ...readsHow(how) });
+  withModel(model: string, runtime: string, how: ModelOptions = {}): LitePlanner {
+    const other = new LitePlanner({ ...readsOf(this.#options), model, runtime, ...readsHow(how) });
     other.#t = this.#t;
     other.#borrowed = true;
     return other;
@@ -641,7 +645,7 @@ export class WasmPlanner implements Planner, TableModels, ModelWriter {
  * opened there is `C:\C:\x\y` (CI, 2026-09-23 — every case of the
  * WASM differential refused with that ENOENT). Pinned against
  * `fileURLToPath(url, { windows })` in both modes by
- * test/wasm-planner.test.ts, on every platform.
+ * test/lite-planner.test.ts, on every platform.
  */
 export function fileUrlToPath(url: string, windows: boolean): string {
   const u = new URL(url);
@@ -663,7 +667,7 @@ export function fileUrlToPath(url: string, windows: boolean): string {
  * the same reason `fileUrlToPath` exists: this file cannot import
  * `node:url`. A trailing separator is kept, so a directory stays a
  * directory to resolve against. Pinned against Node's own in both
- * platform modes by test/wasm-planner.test.ts.
+ * platform modes by test/lite-planner.test.ts.
  */
 export function pathToFileUrl(path: string, windows: boolean): string {
   // Node's own steps: escape what `pathname` would not, then let URL
@@ -702,13 +706,13 @@ function onWindows(): boolean {
  * HTTP planner surfaces, so the two transports are indistinguishable.
  */
 /** A planner's options without what its model said: another model brings its own. */
-function readsOf(o: WasmPlannerOptions): WasmPlannerOptions {
+function readsOf(o: LitePlannerOptions): LitePlannerOptions {
   const { mapping: _mapping, enumerations: _enumerations, ...rest } = o;
   return rest;
 }
 
 /** What a model says beside its text, as options (legend-lite types BIT Boolean itself: no bitColumns, S23). */
-function readsHow(how: ModelOptions): Partial<WasmPlannerOptions> {
+function readsHow(how: ModelOptions): Partial<LitePlannerOptions> {
   return {
     ...(how.mapping === undefined ? {} : { mapping: how.mapping }),
     ...(how.enumerations === undefined ? {} : { enumerations: how.enumerations }),
