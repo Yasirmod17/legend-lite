@@ -70,7 +70,10 @@ public final class Databricks extends AnsiSqlRenderer {
         return List.of(new CarrierStrategies(CarrierStrategies.Caps.DATABRICKS),
                 new UnqualifyPivotArgs(), new CheckedDefectsToLists(),
                 new SubstringClamp(), new AggregatesDeliverDouble(java.util.Set.of(SqlAgg.Fn.AVG)),
-                new ConstantKeysAsExpressions(), new RootNumericTypes());
+                new ConstantKeysAsExpressions(), new RootNumericTypes(),
+                // a large repeated subexpression written once, a constant only: Spark refuses most correlated
+                // subqueries (2026-10-11: every dialect)
+                new CommonSubexpressions(true));
     }
 
     /** Several lists exploded side by side: DuckDB's unnests in one select are ALIGNED (the shorter padded with NULL),
@@ -907,7 +910,7 @@ public final class Databricks extends AnsiSqlRenderer {
                  PURE_SPLIT_PART, LIST_EXISTS, ALL_DISTINCT, LIST_FOR_ALL, TO_VARIANT, VARIANT_ELEMENTS, VARIANT_GET,
                  LIST_ZIP, LIST_DISTINCT, LIST_APPEND, LIST_SUM, LIST_MIN, LIST_MAX, LIST_AVG, LIST_MEDIAN, LIST_MODE,
                  LIST_SORT, LIST_SORT_DESC, LIST_TAIL, LIST_INIT, LIST_PRODUCT, LIST_REDUCE, LIST_SLICE,
-                 LIST_BOOL_AND, LIST_BOOL_OR, TYPEOF -> super.call(writer, c, parentPrec);
+                 LIST_BOOL_AND, LIST_BOOL_OR, TYPEOF, FLOAT_CANON -> super.call(writer, c, parentPrec);
 
             // NULL-ignoring, as DuckDB's concat (Spark's concat is NULL if any argument is)
             case CONCAT -> writer.append("concat_ws('', ").join(flattenConcat(a), ", ", this::asText).append(")");

@@ -133,7 +133,10 @@ public final class Snowflake extends AnsiSqlRenderer {
         return List.of(new CarrierStrategies(CarrierStrategies.Caps.SNOWFLAKE), new PivotAsGroupBy(), new CheckedDefectsToLists(),
                 new SubstringClamp(), new ExplosionMarkers.LateralUnnestAsMarker(),
                 new ExplosionMarkers.SelectListUnnestAsLateral(), new ExplosionMarkers.StarOverExplosionUnwrapped(),
-                new ConstantKeysAsExpressions(), new RootNumericTypes());
+                new ConstantKeysAsExpressions(), new RootNumericTypes(),
+                // a large repeated subexpression written once, a constant only: a correlated subquery is refused here
+                // where it cannot be decorrelated (2026-10-11: every dialect)
+                new CommonSubexpressions(true));
     }
 
     @Override
@@ -1249,7 +1252,7 @@ public final class Snowflake extends AnsiSqlRenderer {
                  GREATEST, LEAST, LEFT, LENGTH, LEVENSHTEIN, LN, LOWER, LTRIM, MAKE_DATE, MD5, POW, RADIANS,
                  REPEAT_STR, REPLACE, REVERSE_STRING, RIGHT, RTRIM, SHA1, SIN, SINH, SPLIT_PART, SQRT,
                  STARTS_WITH, ENDS_WITH, SUBSTRING, TAN, TANH, TRIM, UPPER, LIST_LENGTH, LIST_REVERSE, MAP_KEYS,
-                 ENCODE_BASE64, DECODE_BASE64, JSON_ARRAY_LENGTH -> super.call(writer, c, parentPrec);
+                 ENCODE_BASE64, DECODE_BASE64, JSON_ARRAY_LENGTH, FLOAT_CANON -> super.call(writer, c, parentPrec);
 
             // a list parameter is bound as one array on the base (= ANY(?)): Snowflake binds none
             case IN -> {

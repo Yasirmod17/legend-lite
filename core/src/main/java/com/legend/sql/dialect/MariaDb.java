@@ -158,6 +158,13 @@ public class MariaDb extends AnsiSqlRenderer {
                 "SET SESSION div_precision_increment = 30");
     }
 
+    /** A Float's literal spelling is this dialect's own, the value read once ({@link #floatLayout}): the portable one
+     *  reads the value's text some fifty times, each read a long expression here (2026-10-11). */
+    @Override
+    protected boolean spellsFloatCanon() {
+        return true;
+    }
+
     /** No native pivot: a static pivot is emulated by the carrier strategies, so a dynamic one is discovered first. */
     @Override
     public boolean needsStaticPivot() {
@@ -166,15 +173,22 @@ public class MariaDb extends AnsiSqlRenderer {
 
     /** The portable carrier strategies, star exclusions spelled out, the substring start clamp, explosions placed as
      *  markers in FROM (a JSON_TABLE), QUALIFY as a wrapping subselect, and a constant GROUP BY or ORDER BY key as an
-     *  expression (an integer one is a position). A repeated subexpression is NOT bound once here (CommonSubexpressions,
-     *  SQLite's): its binding would be a correlated table function nested per reuse, and MariaDB's planner grew past
-     *  11 GB on ten of them (measured, the server killed). */
+     *  expression (an integer one is a position). A repeated subexpression is bound once only when it reads no column
+     *  (CommonSubexpressions' constants, 2026-10-11): a correlated binding would be a table function nested per reuse,
+     *  and MariaDB's planner grew past 11 GB on ten of them (measured, the server killed). MySQL's derived tables read
+     *  the outer row: it binds every one ({@link #bindsCorrelated}). */
     @Override
     protected List<com.legend.sql.SqlRewriter> passes() {
         return List.of(new CarrierStrategies(CarrierStrategies.Caps.MARIADB), new StarExceptToColumns(),
                 new SubstringClamp(), new ExplosionMarkers.LateralUnnestAsMarker(),
                 new ExplosionMarkers.SelectListUnnestAsLateral(), new ExplosionMarkers.StarOverExplosionUnwrapped(),
-                new QualifyToSubselect(true), new ConstantKeysAsExpressions());
+                new QualifyToSubselect(true), new ConstantKeysAsExpressions(),
+                new CommonSubexpressions(!bindsCorrelated()));
+    }
+
+    /** Whether a repeated subexpression that reads a column is bound once too (a derived table reading the outer row). */
+    protected boolean bindsCorrelated() {
+        return false;
     }
 
     @Override
@@ -1577,6 +1591,12 @@ public class MariaDb extends AnsiSqlRenderer {
      * laid out again, the value bound once through a one-row JSON_TABLE (a derived table could not correlate).
      */
     private SqlWriter.Piece floatText(SqlWriter.Piece value) {
+        return floatLayout(value, false);
+    }
+
+    /** {@link #floatText}, or with {@code canon} Pure's literal spelling ({@code SqlFn.FLOAT_CANON}): fixed point at
+     *  every exponent (Pure never writes one) and every zero {@code 0.0}. */
+    private SqlWriter.Piece floatLayout(SqlWriter.Piece value, boolean canon) {
         // __f.t: |v| as MariaDB's text; __f.n: v < 0
         String t = "__f.\"t\"";
         String mant = "SUBSTRING_INDEX(" + t + ", 'e', 1)";
@@ -1595,9 +1615,10 @@ public class MariaDb extends AnsiSqlRenderer {
                 + " ELSE '0' END) ELSE CONCAT('0.', REPEAT('0', -" + x + " - 1), " + d + ") END";
         String sci = "CONCAT(LEFT(" + d + ", 1), CASE WHEN CHAR_LENGTH(" + d + ") > 1 THEN CONCAT('.', SUBSTRING(" + d
                 + ", 2)) ELSE '' END, 'e', CASE WHEN " + x + " < 0 THEN '-' ELSE '+' END, LPAD(ABS(" + x + "), 2, '0'))";
-        return w -> w.append("(SELECT CASE WHEN __f.\"t\" IS NULL THEN NULL WHEN __f.\"t\" = '0' THEN CASE WHEN __f.\"n\"")
-                .append(" THEN '-0.0' ELSE '0.0' END ELSE CONCAT(CASE WHEN __f.\"n\" THEN '-' ELSE '' END, (SELECT CASE")
-                .append(" WHEN " + x + " BETWEEN -4 AND 15 THEN " + fixed + " ELSE " + sci + " END FROM ")
+        String zero = canon ? "'0.0'" : "CASE WHEN __f.\"n\" THEN '-0.0' ELSE '0.0' END";
+        String layout = canon ? fixed : "CASE WHEN " + x + " BETWEEN -4 AND 15 THEN " + fixed + " ELSE " + sci + " END";
+        return w -> w.append("(SELECT CASE WHEN __f.\"t\" IS NULL THEN NULL WHEN __f.\"t\" = '0' THEN " + zero)
+                .append(" ELSE CONCAT(CASE WHEN __f.\"n\" THEN '-' ELSE '' END, (SELECT " + layout + " FROM ")
                 .piece(jsonTable(v -> v.append("JSON_ARRAY(" + digits + ", " + exp + ")"),
                         "'$' COLUMNS (\"d\" VARCHAR(64) PATH '$[0]', \"x\" INT PATH '$[1]')", "__g"))
                 .append(")) END FROM ").piece(jsonTable(v -> v.append("JSON_ARRAY(CAST(ABS(").piece(value)
@@ -1687,6 +1708,10 @@ public class MariaDb extends AnsiSqlRenderer {
             case BIT_NOT -> writer.append("CAST(~ ").expr(a.get(0), 7).append(" AS SIGNED)");
             case PARSE_INT -> writer.piece(parseInt(a.get(0)));
             case BOOL_TO_TEXT -> writer.piece(textOf(w -> w.expr(a.get(0), 0), SqlType.Scalar.BOOLEAN));
+            // a Float's literal spelling, the value read once ({@link #floatLayout}): the portable decomposition reads
+            // the text some fifty times, each read this dialect's long text of a double (545 KB for a five-element
+            // mixed list, measured 2026-10-11)
+            case FLOAT_CANON -> writer.piece(floatLayout(w -> w.expr(a.get(0), 0), true));
             // NULL-skipping, as DuckDB's (MariaDB's GREATEST/LEAST are NULL for any NULL argument)
             case GREATEST, LEAST -> writer.piece(nullSkipping(c.fn() == SqlFn.GREATEST ? "GREATEST" : "LEAST", a));
 

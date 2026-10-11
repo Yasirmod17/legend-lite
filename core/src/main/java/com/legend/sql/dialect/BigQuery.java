@@ -102,6 +102,13 @@ public final class BigQuery extends AnsiSqlRenderer {
      *  the binding's one-row derived table under a scalar subquery correlates here, measured). QUALIFY and
      *  PERCENTILE_* OVER are native; no root numeric cast: a parameterized type cannot be cast to, and the driver
      *  reports no NUMERIC scale. */
+    /** A Float's literal spelling over the double's text bound once (its text is an expression here: a five-element
+     *  mixed list's sort was 436 KB, measured 2026-10-11). */
+    @Override
+    protected boolean bindsFloatText() {
+        return true;
+    }
+
     @Override
     protected List<com.legend.sql.SqlRewriter> passes() {
         return List.of(new CarrierStrategies(CarrierStrategies.Caps.BIGQUERY), new FoldsAsRecursiveCtes(),
@@ -1317,7 +1324,7 @@ public final class BigQuery extends AnsiSqlRenderer {
                  // Spellings.BIGQUERY rows (ACOS/ASIN raise outside [-1, 1] as DuckDB's do; SPLIT('', d) is [] on both)
                  ABS, ACOS, ASIN, ATAN, ATAN2, CBRT, CHR, COALESCE, COS, COSH, COT, SIN, SINH, TAN, TANH, LOWER, UPPER,
                  LTRIM, RTRIM, TRIM, REPLACE, STARTS_WITH, ENDS_WITH, STRPOS, SPLIT, ASCII_CODE, REVERSE_STRING,
-                 REPEAT_STR, LEVENSHTEIN, FLOOR_RAW, MATCHES, SUBSTRING, LIST_REVERSE, LIST_LENGTH ->
+                 REPEAT_STR, LEVENSHTEIN, FLOOR_RAW, MATCHES, SUBSTRING, LIST_REVERSE, LIST_LENGTH, FLOAT_CANON ->
                     super.call(writer, c, parentPrec);
             case IN -> {
                 if (a.size() == 2 && a.get(1) instanceof SqlExpr.PlanParam p) {

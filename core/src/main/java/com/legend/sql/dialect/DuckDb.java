@@ -270,7 +270,9 @@ public final class DuckDb extends AnsiSqlRenderer {
                         new QuantileOrder(),
                         new UnqualifyPivotArgs(), new FoldToListReduce(),
                         new CheckedDefectsToLists(),
-                        new SubstringClamp(), new RawSqlAdapt()));
+                        new SubstringClamp(), new RawSqlAdapt(),
+                        // a large repeated subexpression written once (2026-10-11: every dialect)
+                        new CommonSubexpressions()));
         if (Boolean.getBoolean("legend.exec.engineScanOrder")) {
             ps.add(new StableScanOrder());
         }

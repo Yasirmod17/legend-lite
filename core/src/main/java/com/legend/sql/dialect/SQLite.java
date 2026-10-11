@@ -91,6 +91,14 @@ public final class SQLite extends AnsiSqlRenderer {
      *  partition ordered sets as correlated subqueries, explosions placed as markers in FROM (a json_each), QUALIFY as
      *  a wrapping subselect, a constant GROUP BY or ORDER BY key as an expression (an integer one is a position), and a
      *  large repeated subexpression written once (a statement is capped at 1,000,000 bytes, measured). */
+    /** A Float's literal spelling over the double's text bound ONCE (the portable spelling reads the text some fifty
+     *  times, each read this dialect's shortest-digits expression, which no common-subexpression binding counts as
+     *  large: a five-element mixed list's sort was 1.6 MB, past the 1 MB statement cap -- measured 2026-10-11). */
+    @Override
+    protected boolean bindsFloatText() {
+        return true;
+    }
+
     @Override
     protected List<com.legend.sql.SqlRewriter> passes() {
         return List.of(new CarrierStrategies(CarrierStrategies.Caps.SQLITE), new StarExceptToColumns(),
@@ -1348,7 +1356,7 @@ public final class SQLite extends AnsiSqlRenderer {
                  // Spellings.SQLITE rows
                  ABS, ATAN, ATAN2, COS, COSH, COT, SIN, SINH, TAN, TANH, DEGREES, RADIANS, EXP, LN, LOG10,
                  SQRT, POW, LOWER, UPPER, LTRIM, RTRIM, TRIM, REPLACE, REVERSE_STRING, CHR, FLOOR_RAW,
-                 SUBSTRING, STRPOS, LIST_LENGTH, JSON_ARRAY_LENGTH -> super.call(writer, c, parentPrec);
+                 SUBSTRING, STRPOS, LIST_LENGTH, JSON_ARRAY_LENGTH, FLOAT_CANON -> super.call(writer, c, parentPrec);
             case IN -> {
                 if (a.size() == 2 && a.get(1) instanceof SqlExpr.PlanParam p) {
                     throw listParameter(p);

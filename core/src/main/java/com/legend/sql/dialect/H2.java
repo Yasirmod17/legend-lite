@@ -36,6 +36,9 @@ public class H2 extends AnsiSqlRenderer {
                 new java.util.ArrayList<>(super.passes());
         ps.add(new LateralExplodeToUnion());
         ps.add(new AggregatesDeliverDouble(java.util.Set.of(com.legend.sql.SqlAgg.Fn.AVG)));
+        // a large repeated subexpression written once, a constant only: a derived table reads no outer row here
+        // (2026-10-11: every dialect)
+        ps.add(new CommonSubexpressions(true));
         // LAST: every source the passes above introduced is in scope when
         // references take their source's spelling (Phase 1, batch 135)
         ps.add(new SourceSpelling());

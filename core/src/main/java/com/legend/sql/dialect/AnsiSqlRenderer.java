@@ -108,9 +108,26 @@ public class AnsiSqlRenderer implements SqlDialect {
      *  scope, and every reference they built reads what the store holds. One owner, so no
      *  dialect's pass list can leave the reads out. */
     protected final java.util.List<com.legend.sql.SqlRewriter> renderPasses() {
-        java.util.List<com.legend.sql.SqlRewriter> ps = new java.util.ArrayList<>(passes());
+        java.util.List<com.legend.sql.SqlRewriter> ps = new java.util.ArrayList<>();
+        // a Float's literal spelling, expanded before every other pass unless this dialect spells it itself
+        if (!spellsFloatCanon()) {
+            ps.add(new FloatCanonText.Expansion(bindsFloatText()));
+        }
+        ps.addAll(passes());
         ps.add(new StoredReads(this::readsStored));
         return java.util.List.copyOf(ps);
+    }
+
+    /** Whether this dialect writes {@link com.legend.sql.SqlFn#FLOAT_CANON} itself; else it is expanded before every
+     *  other pass ({@link FloatCanonText.Expansion}) to the portable spelling over the double's text. */
+    protected boolean spellsFloatCanon() {
+        return false;
+    }
+
+    /** Whether that expansion reads the double's text from a one-row derived table, written once (a dialect whose
+     *  double text is a long expression and whose derived tables read the row around them). */
+    protected boolean bindsFloatText() {
+        return false;
     }
 
     /** Whether this dialect reads a column STORED as {@code t} other than as the database holds
@@ -876,6 +893,9 @@ public class AnsiSqlRenderer implements SqlDialect {
             // boolean text: the reference cast spelling (semantic node —
             // dialects with a diverging bool print override)
             case BOOL_TO_TEXT -> writer.append("CAST(").expr(a.get(0), 0).append(" AS VARCHAR)");
+            // a Float's literal spelling: the portable decomposition over the double's text (a dialect whose double
+            // text is long spells it once, its own way)
+            case FLOAT_CANON -> writer.expr(FloatCanonText.of(a.get(0)), parentPrec);
             // Idiom points — no ANSI spelling; the dialect decides or dies.
             case UNNEST -> unnestProjection(writer, a);
             case LIST_FILTER, LIST_TRANSFORM, LIST_CONCAT, LIST_GET,

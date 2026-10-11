@@ -160,7 +160,9 @@ public final class Postgres extends AnsiSqlRenderer {
                 new StarExceptToColumns(),
                 new WholePartitionOrderedSets(),
                 new SubstringClamp(), new AggregatesDeliverDouble(DOUBLE_AGGREGATES), new QualifyToSubselect(true),
-                new ConstantKeysAsExpressions(), new RootNumericTypes());
+                new ConstantKeysAsExpressions(), new RootNumericTypes(),
+                // a large repeated subexpression written once (2026-10-11: every dialect)
+                new CommonSubexpressions());
     }
 
     /** Postgres 12+ evaluates a {@code MATERIALIZED} CTE once. */
@@ -794,7 +796,7 @@ public final class Postgres extends AnsiSqlRenderer {
                  PLUS, MINUS, TIMES, NEGATE, IS_NULL, IS_NOT_NULL, IN, IS_DISTINCT_FROM,
                  NULL_SAFE_EQUAL, NULL_SAFE_NOT_EQUAL, XOR, CONCAT, CONCAT_JOIN, PARSE_INT,
                  PARSE_DATE, PI, CEILING, FLOOR, SIGN, LPAD, RPAD, UC_FIRST, LC_FIRST, TODAY,
-                 DATE_TRUNC_DAY, BOOL_TO_TEXT, CURRENT_USER_FN,
+                 DATE_TRUNC_DAY, BOOL_TO_TEXT, FLOAT_CANON, CURRENT_USER_FN,
                  // bit operators and rounding ride the base's hooks (overridden below);
                  // HASH's hook walls: Postgres has no signed 64-bit hash of the reference
                  BIT_AND, BIT_OR, BIT_XOR, BIT_SHIFT_LEFT, BIT_SHIFT_RIGHT, ROUND, HASH,

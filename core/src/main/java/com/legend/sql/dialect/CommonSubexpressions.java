@@ -30,8 +30,24 @@ import java.util.Set;
  * narrowing, a parse, a range check) and no fresh value, and nothing naming a lambda's parameter (it is bound inside
  * the lambda, never above it; a lambda's body is bound within itself first). A projection with an aggregate or window
  * anywhere is left as it is, and so is an explosion.
+ *
+ * <p>CONSTANTS ONLY (2026-10-11, every dialect runs this pass): where a derived table may not read the row around it
+ * (MariaDB's "Unknown column", H2's, Snowflake's and Databricks' unsupported correlated subqueries), only a node that
+ * reads no column is bound -- a literal's text, the bulk of a mixed list's spellings.
  */
 final class CommonSubexpressions extends com.legend.sql.SqlRewriter {
+
+    private final boolean constantsOnly;
+
+    /** Every movable repeated node bound, a correlated one included: the database's derived tables read the row. */
+    CommonSubexpressions() {
+        this(false);
+    }
+
+    /** {@code constantsOnly}: only a node that reads no column is bound. */
+    CommonSubexpressions(boolean constantsOnly) {
+        this.constantsOnly = constantsOnly;
+    }
 
     /** The expanded size, in nodes, from which a repeated node is bound. */
     private static final int MIN_SIZE = 40;
@@ -66,13 +82,21 @@ final class CommonSubexpressions extends com.legend.sql.SqlRewriter {
 
     /** {@code e} with its largest repeated movable node bound once, recursively; {@code e} itself when it has none. */
     private SqlExpr bound(SqlExpr e0) {
-        SqlExpr e = lambdasBound(e0, new IdentityHashMap<>());
-        Set<String> params = new HashSet<>();
+        return bound(e0, Set.of());
+    }
+
+    /** {@code e0} bound, never a node naming one of {@code enclosing}: the parameters of the lambdas around it (a
+     *  lambda's parameter is no column a derived table inside its body can read -- DuckDB: "Referenced column not
+     *  found", measured 2026-10-11 when every dialect took this pass). */
+    private SqlExpr bound(SqlExpr e0, Set<String> enclosing) {
+        SqlExpr e = lambdasBound(e0, new IdentityHashMap<>(), enclosing);
+        Set<String> params = new HashSet<>(enclosing);
         Map<SqlExpr, Integer> uses = new IdentityHashMap<>();
         visit(e, uses, params);
         Map<SqlExpr, Long> sizes = new IdentityHashMap<>();
         Map<SqlExpr, Boolean> movable = new IdentityHashMap<>();
         Map<SqlExpr, Set<String>> names = new IdentityHashMap<>();
+        Map<SqlExpr, Boolean> readsColumn = new IdentityHashMap<>();
         SqlExpr best = null;
         long bestSize = 0;
         for (Map.Entry<SqlExpr, Integer> u : uses.entrySet()) {
@@ -81,7 +105,8 @@ final class CommonSubexpressions extends com.legend.sql.SqlRewriter {
             }
             long size = size(u.getKey(), sizes);
             if (size >= MIN_SIZE && size > bestSize && movable(u.getKey(), movable)
-                    && java.util.Collections.disjoint(names(u.getKey(), names), params)) {
+                    && java.util.Collections.disjoint(names(u.getKey(), names), params)
+                    && (!constantsOnly || !readsColumn(u.getKey(), readsColumn))) {
                 best = u.getKey();
                 bestSize = size;
             }
@@ -93,8 +118,8 @@ final class CommonSubexpressions extends com.legend.sql.SqlRewriter {
         SqlType type = best.type() instanceof com.legend.sql.TypeFact.Typed t ? t.type() : null;
         SqlExpr ref = type == null ? SqlExpr.Column.derived(alias, "v")
                 : SqlExpr.Column.of(alias, "v", type, true, com.legend.sql.OutputCol.Origin.DERIVED);
-        SqlExpr outer = bound(replace(e, best, ref, new IdentityHashMap<>()));
-        SqlExpr inner = bound(best);
+        SqlExpr outer = bound(replace(e, best, ref, new IdentityHashMap<>()), enclosing);
+        SqlExpr inner = bound(best, enclosing);
         SqlSelect bind = new SqlSelect(List.of(new SqlSelect.Projection(inner, "v", column(inner))), false,
                 new SqlSource.Dual(), null, List.of(), null, null, List.of(), null, null, List.of());
         SqlSelect use = new SqlSelect(List.of(new SqlSelect.Projection(outer, "v", column(outer))), false,
@@ -129,21 +154,28 @@ final class CommonSubexpressions extends com.legend.sql.SqlRewriter {
     }
 
     /** {@code e} with each lambda's body bound within itself. */
-    private SqlExpr lambdasBound(SqlExpr e, Map<SqlExpr, SqlExpr> done) {
+    private SqlExpr lambdasBound(SqlExpr e, Map<SqlExpr, SqlExpr> done, Set<String> enclosing) {
         SqlExpr known = done.get(e);
         if (known != null) {
             return known;
         }
         SqlExpr out;
         if (e instanceof SqlExpr.Lambda l) {
-            SqlExpr body = bound(l.body());
+            // a body bound within itself is a scalar subquery around it, and no subquery inside a lambda reads the
+            // lambda's parameters (DuckDB: "Referenced column not found", measured 2026-10-11 when every dialect took
+            // this pass): a body is bound within itself only where it names no parameter. A lambda-less dialect
+            // unrolls its lambdas before this pass, so it never meets one
+            Set<String> inside = new HashSet<>(enclosing);
+            inside.addAll(l.params());
+            SqlExpr body = java.util.Collections.disjoint(names(l.body(), new IdentityHashMap<>()), l.params())
+                    ? bound(l.body(), inside) : l.body();
             out = body == l.body() ? l : new SqlExpr.Lambda(l.params(), body, l.type());
         } else {
             List<SqlExpr> kids = e.children();
             List<SqlExpr> mapped = new ArrayList<>(kids.size());
             boolean changed = false;
             for (SqlExpr k : kids) {
-                SqlExpr m = lambdasBound(k, done);
+                SqlExpr m = lambdasBound(k, done, enclosing);
                 changed |= m != k;
                 mapped.add(m);
             }
@@ -173,6 +205,23 @@ final class CommonSubexpressions extends com.legend.sql.SqlRewriter {
     }
 
     /** The unqualified column names a node reads (a lambda parameter is one). */
+    /** Whether {@code e} reads a column (of any source, or a lambda's parameter). */
+    private static boolean readsColumn(SqlExpr e, Map<SqlExpr, Boolean> memo) {
+        Boolean known = memo.get(e);
+        if (known != null) {
+            return known;
+        }
+        boolean out = e instanceof SqlExpr.Column || e instanceof SqlExpr.StoredRead;
+        for (SqlExpr k : e.children()) {
+            if (out) {
+                break;
+            }
+            out = readsColumn(k, memo);
+        }
+        memo.put(e, out);
+        return out;
+    }
+
     private static Set<String> names(SqlExpr e, Map<SqlExpr, Set<String>> memo) {
         Set<String> known = memo.get(e);
         if (known != null) {
