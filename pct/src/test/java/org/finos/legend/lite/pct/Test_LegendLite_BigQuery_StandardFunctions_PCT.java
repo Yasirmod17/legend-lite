@@ -40,9 +40,7 @@ public class Test_LegendLite_BigQuery_StandardFunctions_PCT extends PCTReportCon
             one("meta::pure::functions::math::tests::mode::testMode_Number_Relation_Aggregate_Function_1__Boolean_1_", "\"a grouped MODE reached BigQuery, which has no mode aggregate and cannot unnest an aggregate in a subquery (measured)\""),
             one("meta::pure::functions::math::tests::mode::testMode_Number_Relation_Window_Function_1__Boolean_1_", "\"a MODE over a window reached BigQuery, which has no mode function\""),
             // BIGQUERY'S OWN LIMIT: PERCENTILE_CONT over a window orders ascending only
-            one("meta::pure::functions::math::tests::percentile::testPercentile_Relation_Window_Function_1__Boolean_1_", "\"a descending QUANTILE_CONT over a window reached BigQuery\""),
-            // BIGQUERY'S OWN LIMIT: FARM_FINGERPRINT(NULL) is NULL (DuckDB's hash of NULL is a number)
-            one("meta::pure::functions::hashCode::tests::testHashCode_Function_1__Boolean_1_", "\"Cannot cast a collection of size 0 to multiplicity [1]\"")
+            one("meta::pure::functions::math::tests::percentile::testPercentile_Relation_Window_Function_1__Boolean_1_", "\"a descending QUANTILE_CONT over a window reached BigQuery\"")
     );
 
     public static Test suite() {

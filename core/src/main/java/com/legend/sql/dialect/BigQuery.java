@@ -1896,12 +1896,13 @@ public final class BigQuery extends AnsiSqlRenderer {
     // Hooks of the base
     // ==================================================================
 
-    /** Pure's hashCode is a signed 64-bit integer: FARM_FINGERPRINT is one (of the value's text; several values as one
-     *  JSON array). */
+    /** Pure's hashCode is a signed 64-bit integer: FARM_FINGERPRINT is one, of the value's text as JSON (several
+     *  values as one JSON array). The JSON, not the bare text: FARM_FINGERPRINT(NULL) is NULL (measured), and the hash
+     *  of the empty collection is a number (DuckDB's hash(NULL) is one); a NULL's JSON is 'null', no value's is. */
     @Override
     protected SqlWriter hashSigned(SqlWriter writer, List<SqlExpr> a) {
         if (a.size() == 1) {
-            return writer.append("FARM_FINGERPRINT(").piece(asText(a.get(0))).append(")");
+            return writer.append("FARM_FINGERPRINT(TO_JSON_STRING(").piece(asText(a.get(0))).append("))");
         }
         return writer.append("FARM_FINGERPRINT(TO_JSON_STRING([").join(a, ", ", (w, x) -> w.piece(asText(x)))
                 .append("]))");

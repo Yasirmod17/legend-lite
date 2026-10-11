@@ -95,7 +95,7 @@ measured on the account before it is trusted (execution beats documentation).
   1,250 tests, the census at 0 divergence (no ceiling raised).
 - **Snowflake: done** (2026-10-11, §9): the dialect, all five suites green on the account with 40 pinned rows of
   1,250 tests, the census at 0 divergence (no ceiling raised).
-- **BigQuery: done** (2026-10-11, §10): the dialect, all five suites green on the account with 84 pinned rows of
+- **BigQuery: done** (2026-10-11, §10): the dialect, all five suites green on the account with 83 pinned rows of
   1,250 tests, the census at 0 divergence (no ceiling raised).
 - **Not yet**: the CI workflow (step 4 of the ask; not requested in this pass).
 
@@ -299,19 +299,19 @@ and the dialect's answer:
 
 ## 10. BigQuery, measured (2026-10-11)
 
-**Result:** all five suites pass on the account, each failure pinned by its message: 1,250 tests, 84 pinned (Grammar
-12 of 137, Essential 49 of 345, Relation 13 of 469, Standard 8 of 206, Unclassified 2 of 93), the census divergence 0
-in every suite. Burned down in five runs from 347 failing (the first run: Essential 107, Grammar 31, Relation 112,
+**Result:** all five suites pass on the account, each failure pinned by its message: 1,250 tests, 83 pinned (Grammar
+12 of 137, Essential 49 of 345, Relation 13 of 469, Standard 7 of 206, Unclassified 2 of 93), the census divergence 0
+in every suite. Burned down in six runs from 347 failing (the first run: Essential 107, Grammar 31, Relation 112,
 Standard 75, Unclassified 22).
 
-What the 84 are: 34 are the platform's own, pinned on the DuckDB lane by the same cause (as on Snowflake); 2 are the
+What the 83 are: 34 are the platform's own, pinned on the DuckDB lane by the same cause (as on Snowflake); 2 are the
 portable carrier strategies' own, pinned on Postgres too (a filter's lambda parameter left unbound on a lambda-less
 dialect); 1 is the dialect's own gap, named (a lambda parameter over a JSON array carries no type, so its cast is a
-scalar CAST, refused on JSON); the other 47 are BigQuery's own limits, each measured: no MAP type (11), no lambdas
+scalar CAST, refused on JSON); the other 46 are BigQuery's own limits, each measured: no MAP type (11), no lambdas
 and no correlated recursion to fold with (10), no correlated derived table -- only an UNNEST correlates (8), no mode
 (6), an empty list of no element type (a bare NULL is an INT64, and UNNEST refuses it: 3), a date-time past years
 1 to 9999 (2), no Jaro-Winkler function (2), PERCENTILE_CONT over a window ascending only (1), a statement past the
-maximum query length (1), no minimal-fraction date format code (1), FARM_FINGERPRINT(NULL) is NULL (1), and
+maximum query length (1), no minimal-fraction date format code (1), and
 `Class.all()` over the platform's in-process metamodel (1).
 
 The account: project `legend-integration-testing`, a service-account key; the JDBC driver (Google's
@@ -331,6 +331,7 @@ and burned down on the lanes. What differs from DuckDB, and the dialect's answer
 | a CASE's branches need a common type (INT64 and STRING have none); a column's text label may not be its value's (a pivot's) | a text cast is always written, but on a string literal |
 | `ROUND` of a FLOAT64 is exact (31.41499... is 31.41) | DuckDB's own algorithm: `ROUND(x * 10^n) / 10^n` (31.42) |
 | `FORMAT`'s `%s` takes a STRING only | a `%s` argument is cast to text |
+| `FARM_FINGERPRINT(NULL)` is NULL (DuckDB's `hash(NULL)` is a number, and Pure's `hashCode([])` is one) | `hashCode` fingerprints the value's text as JSON, whose NULL is `'null'` |
 | a bare NULL is an INT64 (`COALESCE(NULL, NULL)`, `UNNEST(NULL)`) | at the root, a value NULL by its shape is its label's NULL; a NULL list of known element type is `CAST(NULL AS ARRAY<T>)` |
 | the driver's type names: INT64, FLOAT64, DATETIME (naive), TIMESTAMP (an instant) | the census reads them (`SqlTypeCensus.dialectSpelling`) |
 | `QUALIFY`, `SELECT * EXCEPT`, `PERCENTILE_CONT/DISC` (analytic), `ARRAY_AGG ... ORDER BY`, `STRING_AGG ... ORDER BY`, `IEEE_DIVIDE`, `SAFE_OFFSET` | used as they are |

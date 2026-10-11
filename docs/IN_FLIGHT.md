@@ -760,7 +760,7 @@ byte-identical for every other dialect); arms in `database/Databases.java` and `
 edits: `exec/Executor.java` (the timestamp re-fetch keeps the Timestamp when the driver refuses the java.time read) and
 `exec/SqlTypeCensus.java` (Snowflake's `NUMBER(p,0)` and `OBJECT` deliver integer and struct/map labels);
 `tools/census/RenderCensus.java` renders Snowflake.
-**2026-10-11, BigQuery landed on the branch** (all five suites green on the account, 84 pinned of 1,250): new
+**2026-10-11, BigQuery landed on the branch** (all five suites green on the account, 83 pinned of 1,250): new
 `sql/dialect/BigQuery.java` and `sql/dialect/ExplosionMarkers.java` (the explosion passes, moved out of `Snowflake`
 and shared); rows in `Lexicon`, `TypeNames`, `Spellings`, `CarrierStrategies.Caps`; arms in `database/Databases.java`
 and `exec/Sessions.java`; `exec/SqlTypeCensus.java` (BigQuery's type names, BIGNUMERIC as its decimal carrier);
