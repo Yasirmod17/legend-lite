@@ -398,8 +398,9 @@ class Grid(Tile):
 
     @property
     def relation(self) -> str:
-        """Its rows at their finest level, as Pure: its filters and calculated columns, before any grouping -- the
-        relation DataCube's Create a Class makes a class of."""
+        """Its rows at their finest level, as Pure: filtered and extended by its calculated columns, grouped by its
+        innermost group when it is grouped (a flat grid's rows as they are) -- the relation DataCube's Create a Class
+        makes a class of."""
         with self._page._session.frames.serving():
             return self._headless('gridRelation')
 

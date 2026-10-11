@@ -300,7 +300,8 @@ commits; what they settled beyond §3 and §6:
   - The session's `Headless` is made on first use over its `Frames`' connection, where the frames are.
   - **What "the finest level" is:** the grid's innermost grouping, as Create a Class makes a class of it
     (`classLambda`). A grouped grid's relation groups by its innermost group, so a class of it has one row per group;
-    a flat grid's relation is its rows. §4's "before any grouping" reading was wrong, and the tests say so.
+    a flat grid's relation is its rows. (A first docstring of `Grid.relation` said "before any grouping"; it was
+    wrong, and the tests say so.)
   - **A view is what the grid shows:** a grouped grid's first column is `__tree`, its groups' labels, as on screen.
   - **Values cross exactly:** an integer past 2^53 and a non-finite float are tagged, and each value is typed by its
     column in Python (a Decimal a `Decimal`, a Float a `float`).
