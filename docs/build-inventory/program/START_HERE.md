@@ -77,6 +77,10 @@ generated file, never a signature we typed ourselves.
   path is refused"): the DataCube line's find against the engine; a descriptor's parameter and return types by simple
   name, as legend-pure's `FunctionDescriptor.validateType` reads them, refused at the model door for both doors;
   PARK-28 (the signature never matched against the function's) recorded.
+- **Pending the user (2026-10-11):** the two ceremony cuts promised with L7, designed in
+  `JUDGES_TARGET_DESIGN_2026_10_11.md`: the judges' committed baseline (files, or digests for the ledgers;
+  digests recommended) and the lane query (a gate script, since the query cannot be a Bazel target; the script
+  recommended). Nothing is built until both are ruled.
 - **Next: L4 (Phase 6)**, then L5 (Phase 4), L6 (Phase 5), the typing-order count, L8 (the bump). The order and
   cadence: the plan's §6. Before L4: the DataCube line's compile phase split (promised 2026-10-10) and the Studio
   line's leg 8 typing changes to review ((c) reviewed 2026-10-11 with its render census; (f) pending).
