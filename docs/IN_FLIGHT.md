@@ -136,7 +136,16 @@ with the compiler's plan/execution split**, in this order:
    **Step 1 landed 2026-10-10 (fe7961b7b; run 38090412797; GATES "Compile once, plan many").** **Step 2's first
    landing, Create a Class…, landed 2026-10-11 (0cee56761; run 38109599876; GATES "Create a Class…")** -- no file
    touched beyond the announced list; next in step 2: Create an Association…, Create a Data Space…, Python's
-   create_class. **Step 2, Create a Class… (the design's §15, agreed with the user; branch `datacube-m2`), announced
+   create_class. **Step 2's second landing announced 2026-10-11 (rule 5; branch `datacube-m3`; the design's §15.6a,
+   agreed with the user): a cross-area edit in `core/`** -- the route renamed and two more beside it,
+   `/api/lite/v1/model/createClass` (was `/api/lite/v1/relational/promoteRelationToModel`), `createAssociation`,
+   `createDataSpace`, one atomic writer under them. Core files: `core/src/main/java/com/legend/server/`
+   `ModelChanges.java` (new: the writer -- actions applied in order, checked once, the net changes),
+   `CreateClass.java` (`PromoteRelationToModel.java` renamed and split), `CreateAssociation.java` and
+   `CreateDataSpace.java` (new), `PureV1Api.java` (the three cases), `core/BUILD.bazel` (`pure_v1`'s srcs, `server_lib`'s
+   excludes), `core/src/test/.../JavaEvalLedgerTest.java` (the server register's rows), their tests under
+   `core/src/test/java/com/legend/server/`, parser-equivalence's `ratchets.tsv`. Then `datacube/` (the windows; Create a
+   Class… on every plane) and `site/verify.mjs` (the Studio line's file, its change reviewed by it). **Step 2, Create a Class… (the design's §15, agreed with the user; branch `datacube-m2`), announced
    2026-10-10 (rule 5): a cross-area edit in `core/`** -- legend-lite's route `/api/lite/v1/relational/promoteRelationToModel` (§15.6, agreed with the
    Studio line: a relation made a class of the model, its files answered in the SDLC's change shape). Core files:
    `core/src/main/java/com/legend/server/PromoteRelationToModel.java` (new: the writer, printed by `ModelComposer`),
