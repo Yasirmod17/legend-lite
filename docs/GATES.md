@@ -8618,3 +8618,44 @@ warehouse, datacube, ui -- on every platform (26 jobs); the PCT, corpus, stress 
 writer on `pure_v1` and DataCube's own code, and alters no compile path they use. Pushed to main as `6e57d350c`, a
 fast-forward (main unmoved since the run), on the user's "Push it", after their question whether the tests had got
 slower (answered by the measures above).
+
+## 2026-10-11 — A duplicate mapping is refused, never an index error (the Bazel program)
+
+**Landed 2026-10-11 as 0b29453e1** (branch `build/dup-mapping`; run 38145210104, full gate.yml on all platforms: green on every job after one re-run of windows / warehouse (a runner filesystem error in the Node module tree during analysis of `//datacube:jupyterlab_test`, which the change does not touch; the same error L7 step 3's run met once); the first run on the tree before the rebase onto datacube-m3, 38122177071, green on every job).
+Announced in `docs/IN_FLIGHT.md` the same day (37a3edb2c). The DataCube line reported it while writing tests: a model
+holding two mappings of one name, one including another, crashed `compileModel` with an `IndexOutOfBoundsException`
+from the normalizer's include ordering instead of a refusal.
+
+1. **The cause, two halves.** `StoreSubstitutionRewrite.resolveAllStores` counted the parsed mappings (a duplicate
+   twice) against the names it had ordered (once), read the difference as an include cycle, and indexed the cycle's
+   members — none, since every name was ordered. And a parsed mapping never took its slot in the shared element
+   namespace: the D6b batch (`docs/STAMP_DISCIPLINE_PROGRAM.md`) covered classes, enums, associations, profiles,
+   measures and databases, and mappings slotted last-wins by plain `intern`, so only the cycle check noticed.
+2. **The fix.** The cycle check counts the graph's names (`byFqn`): the ordered names are always among them, so a
+   difference names a member. `ModelBuilder.ingestLegacyMapping` registers the DSL mapping through `internElement`,
+   and the duplicate is refused as a class's is — and BEFORE Phase E reads the index (`ModelIntegrity.refuseDuplicates`,
+   called by `Compiler.normalizeLayer`; the engine's order, D6b's "element-identity first"), so a second copy's own
+   shape (a self-include, a repeated include) never speaks first: `compileModel` throws "Duplicated element 'w::M'";
+   the module path (`parseSources`) drops a same-kind duplicate at parse and reports it, as before, and walls a
+   cross-kind collision (a class and a mapping of one name) under the name. The gate's check keeps the arm for a
+   graph element shadowing a boot FQN. The normalized product still registers by plain `intern` under the same name.
+3. **Not fixed, recorded:** services, `###Data`, connections (a runtime's inline ones too), runtimes and clean-sheet
+   mappings still slot last-wins (`docs/PARKED_WORK_LEDGER.md` PARK-25, anchored on the services slot); two include
+   spellings of one mapping are refused as a cycle (PARK-26, anchored on the resolved names' count; the audit's find);
+   PARK-25 also records a path that is also a package, which the engine refuses ("An element named 'domain' already
+   exists in the package 'trades'"; the DataCube line's audit the same day) and lite, registering no package, does not.
+4. **Judges.** the six corpus passes against the baseline built from main 741f24f9a the same day: 22 result files identical, 0 differing (`evidence/dup-mapping/corpus_passes_compare.txt`); the render census, main's tree against the change, every JVM lane with the probe: 52543 (lane, dialect, kind, text) entries; 0 differ (`evidence/dup-mapping/render_census_compare.txt`); the local gate 328 targets green on the final tree (`bazel test --lockfile_mode=error //gates:local`); `//parser-equivalence/...` 6 targets green; the lane-membership query empty. The judges' one find: `RelationalMappingIntegrationTest.testDataMutations` named its class
+   `model::M`, as its mapping; the engine refuses the pair (one namespace), and so does lite now; the class is `model::Mut`
+   and the `//gates:core` lane's census was run again on the fixed tree (the only lane holding the test). The
+   parser-equivalence ratchet `own_corpus.matched` moves 2823 → 2832 (the nine elements of the new test models in
+   `IncludeRulesTest` joined the own corpus and matched; measured on the tree rebased onto 6e57d350c, whose own models had
+   moved it 2814 → 2823).
+5. **The parsed model's side maps key by path alone** (`ParsedModel.keyOf`), so a class and a mapping of one name
+   share one offset, imports and span entry; parser-equivalence's conformance ratchet caught it on the refusal's own
+   test (the planner placed the mapping at the class's offset and asked for a `###Mapping` header). `Sectionize.plan`
+   declines such a snippet as not sectionizable, as it declines one that does not parse; the keying, and the
+   refusal's position (the recorded element's, where the engine points at the second), are in PARK-25.
+6. **The audit** (`evidence/dup-mapping/AUDIT.md`: ready after fixes, 0 blockers, 5 should-fix, 3 nits, every one
+   answered): the refusal moved before Phase E (it had reported a self-include as a cycle); the cross-kind and
+   self-include cases tested; the wording narrowed to the DSL's mappings and clean-sheet mappings parked; a dangling
+   citation and a "below" fixed.
