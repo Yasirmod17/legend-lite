@@ -33,6 +33,13 @@ PCT, the stress corpus, parser equivalence, Channel B, the native image's tests)
 | `sdlc` | — | `//sdlc-server:git_repository_test`, `//sdlc-client:tests`, `//depot-client:tests` | the model home (`docs/STUDIO_DESIGN_2026_10_02.md`): the SDLC and Depot suites, each run on the page's WebAssembly module and on the server over git |
 | `heavy` (manual; no per-push lane) | — | `//spec:reference_lane`, `//spec:update_reference_lane_test`, `//spec:corpus_warehouse_verdict`, `//spec:manifest_world_census`, `//parser-equivalence:diagnostics`, `//pct:update_ratchets_test`, `//tools/python:requirements.test` | the reference lane (about 8 GB), the warehouse corpus passes (they build the GraalVM server), the manifest-world census, the parser-equivalence diagnostics battery, PCT's ratchet re-measure, the Python requirements test: a landing runs the ones it needs by hand (`docs/build-inventory/program/START_HERE.md` §5); a scheduled run is PHASE_8.md Test-11 |
 
+**The Postgres lanes in a root container** (2026-10-11). The embedded Postgres refuses root (`initdb` does), so a
+session that runs as root (a cloud container) runs a Postgres test as an unprivileged user, outside the sandbox:
+`chmod o+x /root` once (other users may pass through the Bazel output base's parent, not list it), then
+`bazel test //pct:pct_postgres --strategy=TestRunner=standalone --run_under="$PWD/tools/postgres/as_unprivileged.sh ubuntu"`
+(any existing non-root user). The wrapper hands the test's own directories to the user and drops root with `setpriv`.
+Measured: all five Postgres suites green as `ubuntu`. CI runs as a non-root user and needs none of this.
+
 Beside the gates, in `bazel test //...`:
 
 - **Generated files** — `//:generated` (CI's checks lane), that is `//core:update_generated_*_test`,
