@@ -58,10 +58,88 @@ import java.util.Set;
  * <p>Every {@link SqlFn} and {@link SqlAgg.Fn} is decided HERE by an exhaustive switch: a portable base arm (or a
  * {@link Spellings#MARIADB} row), a MariaDB arm, or a {@link DialectCapability} wall.
  */
-public final class MariaDb extends AnsiSqlRenderer {
+public class MariaDb extends AnsiSqlRenderer {
 
     public MariaDb() {
         super(Lexicon.MARIADB, TypeNames.MARIADB, Spellings.MARIADB);
+    }
+
+    /** A dialect of the family ({@link MySql}): MariaDB's spellings where the two agree, its own hooks where not. */
+    protected MariaDb(Lexicon lexicon, TypeNames types, Spellings spellings) {
+        super(lexicon, types, spellings);
+    }
+
+    // ==================================================================
+    // The family's hooks: where MySQL spells it otherwise (MySql)
+    // ==================================================================
+
+    /** A JSON text as a JSON value, normalized: {@code JSON_COMPACT} (a value read from a column or a table function is
+     *  text, which a JSON function would quote, measured). */
+    protected SqlWriter.Piece compact(SqlWriter.Piece json) {
+        return w -> w.append("JSON_COMPACT(").piece(json).append(")");
+    }
+
+    /** {@code JSON_ARRAYAGG([DISTINCT] value [ORDER BY order] [LIMIT 1])}: the values as one JSON array in the order's
+     *  order, NULL over no rows; {@code firstOnly} when only its first element is read. */
+    protected SqlWriter.Piece arrayAgg(boolean distinct, SqlWriter.Piece value, SqlWriter.@com.legend.base.Nullable Piece order,
+            boolean firstOnly) {
+        return w -> {
+            w.append("JSON_ARRAYAGG(").append(distinct ? "DISTINCT " : "").piece(value);
+            if (order != null) {
+                w.append(" ORDER BY ").piece(order);
+                if (firstOnly) {
+                    w.append(" LIMIT 1");
+                }
+            }
+            w.append(")");
+        };
+    }
+
+    /** {@code '$[' || index || ']'}: a JSON path to a 0-based index (a negative one from the end, measured). */
+    protected SqlWriter.Piece indexPath(SqlWriter.Piece index) {
+        return w -> w.append("CONCAT('$[', ").piece(index).append(", ']')");
+    }
+
+    /** A regular expression replacement's reference to group {@code n}: a backslash and the number (PCRE's). */
+    protected String groupRef(int n) {
+        return "\\" + n;
+    }
+
+    /** The database's name, as an error names it. */
+    protected String product() {
+        return "MariaDB";
+    }
+
+    /** {@code JSON_TABLE(json, spec) AS alias}: a table function over a JSON value, its argument any expression (it
+     *  correlates, measured). */
+    protected SqlWriter.Piece jsonTable(SqlWriter.Piece json, String spec, String alias) {
+        return w -> w.append("JSON_TABLE(").piece(json).append(", " + spec + ") AS " + alias);
+    }
+
+    /** A JSON scalar's SQL value at {@code path}, a string unquoted, a JSON null NULL: {@code JSON_VALUE}. */
+    protected SqlWriter.Piece jsonText(SqlWriter.Piece json, SqlWriter.Piece path) {
+        return w -> w.append("JSON_VALUE(").piece(json).append(", ").piece(path).append(")");
+    }
+
+    /** {@link #jsonText(SqlWriter.Piece, SqlWriter.Piece)} of SQL text: a column's JSON at a path's text. */
+    protected String jsonText(String json, String path) {
+        return "JSON_VALUE(" + json + ", " + path + ")";
+    }
+
+    /** A JSON_TABLE column of booleans: BOOLEAN (MySQL's is a BIT there, measured). */
+    protected String booleanColumn() {
+        return "BOOLEAN";
+    }
+
+    /** Whether a JSON value reaches the driver as bytes (MySQL's JSON type does, measured), so a root column of a list,
+     *  struct, map or Variant is delivered as its text. */
+    protected boolean jsonIsBinary() {
+        return false;
+    }
+
+    /** Whether a recursive CTE or a derived table may read an outer row (MariaDB's may not: "Unknown column"). */
+    protected boolean correlatesDerived() {
+        return false;
     }
 
     // ==================================================================
@@ -101,18 +179,18 @@ public final class MariaDb extends AnsiSqlRenderer {
 
     @Override
     protected String starExceptKeyword() {
-        throw new DialectCapability("a star exclusion reached MariaDB unexpanded (StarExceptToColumns)");
+        throw new DialectCapability("a star exclusion reached " + product() + " unexpanded (StarExceptToColumns)");
     }
 
     @Override
     protected String asOfJoinClause() {
-        throw new DialectCapability("an as-of join reached MariaDB, which has none (the carrier strategies emulate"
+        throw new DialectCapability("an as-of join reached " + product() + ", which has none (the carrier strategies emulate"
                 + " the witnessed shapes)");
     }
 
     @Override
     protected SqlWriter pivotSource(SqlWriter writer, SqlSource.Pivot p, int depth) {
-        throw new DialectCapability("a pivot reached MariaDB unemulated: it has no PIVOT");
+        throw new DialectCapability("a pivot reached " + product() + " unemulated: it has no PIVOT");
     }
 
     /** Every identifier quoted (ANSI_QUOTES): a column name folds no case, but a keyword would end it. */
@@ -157,6 +235,9 @@ public final class MariaDb extends AnsiSqlRenderer {
 
     /** The explosion markers in scope of the select being written: alias, then each exploded column's list. */
     private final Deque<Map<String, Map<String, SqlExpr>>> laterals = new ArrayDeque<>();
+
+    /** Root values written as their text ({@link #jsonIsBinary}), by identity. */
+    private final java.util.Set<SqlExpr> asText = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
 
     /** The labels of the statement being rendered, as planned (its root's outputs before this dialect's passes). */
     private final Deque<List<com.legend.sql.OutputCol>> roots = new ArrayDeque<>();
@@ -266,6 +347,11 @@ public final class MariaDb extends AnsiSqlRenderer {
         for (int i = 0; i < s.projections().size(); i++) {
             SqlSelect.Projection p = s.projections().get(i);
             SqlExpr value = deliveredValue(p.expr(), labels.get(i).type());
+            SqlType label = labels.get(i).type();
+            if (jsonIsBinary() && (nested(label)) && !(value instanceof SqlExpr.Star)
+                    && !(value instanceof SqlExpr.StarExcept) && !(value instanceof SqlExpr.NullLit)) {
+                asText.add(value);
+            }
             if (value != p.expr() && p.outputName() != null) {
                 moved.put(p.outputName(), p.expr());
             }
@@ -387,7 +473,7 @@ public final class MariaDb extends AnsiSqlRenderer {
         if (src instanceof SqlSource.Join j && j.right() instanceof SqlSource.Subselect sub && isMarker(sub.inner())
                 && (j.kind() == SqlSource.Join.Kind.CROSS_LATERAL || j.kind() == SqlSource.Join.Kind.LEFT_LATERAL)) {
             if (j.on() != null && !(j.on() instanceof SqlExpr.BoolLit b && b.value())) {
-                throw new DialectCapability("a lateral explosion with a join condition reached MariaDB");
+                throw new DialectCapability("a lateral explosion with a join condition reached " + product());
             }
             source(writer, j.left(), depth);
             nl(writer, depth).append(j.kind() == SqlSource.Join.Kind.LEFT_LATERAL ? "LEFT JOIN " : "CROSS JOIN ")
@@ -399,9 +485,12 @@ public final class MariaDb extends AnsiSqlRenderer {
         }
         if (src instanceof SqlSource.Join j && (j.kind() == SqlSource.Join.Kind.CROSS_LATERAL
                 || j.kind() == SqlSource.Join.Kind.LEFT_LATERAL)) {
+            if (correlatesDerived()) {
+                return super.source(writer, src, depth);   // a database with LATERAL (MySql)
+            }
             if (!(j.right() instanceof SqlSource.Subselect sub)) {
                 throw new DialectCapability("a lateral join to a " + j.right().getClass().getSimpleName()
-                        + " reached MariaDB, which has no LATERAL");
+                        + " reached " + product() + ", which has no LATERAL");
             }
             boolean left = j.kind() == SqlSource.Join.Kind.LEFT_LATERAL;
             boolean always = j.on() == null || j.on() instanceof SqlExpr.BoolLit b && b.value();
@@ -431,7 +520,7 @@ public final class MariaDb extends AnsiSqlRenderer {
     private SqlWriter.Piece lateralRows(SqlSource.Subselect sub, int depth) {
         List<com.legend.sql.OutputCol> outs = sub.inner().outputs();
         if (outs.isEmpty()) {
-            throw new DialectCapability("a lateral subquery of undeclared columns reached MariaDB");
+            throw new DialectCapability("a lateral subquery of undeclared columns reached " + product());
         }
         return w -> {
             w.append("JSON_TABLE(coalesce((SELECT JSON_ARRAYAGG(JSON_OBJECT(");
@@ -488,7 +577,7 @@ public final class MariaDb extends AnsiSqlRenderer {
 
     /** Each output's value in {@code s}: its projection's, or a star's column (no projection is a star over the
      *  FROM, its one source's alias qualifying the column). */
-    private static List<SqlExpr> lateralValues(SqlSelect s, List<com.legend.sql.OutputCol> outs) {
+    private List<SqlExpr> lateralValues(SqlSelect s, List<com.legend.sql.OutputCol> outs) {
         List<SqlExpr> values = new ArrayList<>();
         if (s.projections().isEmpty()) {
             String table = s.from() instanceof SqlSource.Join ? null : s.from().alias();
@@ -509,16 +598,15 @@ public final class MariaDb extends AnsiSqlRenderer {
             }
             return values;
         }
-        throw new DialectCapability("a lateral subquery whose projections do not match its outputs reached MariaDB");
+        throw new DialectCapability("a lateral subquery whose projections do not match its outputs reached " + product());
     }
 
     /** {@code JSON_TABLE(<longest list>, '$[*]' COLUMNS ("key" FOR ORDINALITY)) AS alias}: its key the 1-based
      *  ordinal ({@link #element} reads the position before it). */
-    private static SqlWriter.Piece positions(SqlSelect m, String alias) {
+    private SqlWriter.Piece positions(SqlSelect m, String alias) {
         List<SqlExpr> lists = m.projections().stream().map(p -> ((SqlExpr.Call) p.expr()).args().get(0))
                 .filter(xs -> !nullList(xs)).toList();
-        return w -> {
-            w.append("JSON_TABLE(");
+        return jsonTable(w -> {
             if (lists.isEmpty()) {
                 w.append("NULL");
             } else if (lists.size() == 1) {
@@ -540,8 +628,7 @@ public final class MariaDb extends AnsiSqlRenderer {
                 }
                 w.append(" ELSE ").expr(lists.get(lists.size() - 1), 0).append(" END");
             }
-            w.append(", '$[*]' COLUMNS (\"key\" FOR ORDINALITY)) AS ").append(alias);
-        };
+        }, "'$[*]' COLUMNS (\"key\" FOR ORDINALITY)", alias);
     }
 
     /** No VALUES alias list: the rows are a union of one-row selects naming their columns (the first row names them).
@@ -624,7 +711,7 @@ public final class MariaDb extends AnsiSqlRenderer {
     @Override
     protected String floatLiteral(double v) {
         if (Double.isNaN(v) || Double.isInfinite(v)) {
-            throw new DialectCapability("a " + v + " literal reached MariaDB, whose DOUBLE has no infinity or NaN");
+            throw new DialectCapability("a " + v + " literal reached " + product() + ", whose DOUBLE has no infinity or NaN");
         }
         String s = Double.toString(v);
         return s.contains("E") ? s : s + "E0";
@@ -647,16 +734,20 @@ public final class MariaDb extends AnsiSqlRenderer {
         return out != null ? aliasIdent(out.name()) : super.implicitLabel(p);
     }
 
-    /** NULL sorts first ascending here, and there is no NULLS FIRST/LAST: the placement is a key of its own,
-     *  {@code (x IS NULL)}, before the value. */
+    /** NULL sorts first ascending here, and there is no NULLS FIRST/LAST: the placement is a key of its own before
+     *  the value, in the value's direction -- {@code (x IS NULL)} or {@code (x IS NOT NULL)} -- since MySQL's
+     *  GROUP_CONCAT takes a key that folds to a constant (a column with no NULL) as the direction of the keys after it
+     *  (measured: {@code (x IS NULL), x DESC} sorted ascending there). */
     @Override
     protected SqlWriter sortKey(SqlWriter writer, SqlSelect.SortKey k) {
         boolean nullsFirst = k.nullOrder() != null ? k.nullOrder() == SqlSelect.SortKey.NullOrder.NULLS_FIRST
                 : !k.ascending();
+        String dir = k.ascending() ? "" : " DESC";
         if (!(k.expr() instanceof SqlExpr.IntLit) && !(k.expr() instanceof SqlExpr.StringLit)) {
-            writer.append("(").expr(k.expr(), 4).append(" IS NULL)").append(nullsFirst ? " DESC, " : ", ");
+            writer.append("(").expr(k.expr(), 4).append(nullsFirst == k.ascending() ? " IS NOT NULL)" : " IS NULL)")
+                    .append(dir + ", ");
         }
-        return writer.expr(k.expr(), 0).append(k.ascending() ? "" : " DESC");
+        return writer.expr(k.expr(), 0).append(dir);
     }
 
     @Override
@@ -671,14 +762,18 @@ public final class MariaDb extends AnsiSqlRenderer {
 
     @Override
     protected SqlWriter expr(SqlWriter writer, SqlExpr e, int parentPrec) {
+        if (!asText.isEmpty() && asText.remove(e)) {
+            writer.append("CAST(");
+            expr(writer, e, 0);
+            return writer.append(" AS CHAR)");
+        }
         return switch (e) {
             case SqlExpr.ArrayLit a -> writer.append("JSON_ARRAY(").join(a.elements(), ", ", (w, x) -> w.piece(json(x)))
                     .append(")");
             case SqlExpr.BoolLit b -> writer.append(b.value() ? "TRUE" : "FALSE");
             // DuckDB's list(v ORDER BY k): ascending, NULLs last
-            case SqlExpr.OrderedListAgg ola -> writer.append("JSON_ARRAYAGG(").piece(json(ola.value()))
-                    .append(" ORDER BY ").piece(w -> orderKey(w, new SqlSelect.SortKey(ola.orderBy(), true,
-                            SqlSelect.SortKey.NullOrder.NULLS_LAST, null))).append(")");
+            case SqlExpr.OrderedListAgg ola -> writer.piece(arrayAgg(false, json(ola.value()), w -> orderKey(w,
+                    new SqlSelect.SortKey(ola.orderBy(), true, SqlSelect.SortKey.NullOrder.NULLS_LAST, null)), false));
             case SqlExpr.Membership m when m.collection() instanceof SqlExpr.PlanParam p -> throw listParameter(p);
             case SqlExpr.Column c when explodedColumn(c) != null ->
                     writer.piece(java.util.Objects.requireNonNull(explodedColumn(c), "exploded"));
@@ -687,8 +782,8 @@ public final class MariaDb extends AnsiSqlRenderer {
     }
 
     /** A list plan parameter: MariaDB binds no array. */
-    private static DialectCapability listParameter(SqlExpr.PlanParam p) {
-        return new DialectCapability("list plan parameter '" + p.name() + "' reached MariaDB, which binds no array");
+    private DialectCapability listParameter(SqlExpr.PlanParam p) {
+        return new DialectCapability("list plan parameter '" + p.name() + "' reached " + product() + ", which binds no array");
     }
 
     // ==================================================================
@@ -713,7 +808,7 @@ public final class MariaDb extends AnsiSqlRenderer {
     private SqlWriter.Piece json(SqlExpr x) {
         SqlType t = typeOf(x);
         if (t == null && (x instanceof SqlExpr.ArrayLit || x instanceof SqlExpr.StructLit)) {
-            return w -> w.append("JSON_COMPACT(").expr(x, 0).append(")");
+            return compact(w -> w.expr(x, 0));
         }
         if (t == null && x instanceof SqlExpr.BoolLit) {
             t = SqlType.Scalar.BOOLEAN;
@@ -725,20 +820,20 @@ public final class MariaDb extends AnsiSqlRenderer {
      *  and only a comparison's own result is serialized as a JSON boolean, measured), a list, struct, map or Variant as
      *  its JSON ({@code JSON_COMPACT}: a value read from a column or a table function is text, which a JSON function
      *  would quote, measured), anything else as it is. */
-    private static SqlWriter.Piece jsonOf(SqlWriter.Piece v, @com.legend.base.Nullable SqlType t) {
+    private SqlWriter.Piece jsonOf(SqlWriter.Piece v, @com.legend.base.Nullable SqlType t) {
         if (t == SqlType.Scalar.BOOLEAN) {
             return w -> w.append("JSON_EXTRACT(CASE WHEN ").piece(v).append(" THEN 'true' WHEN NOT (").piece(v)
                     .append(") THEN 'false' END, '$')");
         }
         if (nested(t)) {
-            return w -> w.append("JSON_COMPACT(").piece(v).append(")");
+            return compact(v);
         }
         return v;
     }
 
     /** The {@code JSON_TABLE} column type an element of type {@code t} is read as: a scalar by its own type (a string
      *  in the binary collation), a nested value or a Variant as JSON (its text). */
-    private static String columnType(@com.legend.base.Nullable SqlType t) {
+    private String columnType(@com.legend.base.Nullable SqlType t) {
         if (t instanceof SqlType.Decimal d) {
             return "DECIMAL(" + Math.min(d.precision(), 65) + "," + Math.min(d.scale(), 38) + ")";
         }
@@ -746,7 +841,7 @@ public final class MariaDb extends AnsiSqlRenderer {
             return nested(t) ? "JSON" : "LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin";
         }
         return switch (s) {
-            case BOOLEAN -> "BOOLEAN";
+            case BOOLEAN -> booleanColumn();
             case INTEGER, BIGINT -> "BIGINT";
             case HUGEINT -> "DECIMAL(38,0)";
             case DOUBLE -> "DOUBLE";
@@ -759,17 +854,17 @@ public final class MariaDb extends AnsiSqlRenderer {
 
     /** A JSON text's value at {@code path} as a value of type {@code t}: a nested value or a Variant its JSON
      *  ({@code JSON_EXTRACT}), a scalar its SQL value ({@code JSON_VALUE}, a string unquoted) cast to its type. */
-    private static SqlWriter.Piece valueAt(SqlWriter.Piece json, SqlWriter.Piece path, @com.legend.base.Nullable SqlType t) {
+    private SqlWriter.Piece valueAt(SqlWriter.Piece json, SqlWriter.Piece path, @com.legend.base.Nullable SqlType t) {
         if (nested(t)) {
             return w -> w.append("JSON_EXTRACT(").piece(json).append(", ").piece(path).append(")");
         }
-        SqlWriter.Piece text = w -> w.append("JSON_VALUE(").piece(json).append(", ").piece(path).append(")");
+        SqlWriter.Piece text = jsonText(json, path);
         return scalarOfText(text, t);
     }
 
     /** A JSON scalar's text as a value of type {@code t}. A JSON boolean's {@code JSON_VALUE} is {@code '1'} or
      *  {@code '0'} (measured), a JSON string's its text. */
-    private static SqlWriter.Piece scalarOfText(SqlWriter.Piece text, @com.legend.base.Nullable SqlType t) {
+    private SqlWriter.Piece scalarOfText(SqlWriter.Piece text, @com.legend.base.Nullable SqlType t) {
         if (t == SqlType.Scalar.BOOLEAN) {
             return w -> w.append("(CASE ").piece(text).append(" WHEN '1' THEN TRUE WHEN 'true' THEN TRUE WHEN '0' THEN"
                     + " FALSE WHEN 'false' THEN FALSE END)");
@@ -788,11 +883,6 @@ public final class MariaDb extends AnsiSqlRenderer {
             return w -> w.append("CAST(").piece(text).append(" AS " + type + ")");
         }
         return text;
-    }
-
-    /** {@code '$[' || index || ']'}: a JSON path to a 0-based index (a negative one from the end, measured). */
-    private static SqlWriter.Piece indexPath(SqlWriter.Piece index) {
-        return w -> w.append("CONCAT('$[', ").piece(index).append(", ']')");
     }
 
     /** The element of {@code xs} at a 0-based {@code index} (NULL past either end). */
@@ -815,13 +905,9 @@ public final class MariaDb extends AnsiSqlRenderer {
      *  rows. */
     private SqlWriter.Piece elements(SqlExpr xs, String e, String o, @com.legend.base.Nullable String i) {
         String type = columnType(listElement(xs));
-        return w -> {
-            w.append("JSON_TABLE(").expr(xs, 0).append(", '$[*]' COLUMNS (").append(param(o)).append(" FOR ORDINALITY");
-            if (i != null) {
-                w.append(", ").append(param(i)).append(" FOR ORDINALITY");
-            }
-            w.append(", ").append(param(e)).append(" " + type + " PATH '$')) AS ").append(param(e + "__t"));
-        };
+        String spec = "'$[*]' COLUMNS (" + param(o) + " FOR ORDINALITY" + (i != null ? ", " + param(i)
+                + " FOR ORDINALITY" : "") + ", " + param(e) + " " + type + " PATH '$')";
+        return jsonTable(w -> w.expr(xs, 0), spec, param(e + "__t"));
     }
 
     /** {@code body}, or NULL for a NULL list (DuckDB's list functions answer NULL there). */
@@ -829,11 +915,11 @@ public final class MariaDb extends AnsiSqlRenderer {
         return w -> w.append("(CASE WHEN ").expr(xs, 4).append(" IS NULL THEN NULL ELSE ").piece(body).append(" END)");
     }
 
-    private static SqlExpr.Lambda lambdaOf(SqlExpr e, SqlFn fn) {
+    private SqlExpr.Lambda lambdaOf(SqlExpr e, SqlFn fn) {
         if (e instanceof SqlExpr.Lambda l && !l.params().isEmpty()) {
             return l;
         }
-        throw new DialectCapability(fn + " without a lambda reached MariaDB");
+        throw new DialectCapability(fn + " without a lambda reached " + product());
     }
 
     /** The position alias of a lambda's element: unique per lambda, so an inner list operation never shadows it. */
@@ -881,8 +967,8 @@ public final class MariaDb extends AnsiSqlRenderer {
     private SqlWriter.Piece overElements(SqlExpr xs, String e, String o, @com.legend.base.Nullable String i,
             SqlWriter.Piece select, SqlWriter.@com.legend.base.Nullable Piece where) {
         return unlessNull(xs, w -> {
-            w.append("coalesce((SELECT JSON_ARRAYAGG(").piece(select).append(" ORDER BY ").append(param(o))
-                    .append(") FROM ").piece(elements(xs, e, o, i));
+            w.append("coalesce((SELECT ").piece(arrayAgg(false, select, v -> v.append(param(o)), false))
+                    .append(" FROM ").piece(elements(xs, e, o, i));
             if (where != null) {
                 w.append(" WHERE ").piece(where);
             }
@@ -897,7 +983,7 @@ public final class MariaDb extends AnsiSqlRenderer {
         String o = param("__o");
         if (fn == SqlAgg.Fn.MODE) {
             if (!extras.isEmpty()) {
-                throw new DialectCapability("a mode with arguments reached MariaDB");
+                throw new DialectCapability("a mode with arguments reached " + product());
             }
             return w -> w.append("(SELECT " + e + " FROM ").piece(elements(xs, "__e", "__o", null))
                     .append(" WHERE " + e + " IS NOT NULL GROUP BY " + e + " ORDER BY count(*) DESC, min(" + o
@@ -960,7 +1046,7 @@ public final class MariaDb extends AnsiSqlRenderer {
     @Override
     protected SqlWriter structInsert(SqlWriter writer, List<SqlExpr> args) {
         if (!(args.get(1) instanceof SqlExpr.StringLit name)) {
-            throw new DialectCapability("struct_insert of a field that is not a literal reached MariaDB");
+            throw new DialectCapability("struct_insert of a field that is not a literal reached " + product());
         }
         return writer.append("JSON_SET(").expr(args.get(0), 0).append(", ").append(memberPath(name.value()))
                 .append(", ").piece(json(args.get(2))).append(")");
@@ -1001,12 +1087,11 @@ public final class MariaDb extends AnsiSqlRenderer {
     protected SqlWriter membership(SqlWriter writer, SqlExpr.Membership m) {
         SqlType el = listElement(m.collection());
         String e = param("__e");
-        SqlWriter.Piece needle = nested(el) ? w -> w.append("JSON_COMPACT(").expr(m.needle(), 0).append(")")
-                : w -> w.expr(m.needle(), 5);
+        SqlWriter.Piece needle = nested(el) ? compact(w -> w.expr(m.needle(), 0)) : w -> w.expr(m.needle(), 5);
+        SqlWriter.Piece element = nested(el) ? compact(w -> w.append(e)) : w -> w.append(e);
         return writer.append("(CASE WHEN ").expr(m.collection(), 4).append(" IS NULL OR ").expr(m.needle(), 4)
                 .append(" IS NULL THEN NULL ELSE EXISTS(SELECT 1 FROM ").piece(elements(m.collection(), "__e", "__eo",
-                        null)).append(" WHERE " + (nested(el) ? "JSON_COMPACT(" + e + ")" : e) + " = ").piece(needle)
-                .append(") END)");
+                        null)).append(" WHERE ").piece(element).append(" = ").piece(needle).append(") END)");
     }
 
     @Override
@@ -1016,7 +1101,7 @@ public final class MariaDb extends AnsiSqlRenderer {
 
     @Override
     protected SqlWriter unnestProjection(SqlWriter writer, List<SqlExpr> args) {
-        throw new DialectCapability("an unnest in a select list reached MariaDB, which has no set-returning"
+        throw new DialectCapability("an unnest in a select list reached " + product() + ", which has no set-returning"
                 + " projection (an explode is placed in FROM as a JSON_TABLE)");
     }
 
@@ -1030,20 +1115,22 @@ public final class MariaDb extends AnsiSqlRenderer {
      */
     @Override
     protected SqlWriter foldCall(SqlWriter writer, SqlExpr.FoldCall f) {
-        if (!closed(f.source(), Set.of()) || !closed(f.init(), Set.of()) || !closed(f.lambda(), Set.of())) {
-            throw new DialectCapability("a fold that reads a row reached MariaDB, whose recursive CTE cannot read an"
+        if (!correlatesDerived() && (!closed(f.source(), Set.of()) || !closed(f.init(), Set.of())
+                || !closed(f.lambda(), Set.of()))) {
+            throw new DialectCapability("a fold that reads a row reached " + product() + ", whose recursive CTE cannot read an"
                     + " outer column (measured: Unknown column)");
         }
         SqlType accType = typeOf(f) != null ? typeOf(f) : typeOf(f.init());
         if (accType == null) {
-            throw new DialectCapability("a fold whose accumulator claims no type reached MariaDB, whose recursive CTE"
+            throw new DialectCapability("a fold whose accumulator claims no type reached " + product() + ", whose recursive CTE"
                     + " types its column by its first row");
         }
         SqlExpr.Lambda l = f.lambda();
         SqlExpr body = lambdaBody(l, listElement(f.source()));
         return writer.piece(accumulation(f.source(), l.params().get(0), l.params().get(1), accType,
-                w -> w.append("SELECT 0, \"__a\".\"a\" FROM JSON_TABLE(JSON_ARRAY(").piece(json(f.init()))
-                        .append("), '$[*]' COLUMNS (\"a\" " + columnType(accType) + " PATH '$')) AS \"__a\""),
+                w -> w.append("SELECT 0, \"__a\".\"a\" FROM ").piece(jsonTable(v -> v.append("JSON_ARRAY(")
+                        .piece(json(f.init())).append(")"), "'$[*]' COLUMNS (\"a\" " + columnType(accType) + " PATH '$')",
+                        "\"__a\"")),
                 body));
     }
 
@@ -1054,7 +1141,7 @@ public final class MariaDb extends AnsiSqlRenderer {
         if (!(a.get(1) instanceof SqlExpr.Lambda l) || l.params().size() != 2) {
             throw wall(SqlFn.LIST_REDUCE, "a reduction lambda of another shape");
         }
-        if (!closed(a.get(0), Set.of()) || !closed(l, Set.of())) {
+        if (!correlatesDerived() && (!closed(a.get(0), Set.of()) || !closed(l, Set.of()))) {
             throw wall(SqlFn.LIST_REDUCE, "a reduction that reads a row needs a recursive CTE over an outer column"
                     + " (measured: Unknown column)");
         }
@@ -1066,9 +1153,9 @@ public final class MariaDb extends AnsiSqlRenderer {
         String acc = l.params().get(0);
         String x = l.params().get(1);
         SqlExpr body = lambdaBody(new SqlExpr.Lambda(List.of(x, acc), l.body()), el);
-        return accumulation(a.get(0), x, acc, accType, w -> w.append("SELECT 1, \"__a\".\"a\" FROM JSON_TABLE(")
-                .expr(a.get(0), 0).append(", '$[0]' COLUMNS (\"a\" " + columnType(accType) + " PATH '$')) AS"
-                        + " \"__a\""), body);
+        return accumulation(a.get(0), x, acc, accType, w -> w.append("SELECT 1, \"__a\".\"a\" FROM ")
+                .piece(jsonTable(v -> v.expr(a.get(0), 0), "'$[0]' COLUMNS (\"a\" " + columnType(accType) + " PATH '$')",
+                        "\"__a\"")), body);
     }
 
     /** {@code (WITH RECURSIVE __f(__i, acc) AS (<anchor> UNION ALL <step>) <last acc>)}: the step joins the element
@@ -1076,10 +1163,11 @@ public final class MariaDb extends AnsiSqlRenderer {
      *  accumulator as {@code acc}. */
     private SqlWriter.Piece accumulation(SqlExpr xs, String x, String acc, SqlType accType, SqlWriter.Piece anchor,
             SqlExpr body) {
+        String spec = "'$[*]' COLUMNS (\"__k\" FOR ORDINALITY, " + param(x) + " " + columnType(listElement(xs))
+                + " PATH '$')";
         return w -> w.append("(WITH RECURSIVE \"__f\"(\"__i\", ").append(param(acc)).append(") AS (").piece(anchor)
-                .append(" UNION ALL SELECT \"__f\".\"__i\" + 1, ").expr(body, 0).append(" FROM \"__f\" JOIN JSON_TABLE(")
-                .expr(xs, 0).append(", '$[*]' COLUMNS (\"__k\" FOR ORDINALITY, ").append(param(x))
-                .append(" " + columnType(listElement(xs)) + " PATH '$')) AS \"__x\" ON \"__x\".\"__k\" ="
+                .append(" UNION ALL SELECT \"__f\".\"__i\" + 1, ").expr(body, 0).append(" FROM \"__f\" JOIN ")
+                .piece(jsonTable(v -> v.expr(xs, 0), spec, "\"__x\"")).append(" ON \"__x\".\"__k\" ="
                         + " \"__f\".\"__i\" + 1) SELECT ").append(param(acc))
                 .append(" FROM \"__f\" ORDER BY \"__i\" DESC LIMIT 1)");
     }
@@ -1107,11 +1195,11 @@ public final class MariaDb extends AnsiSqlRenderer {
     @Override
     protected SqlWriter splitPartCall(SqlWriter writer, List<SqlExpr> a) {
         SqlWriter.Piece parts = split(a.get(0), a.get(1));
-        String cols = ", '$[*]' COLUMNS (\"__o\" FOR ORDINALITY, \"__v\" " + columnType(SqlType.Scalar.VARCHAR)
-                + " PATH '$')) AS ";
-        return writer.append("(CASE WHEN ").expr(a.get(2), 4).append(" > 0 THEN (SELECT __t.\"__v\" FROM JSON_TABLE(")
-                .piece(parts).append(cols + "__t WHERE __t.\"__v\" <> '' AND (SELECT count(*) FROM JSON_TABLE(")
-                .piece(parts).append(cols + "__u WHERE __u.\"__v\" <> '' AND __u.\"__o\" < __t.\"__o\") = ")
+        String cols = "'$[*]' COLUMNS (\"__o\" FOR ORDINALITY, \"__v\" " + columnType(SqlType.Scalar.VARCHAR)
+                + " PATH '$')";
+        return writer.append("(CASE WHEN ").expr(a.get(2), 4).append(" > 0 THEN (SELECT __t.\"__v\" FROM ")
+                .piece(jsonTable(parts, cols, "__t")).append(" WHERE __t.\"__v\" <> '' AND (SELECT count(*) FROM ")
+                .piece(jsonTable(parts, cols, "__u")).append(" WHERE __u.\"__v\" <> '' AND __u.\"__o\" < __t.\"__o\") = ")
                 .expr(a.get(2), 6).append(" - 1) END)");
     }
 
@@ -1120,13 +1208,13 @@ public final class MariaDb extends AnsiSqlRenderer {
      *  outer reference, so two texts that read a row are a wall; the anchor's columns are typed through a
      *  {@code JSON_TABLE} (a literal's type is too narrow to grow, measured). */
     private SqlWriter.Piece levenshtein(SqlExpr x, SqlExpr y) {
-        if (!closed(x, Set.of()) || !closed(y, Set.of())) {
+        if (!correlatesDerived() && (!closed(x, Set.of()) || !closed(y, Set.of()))) {
             throw wall(SqlFn.LEVENSHTEIN, "an edit distance of texts that read a row needs a recursive CTE over an outer"
                     + " column (measured: Unknown column)");
         }
-        String at = "JSON_VALUE(__lv.\"p\", CONCAT('$[', __lv.\"j\" + 1, ']'))";
-        String cell = "LEAST(" + at + " + 1, JSON_VALUE(__lv.\"c\", CONCAT('$[', __lv.\"j\", ']')) + 1,"
-                + " JSON_VALUE(__lv.\"p\", CONCAT('$[', __lv.\"j\", ']')) + (SUBSTRING(__lv.\"a\", __lv.\"i\", 1) <>"
+        String at = jsonText("__lv.\"p\"", "CONCAT('$[', __lv.\"j\" + 1, ']')");
+        String cell = "LEAST(" + at + " + 1, " + jsonText("__lv.\"c\"", "CONCAT('$[', __lv.\"j\", ']')") + " + 1, "
+                + jsonText("__lv.\"p\"", "CONCAT('$[', __lv.\"j\", ']')") + " + (SUBSTRING(__lv.\"a\", __lv.\"i\", 1) <>"
                 + " SUBSTRING(__lv.\"b\", __lv.\"j\" + 1, 1)))";
         String more = "__lv.\"j\" < CHAR_LENGTH(__lv.\"b\")";
         String text = columnType(SqlType.Scalar.VARCHAR);
@@ -1139,15 +1227,15 @@ public final class MariaDb extends AnsiSqlRenderer {
                         + " __lv.\"c\" END, CASE WHEN " + more + " THEN JSON_ARRAY_APPEND(__lv.\"c\", '$', CASE WHEN"
                         + " __lv.\"i\" = 0 THEN __lv.\"j\" + 1 ELSE " + cell + " END) ELSE JSON_ARRAY(__lv.\"i\" + 1) END"
                         + " FROM __lv WHERE NOT (__lv.\"j\" = CHAR_LENGTH(__lv.\"b\") AND __lv.\"i\" ="
-                        + " CHAR_LENGTH(__lv.\"a\"))) SELECT CAST(JSON_VALUE(\"c\", CONCAT('$[', \"j\", ']')) AS SIGNED)"
+                        + " CHAR_LENGTH(__lv.\"a\"))) SELECT CAST(" + jsonText("\"c\"", "CONCAT('$[', \"j\", ']')") + " AS SIGNED)"
                         + " FROM __lv WHERE \"i\" = CHAR_LENGTH(\"a\") AND \"j\" = CHAR_LENGTH(\"b\"))");
     }
 
     /** {@code JSON_TABLE} over {@code n} rows ({@code n} at least one), its ordinal {@code alias."__n"}: a correlated
      *  row generator (a recursive CTE could not correlate). */
-    private static SqlWriter.Piece rows(SqlWriter.Piece n, String alias) {
-        return w -> w.append("JSON_TABLE(CONCAT('[', REPEAT('0,', (").piece(n).append(") - 1), '0]'), '$[*]' COLUMNS")
-                .append(" (\"__n\" FOR ORDINALITY)) AS " + alias);
+    private SqlWriter.Piece rows(SqlWriter.Piece n, String alias) {
+        return jsonTable(w -> w.append("CONCAT('[', REPEAT('0,', (").piece(n).append(") - 1), '0]')"),
+                "'$[*]' COLUMNS (\"__n\" FOR ORDINALITY)", alias);
     }
 
     /**
@@ -1157,11 +1245,12 @@ public final class MariaDb extends AnsiSqlRenderer {
     private SqlWriter.Piece split(SqlExpr s, SqlExpr d) {
         return w -> w.append("(CASE WHEN ").expr(s, 4).append(" IS NULL OR ").expr(d, 4)
                 .append(" IS NULL THEN NULL WHEN CHAR_LENGTH(").expr(s, 0).append(") = 0 THEN JSON_ARRAY() WHEN CHAR_LENGTH(")
-                .expr(d, 0).append(") = 0 THEN (SELECT JSON_ARRAYAGG(SUBSTRING(").expr(s, 0).append(", __g.\"__n\", 1) ORDER BY")
-                .append(" __g.\"__n\") FROM ").piece(rows(v -> v.append("CHAR_LENGTH(").expr(s, 0).append(")"), "__g"))
-                .append(") ELSE JSON_COMPACT(CONCAT('[', REPLACE(JSON_QUOTE(").expr(s, 0)
-                .append("), SUBSTRING(JSON_QUOTE(").expr(d, 0).append("), 2, CHAR_LENGTH(JSON_QUOTE(").expr(d, 0)
-                .append(")) - 2), '\",\"'), ']')) END)");
+                .expr(d, 0).append(") = 0 THEN (SELECT ").piece(arrayAgg(false, v -> v.append("SUBSTRING(").expr(s, 0)
+                        .append(", __g.\"__n\", 1)"), v -> v.append("__g.\"__n\""), false))
+                .append(" FROM ").piece(rows(v -> v.append("CHAR_LENGTH(").expr(s, 0).append(")"), "__g"))
+                .append(") ELSE ").piece(compact(v -> v.append("CONCAT('[', REPLACE(JSON_QUOTE(").expr(s, 0)
+                        .append("), SUBSTRING(JSON_QUOTE(").expr(d, 0).append("), 2, CHAR_LENGTH(JSON_QUOTE(").expr(d, 0)
+                        .append(")) - 2), '\",\"'), ']')"))).append(" END)");
     }
 
     // ==================================================================
@@ -1188,7 +1277,7 @@ public final class MariaDb extends AnsiSqlRenderer {
             return w -> w.expr(x, 0);
         }
         if (nested(t) || x instanceof SqlExpr.ArrayLit || x instanceof SqlExpr.StructLit) {
-            return w -> w.append("JSON_COMPACT(").expr(x, 0).append(")");
+            return compact(w -> w.expr(x, 0));
         }
         if (t == SqlType.Scalar.BOOLEAN || x instanceof SqlExpr.BoolLit) {
             return jsonOf(w -> w.expr(x, 0), SqlType.Scalar.BOOLEAN);
@@ -1199,7 +1288,7 @@ public final class MariaDb extends AnsiSqlRenderer {
     @Override
     protected SqlWriter variantConstruct(SqlWriter writer, List<SqlExpr> a) {
         if (a.size() != 1) {
-            throw new DialectCapability("toVariant of " + a.size() + " arguments reached MariaDB");
+            throw new DialectCapability("toVariant of " + a.size() + " arguments reached " + product());
         }
         return writer.piece(variantOf(a.get(0)));
     }
@@ -1238,7 +1327,7 @@ public final class MariaDb extends AnsiSqlRenderer {
         }
         if (target == SqlType.Scalar.JSON) {
             return isJson(v) ? writer.expr(v, 0)
-                    : isText(v) ? writer.append("JSON_COMPACT(").expr(v, 0).append(")") : writer.piece(variantOf(v));
+                    : isText(v) ? writer.piece(compact(w -> w.expr(v, 0))) : writer.piece(variantOf(v));
         }
         if (isJson(v)) {
             return writer.piece(fromVariant(v, target));
@@ -1275,25 +1364,26 @@ public final class MariaDb extends AnsiSqlRenderer {
                     .expr(v, 0).append(") ELSE ").expr(v, 0).append(" END)");
         }
         if (to == SqlType.Scalar.BOOLEAN) {
-            // a JSON boolean's JSON_VALUE is '1' or '0' (measured)
-            return w -> w.append("(CASE JSON_TYPE(").expr(v, 0).append(") WHEN 'BOOLEAN' THEN JSON_VALUE(").expr(v, 0)
-                    .append(", '$') = '1' WHEN 'STRING' THEN CASE lower(JSON_UNQUOTE(").expr(v, 0)
-                    .append(")) WHEN 'true' THEN TRUE WHEN 'false' THEN FALSE END WHEN 'INTEGER' THEN JSON_VALUE(")
-                    .expr(v, 0).append(", '$') <> 0 END)");
+            // a JSON boolean's JSON_VALUE is '1' or '0' (measured; MySQL's 'true' or 'false')
+            SqlWriter.Piece text = jsonText(w -> w.expr(v, 0), w -> w.append("'$'"));
+            return w -> w.append("(CASE JSON_TYPE(").expr(v, 0).append(") WHEN 'BOOLEAN' THEN ").piece(text)
+                    .append(" IN ('1', 'true') WHEN 'STRING' THEN CASE lower(JSON_UNQUOTE(").expr(v, 0)
+                    .append(")) WHEN 'true' THEN TRUE WHEN 'false' THEN FALSE END WHEN 'INTEGER' THEN ").piece(text)
+                    .append(" <> 0 END)");
         }
         if (to instanceof SqlType.Array arr) {
             SqlWriter.Piece each = arr.element() == SqlType.Scalar.JSON ? w -> w.append(param("__j"))
-                    : scalarOfText(w -> w.append("JSON_VALUE(" + param("__j") + ", '$')"), arr.element());
+                    : scalarOfText(w -> w.append(jsonText(param("__j"), "'$'")), arr.element());
             return w -> w.append("(CASE WHEN JSON_TYPE(").expr(v, 0).append(") = 'ARRAY' THEN coalesce((SELECT ")
-                    .append("JSON_ARRAYAGG(").piece(jsonOf(each, arr.element())).append(" ORDER BY ")
-                    .append(param("__jo")).append(") FROM JSON_TABLE(").expr(v, 0).append(", '$[*]' COLUMNS (")
-                    .append(param("__jo")).append(" FOR ORDINALITY, ").append(param("__j"))
-                    .append(" JSON PATH '$')) AS __jt), JSON_ARRAY()) END)");
+                    .piece(arrayAgg(false, jsonOf(each, arr.element()), x -> x.append(param("__jo")), false))
+                    .append(" FROM ").piece(jsonTable(x -> x.expr(v, 0), "'$[*]' COLUMNS (" + param("__jo")
+                            + " FOR ORDINALITY, " + param("__j") + " JSON PATH '$')", "__jt"))
+                    .append("), JSON_ARRAY()) END)");
         }
         if (to instanceof SqlType.Map || to instanceof SqlType.Struct) {
             return w -> w.expr(v, 0);
         }
-        return scalarOfText(w -> w.append("JSON_VALUE(").expr(v, 0).append(", '$')"), to);
+        return scalarOfText(jsonText(w -> w.expr(v, 0), w -> w.append("'$'")), to);
     }
 
     /** {@code value} (of type {@code from}, when known) cast to {@code to}, each cast decided here. */
@@ -1330,7 +1420,7 @@ public final class MariaDb extends AnsiSqlRenderer {
     }
 
     /** A value as text, as DuckDB's CAST to VARCHAR prints it. */
-    private SqlWriter.Piece asText(SqlExpr e) {
+    protected SqlWriter.Piece asText(SqlExpr e) {
         if (e instanceof SqlExpr.StringLit) {
             return w -> w.expr(e, 0);
         }
@@ -1364,7 +1454,7 @@ public final class MariaDb extends AnsiSqlRenderer {
      * shortest digits (measured: 0.30000000000000004) laid out its own way; its digits and exponent are read back and
      * laid out again, the value bound once through a one-row JSON_TABLE (a derived table could not correlate).
      */
-    private static SqlWriter.Piece floatText(SqlWriter.Piece value) {
+    private SqlWriter.Piece floatText(SqlWriter.Piece value) {
         // __f.t: |v| as MariaDB's text; __f.n: v < 0
         String t = "__f.\"t\"";
         String mant = "SUBSTRING_INDEX(" + t + ", 'e', 1)";
@@ -1385,11 +1475,13 @@ public final class MariaDb extends AnsiSqlRenderer {
                 + ", 2)) ELSE '' END, 'e', CASE WHEN " + x + " < 0 THEN '-' ELSE '+' END, LPAD(ABS(" + x + "), 2, '0'))";
         return w -> w.append("(SELECT CASE WHEN __f.\"t\" IS NULL THEN NULL WHEN __f.\"t\" = '0' THEN CASE WHEN __f.\"n\"")
                 .append(" THEN '-0.0' ELSE '0.0' END ELSE CONCAT(CASE WHEN __f.\"n\" THEN '-' ELSE '' END, (SELECT CASE")
-                .append(" WHEN " + x + " BETWEEN -4 AND 15 THEN " + fixed + " ELSE " + sci + " END FROM JSON_TABLE(")
-                .append("JSON_ARRAY(" + digits + ", " + exp + "), '$' COLUMNS (\"d\" VARCHAR(64) PATH '$[0]', \"x\"")
-                .append(" INT PATH '$[1]')) AS __g)) END FROM JSON_TABLE(JSON_ARRAY(CAST(ABS(").piece(value)
-                .append(") AS CHAR), ").piece(value).append(" < 0), '$' COLUMNS (\"t\" VARCHAR(64) PATH '$[0]', \"n\"")
-                .append(" BOOLEAN PATH '$[1]')) AS __f)");
+                .append(" WHEN " + x + " BETWEEN -4 AND 15 THEN " + fixed + " ELSE " + sci + " END FROM ")
+                .piece(jsonTable(v -> v.append("JSON_ARRAY(" + digits + ", " + exp + ")"),
+                        "'$' COLUMNS (\"d\" VARCHAR(64) PATH '$[0]', \"x\" INT PATH '$[1]')", "__g"))
+                .append(")) END FROM ").piece(jsonTable(v -> v.append("JSON_ARRAY(CAST(ABS(").piece(value)
+                        .append(") AS CHAR), ").piece(value).append(" < 0)"),
+                        "'$' COLUMNS (\"t\" VARCHAR(64) PATH '$[0]', \"n\" " + booleanColumn() + " PATH '$[1]')", "__f"))
+                .append(")");
     }
 
     // ==================================================================
@@ -1401,9 +1493,8 @@ public final class MariaDb extends AnsiSqlRenderer {
         List<SqlExpr> a = c.args();
         if ((c.fn() == SqlFn.EQUAL || c.fn() == SqlFn.NOT_EQUAL) && a.size() == 2
                 && (composite(a.get(0)) || composite(a.get(1)))) {
-            return writer.append("(JSON_COMPACT(").expr(a.get(0), 0)
-                    .append(c.fn() == SqlFn.EQUAL ? ") = JSON_COMPACT(" : ") <> JSON_COMPACT(").expr(a.get(1), 0)
-                    .append("))");
+            return writer.append("(").piece(compact(w -> w.expr(a.get(0), 0)))
+                    .append(c.fn() == SqlFn.EQUAL ? " = " : " <> ").piece(compact(w -> w.expr(a.get(1), 0))).append(")");
         }
         return switch (c.fn()) {
             // ---- portable: the base arm (or a Spellings.MARIADB row) is MariaDB's
@@ -1524,7 +1615,7 @@ public final class MariaDb extends AnsiSqlRenderer {
             case SHA1 -> writer.append("SHA1(").expr(a.get(0), 0).append(")");
             case SHA256 -> writer.append("SHA2(").expr(a.get(0), 0).append(", 256)");
             case LEVENSHTEIN -> writer.piece(levenshtein(a.get(0), a.get(1)));
-            case JARO_WINKLER -> throw wall(c.fn(), "MariaDB has no string-distance function");
+            case JARO_WINKLER -> throw wall(c.fn(), product() + " has no string-distance function");
             // UUID() is of the UUID type (11.x): its text
             case GUID -> writer.append("CAST(UUID() AS CHAR)");
             case FORMAT -> format(writer, a);
@@ -1543,13 +1634,13 @@ public final class MariaDb extends AnsiSqlRenderer {
             case ADD_INTERVAL, ADD_INTERVAL_TEMPORAL -> writer.append("(CASE WHEN ").expr(a.get(1), 4)
                     .append(" IS NULL OR ").expr(a.get(2), 4).append(" IS NULL THEN NULL ELSE coalesce(")
                     .piece(addInterval(a, c)).append(", ").piece(raise(List.of(new SqlExpr.StringLit(
-                            "a date past the year 9999 has no MariaDB value")), typeOf(c))).append(") END)");
+                            "a date past the year 9999 has no " + product() + " value")), typeOf(c))).append(") END)");
             case DATE_DIFF -> writer.piece(dateDiff(a));
             case TIME_BUCKET -> writer.piece(timeBucket(a));
             // a zoned date-time is held as its naive UTC date-time: UTC's wall time is the instant's, either way
             case TIMEZONE -> {
                 if (!(a.get(0) instanceof SqlExpr.StringLit zone) || !UTC_ZONES.contains(zone.value())) {
-                    throw wall(c.fn(), "MariaDB knows no named time zone but UTC without its zone tables");
+                    throw wall(c.fn(), product() + " knows no named time zone but UTC without its zone tables");
                 }
                 yield writer.expr(a.get(1), parentPrec);
             }
@@ -1567,7 +1658,7 @@ public final class MariaDb extends AnsiSqlRenderer {
                 }
                 yield writer.piece(strftime(a.get(0), fl));
             }
-            case STRPTIME -> throw wall(c.fn(), "a date parsed by a DuckDB format has no measured MariaDB spelling");
+            case STRPTIME -> throw wall(c.fn(), "a date parsed by a DuckDB format has no measured " + product() + " spelling");
 
             // ---- lists (JSON arrays; lambdas as correlated subqueries)
             case LIST_FILTER, LIST_TRANSFORM, LIST_CONCAT, LIST_GET, LIST_POSITION, LIST_DISTINCT, LIST_APPEND,
@@ -1614,7 +1705,7 @@ public final class MariaDb extends AnsiSqlRenderer {
     }
 
     /** The CAST target a value of type {@code t} is (null for none). */
-    private static @com.legend.base.Nullable String castTarget(@com.legend.base.Nullable SqlType t) {
+    private @com.legend.base.Nullable String castTarget(@com.legend.base.Nullable SqlType t) {
         if (t instanceof SqlType.Decimal d) {
             return columnType(d);
         }
@@ -1653,13 +1744,20 @@ public final class MariaDb extends AnsiSqlRenderer {
     }
 
     private SqlWriter.Piece raised(List<SqlExpr> a) {
-        return w -> {
-            w.append("(SELECT 1 FROM JSON_TABLE(JSON_ARRAY(@legend_raise := CONCAT(CHAR(31 USING utf8mb4), ");
+        return twoRows(w -> {
+            w.append("CONCAT(CHAR(31 USING utf8mb4), ");
             if (a.size() > 1) {
                 w.expr(a.get(1), 0).append(", CHAR(30 USING utf8mb4), ");
             }
-            w.expr(a.get(0), 0).append(", CHAR(31 USING utf8mb4)), 0), '$[*]' COLUMNS (\"x\" LONGTEXT PATH '$')) AS __r)");
-        };
+            w.expr(a.get(0), 0).append(", CHAR(31 USING utf8mb4))");
+        });
+    }
+
+    /** A scalar subquery of two rows that keeps {@code message} in {@code @legend_raise} as it runs, so it fails
+     *  ("Subquery returns more than 1 row") only where it is reached: its rows a table function's. */
+    protected SqlWriter.Piece twoRows(SqlWriter.Piece message) {
+        return w -> w.append("(SELECT 1 FROM JSON_TABLE(JSON_ARRAY(@legend_raise := ").piece(message)
+                .append(", 0), '$[*]' COLUMNS (\"x\" LONGTEXT PATH '$')) AS __r)");
     }
 
     /** Pure's mod (the divisor's sign) and rem (the dividend's): MOD is the remainder here, the dividend's sign. */
@@ -1675,7 +1773,7 @@ public final class MariaDb extends AnsiSqlRenderer {
     /** DuckDB's round: half away from zero; a double by DuckDB's own algorithm, {@code round(x * 10^n) / 10^n} with
      *  the half away from zero (MariaDB rounds a double's half to even, measured: ROUND(2.5E0) is 2); a DECIMAL's
      *  ROUND is already half away from zero. */
-    private static SqlWriter roundHalfUp(SqlWriter writer, List<SqlExpr> a) {
+    private SqlWriter roundHalfUp(SqlWriter writer, List<SqlExpr> a) {
         if (!isDouble(a.get(0))) {
             return writer.append("ROUND(").list(a).append(")");
         }
@@ -1745,7 +1843,7 @@ public final class MariaDb extends AnsiSqlRenderer {
 
     /** printf, through MariaDB's SFORMAT (its fmt codes): each conversion of a literal format translated (a literal
      *  brace doubled), a {@code %s} argument as its text. */
-    private SqlWriter format(SqlWriter writer, List<SqlExpr> a) {
+    protected SqlWriter format(SqlWriter writer, List<SqlExpr> a) {
         String f = literal(a.get(0), "a format");
         java.util.regex.Matcher m = java.util.regex.Pattern.compile("%([-+ #0]*)([0-9]*)(?:\\.([0-9]+))?([a-zA-Z%])")
                 .matcher(f);
@@ -1770,7 +1868,7 @@ public final class MariaDb extends AnsiSqlRenderer {
                         case 'f', 'F' -> "f";
                         case 'e', 'E', 'g', 'G', 'x', 'X', 'o' -> String.valueOf(conversion);
                         case 's' -> "";
-                        default -> throw new DialectCapability("printf conversion %" + conversion + " reached MariaDB");
+                        default -> throw new DialectCapability("printf conversion %" + conversion + " reached " + product());
                     };
             out.append(spec.isEmpty() ? "{}" : "{:" + spec + "}");
             if (arg < a.size()) {
@@ -1789,7 +1887,7 @@ public final class MariaDb extends AnsiSqlRenderer {
 
     // ---- regular expressions: PCRE, literal patterns
 
-    private static String patternOf(List<SqlExpr> a, SqlFn fn) {
+    private String patternOf(List<SqlExpr> a, SqlFn fn) {
         if (!(a.get(1) instanceof SqlExpr.StringLit p)
                 || a.size() > 2 && fn != SqlFn.REGEXP_EXTRACT && fn != SqlFn.REGEXP_EXTRACT_ALL) {
             throw wall(fn, "a pattern that is not a literal, or options beside it");
@@ -1802,14 +1900,14 @@ public final class MariaDb extends AnsiSqlRenderer {
         return w -> w.append(stringLit(full ? "^(?:" + p + ")\\z" : p));
     }
 
-    private static int group(List<SqlExpr> a) {
+    private int group(List<SqlExpr> a) {
         if (a.size() < 3) {
             return 0;
         }
         if (a.get(2) instanceof SqlExpr.IntLit g && g.value() >= 0 && g.value() <= 9) {
             return (int) g.value();
         }
-        throw new DialectCapability("a regexp group that is not a literal 0-9 reached MariaDB");
+        throw new DialectCapability("a regexp group that is not a literal 0-9 reached " + product());
     }
 
     /** DuckDB's regexp_extract: the leftmost match's group ('' when none matches; NULL for NULL). A group's text is
@@ -1823,7 +1921,7 @@ public final class MariaDb extends AnsiSqlRenderer {
         }
         return w -> w.append("(CASE WHEN ").expr(a.get(0), 4).append(" IS NULL THEN NULL WHEN ").expr(a.get(0), 4)
                 .append(" REGEXP " + stringLit(p) + " THEN REGEXP_REPLACE(").expr(a.get(0), 0)
-                .append(", " + stringLit("^[\\s\\S]*?(?:" + p + ")[\\s\\S]*\\z") + ", " + stringLit("\\" + g)
+                .append(", " + stringLit("^[\\s\\S]*?(?:" + p + ")[\\s\\S]*\\z") + ", " + stringLit(groupRef(g))
                         + ") ELSE '' END)");
     }
 
@@ -1840,14 +1938,15 @@ public final class MariaDb extends AnsiSqlRenderer {
         int ref = captureGroups(p) + 1 + g;
         if (ref > 9) {
             throw new DialectCapability("regexp_extract_all of group " + g + " of a pattern of " + captureGroups(p)
-                    + " groups reached MariaDB (a replacement names groups 1-9)");
+                    + " groups reached " + product() + " (a replacement names groups 1-9)");
         }
         String repeat = stringLit("^(?:[\\s\\S]*?(?:" + p + ")){");
         SqlWriter.Piece k = w -> w.append("__k.\"__n\"");
-        return w -> w.append("(CASE WHEN ").expr(a.get(0), 4).append(" IS NULL THEN NULL ELSE coalesce((SELECT")
-                .append(" JSON_ARRAYAGG(REGEXP_REPLACE(").expr(a.get(0), 0).append(", CONCAT(" + repeat + ", ")
+        SqlWriter.Piece kth = w -> w.append("REGEXP_REPLACE(").expr(a.get(0), 0).append(", CONCAT(" + repeat + ", ")
                 .piece(k).append(" - 1, " + stringLit("}[\\s\\S]*?(" + p + ")[\\s\\S]*\\z") + "), "
-                        + stringLit("\\" + ref) + ") ORDER BY ").piece(k).append(") FROM ")
+                        + stringLit(groupRef(ref)) + ")");
+        return w -> w.append("(CASE WHEN ").expr(a.get(0), 4).append(" IS NULL THEN NULL ELSE coalesce((SELECT ")
+                .piece(arrayAgg(false, kth, k, false)).append(" FROM ")
                 .piece(rows(v -> v.append("CHAR_LENGTH(").expr(a.get(0), 0).append(") + 1"), "__k"))
                 .append(" WHERE ").expr(a.get(0), 4).append(" REGEXP CONCAT(" + repeat + ", ").piece(k)
                 .append(", '}')), JSON_ARRAY()) END)");
@@ -1878,7 +1977,7 @@ public final class MariaDb extends AnsiSqlRenderer {
      * each). The first is the only match of the pattern anchored after a lazy prefix, its groups one place on (the
      * prefix is group 1, the match group 2): {@code \0} is group 2, {@code \N} group N + 2.
      */
-    private SqlWriter.Piece regexpReplace(List<SqlExpr> a) {
+    protected SqlWriter.Piece regexpReplace(List<SqlExpr> a) {
         String p = literal(a.get(1), "a regexp_replace pattern");
         String r = literal(a.get(2), "a regexp_replace replacement");
         String options = a.size() > 3 ? literal(a.get(3), "regexp_replace options") : "";
@@ -1889,7 +1988,7 @@ public final class MariaDb extends AnsiSqlRenderer {
                 case 'g' -> global = true;
                 case 'i' -> flags = "(?i)";
                 case 'c' -> flags = "";
-                default -> throw new DialectCapability("regexp_replace option '" + o + "' reached MariaDB");
+                default -> throw new DialectCapability("regexp_replace option '" + o + "' reached " + product());
             }
         }
         if (global) {
@@ -1903,7 +2002,7 @@ public final class MariaDb extends AnsiSqlRenderer {
             if (ch == '\\' && i + 1 < r.length() && Character.isDigit(r.charAt(i + 1))) {
                 int k = r.charAt(++i) - '0';
                 if (k + 2 > 9) {
-                    throw new DialectCapability("regexp_replace of group " + k + " (first match only) reached MariaDB");
+                    throw new DialectCapability("regexp_replace of group " + k + " (first match only) reached " + product());
                 }
                 shifted.append('\\').append(k + 2);
             } else {
@@ -1915,15 +2014,15 @@ public final class MariaDb extends AnsiSqlRenderer {
                 + stringLit(shifted.toString()) + ")");
     }
 
-    private static DialectCapability wall(SqlFn fn, String why) {
-        return new DialectCapability(fn + " reached MariaDB: " + why);
+    private DialectCapability wall(SqlFn fn, String why) {
+        return new DialectCapability(fn + " reached " + product() + ": " + why);
     }
 
-    private static String literal(SqlExpr e, String what) {
+    protected String literal(SqlExpr e, String what) {
         if (e instanceof SqlExpr.StringLit s) {
             return s.value();
         }
-        throw new DialectCapability(what + " that is not a literal reached MariaDB");
+        throw new DialectCapability(what + " that is not a literal reached " + product());
     }
 
     // ---- list calls
@@ -2002,13 +2101,14 @@ public final class MariaDb extends AnsiSqlRenderer {
             case LIST_SORT, LIST_SORT_DESC -> {
                 boolean asc = c.fn() == SqlFn.LIST_SORT;
                 SqlType el = listElement(a.get(0));
-                yield writer.piece(unlessNull(a.get(0), w -> w.append("coalesce((SELECT JSON_ARRAYAGG(")
-                        .piece(jsonOf(v -> v.append(e), el)).append(" ORDER BY ").piece(elementSort(e, el, asc))
-                        .append(") FROM ").piece(elements(a.get(0), "__e", "__o", null)).append("), JSON_ARRAY())")));
+                yield writer.piece(unlessNull(a.get(0), w -> w.append("coalesce((SELECT ")
+                        .piece(arrayAgg(false, jsonOf(v -> v.append(e), el), elementSort(e, el, asc), false))
+                        .append(" FROM ").piece(elements(a.get(0), "__e", "__o", null)).append("), JSON_ARRAY())")));
             }
-            case LIST_REVERSE -> writer.piece(unlessNull(a.get(0), w -> w.append("coalesce((SELECT JSON_ARRAYAGG(")
-                    .piece(jsonOf(v -> v.append(e), listElement(a.get(0)))).append(" ORDER BY " + o + " DESC) FROM ")
-                    .piece(elements(a.get(0), "__e", "__o", null)).append("), JSON_ARRAY())")));
+            case LIST_REVERSE -> writer.piece(unlessNull(a.get(0), w -> w.append("coalesce((SELECT ")
+                    .piece(arrayAgg(false, jsonOf(v -> v.append(e), listElement(a.get(0))), v -> v.append(o + " DESC"),
+                            false)).append(" FROM ").piece(elements(a.get(0), "__e", "__o", null))
+                    .append("), JSON_ARRAY())")));
             case LIST_TAIL -> writer.piece(overElements(a.get(0), "__e", "__o", null,
                     jsonOf(w -> w.append(e), listElement(a.get(0))), w -> w.append(o + " > 1")));
             case LIST_INIT -> writer.piece(overElements(a.get(0), "__e", "__o", null,
@@ -2021,15 +2121,16 @@ public final class MariaDb extends AnsiSqlRenderer {
                             .piece(sliceEnd(a.get(0), a.get(2)))));
             case LIST_FLATTEN -> {
                 SqlType inner = listElement(a.get(0)) instanceof SqlType.Array arr ? arr.element() : null;
-                yield writer.piece(unlessNull(a.get(0), w -> w.append("coalesce((SELECT JSON_ARRAYAGG(")
-                        .piece(jsonOf(v -> v.append("__f.\"v\""), inner)).append(" ORDER BY __f.\"o\", __f.\"i\") FROM")
-                        .append(" JSON_TABLE(").expr(a.get(0), 0).append(", '$[*]' COLUMNS (\"o\" FOR ORDINALITY,")
-                        .append(" NESTED PATH '$[*]' COLUMNS (\"i\" FOR ORDINALITY, \"v\" " + columnType(inner)
-                                + " PATH '$'))) AS __f WHERE __f.\"i\" IS NOT NULL), JSON_ARRAY())")));
+                yield writer.piece(unlessNull(a.get(0), w -> w.append("coalesce((SELECT ")
+                        .piece(arrayAgg(false, jsonOf(v -> v.append("__f.\"v\""), inner),
+                                v -> v.append("__f.\"o\", __f.\"i\""), false)).append(" FROM ")
+                        .piece(jsonTable(v -> v.expr(a.get(0), 0), "'$[*]' COLUMNS (\"o\" FOR ORDINALITY,"
+                                + " NESTED PATH '$[*]' COLUMNS (\"i\" FOR ORDINALITY, \"v\" " + columnType(inner)
+                                + " PATH '$'))", "__f")).append(" WHERE __f.\"i\" IS NOT NULL), JSON_ARRAY())")));
             }
             case LIST_ZIP -> writer.piece(zip(a, c));
             case LIST_REDUCE -> writer.piece(listReduce(c));
-            case LIST_PRODUCT -> throw wall(c.fn(), "a list's cartesian product has no MariaDB spelling");
+            case LIST_PRODUCT -> throw wall(c.fn(), "a list's cartesian product has no " + product() + " spelling");
             // DuckDB's range: [start, stop) by step (start 0, step 1 by default)
             case RANGE_FN -> range(writer, a);
             case REPEAT_VALUE -> writer.append("(CASE WHEN ").expr(a.get(1), 4).append(" > 0 THEN (SELECT JSON_ARRAYAGG(")
@@ -2046,14 +2147,18 @@ public final class MariaDb extends AnsiSqlRenderer {
         if (!(listElement(c) instanceof SqlType.Struct st) || st.fields().size() != a.size()) {
             throw wall(c.fn(), "a zip of unknown struct type");
         }
-        return w -> {
-            w.append("coalesce((SELECT JSON_ARRAYAGG(JSON_OBJECT(");
+        SqlWriter.Piece object = w -> {
+            w.append("JSON_OBJECT(");
             for (int i = 0; i < a.size(); i++) {
                 int at = i;
                 w.append(i > 0 ? ", " : "").append(stringLit(st.fields().get(i).name())).append(", ")
                         .piece(jsonOf(elementAt(a.get(i), v -> v.append("__z.\"__n\" - 1")), st.fields().get(at).type()));
             }
-            w.append(") ORDER BY __z.\"__n\") FROM ").piece(rows(v -> {
+            w.append(")");
+        };
+        return w -> {
+            w.append("coalesce((SELECT ").piece(arrayAgg(false, object, v -> v.append("__z.\"__n\""), false))
+                    .append(" FROM ").piece(rows(v -> {
                 v.append("GREATEST(");
                 for (int i = 0; i < a.size(); i++) {
                     v.append(i > 0 ? ", " : "").append("coalesce(JSON_LENGTH(").expr(a.get(i), 0).append("), 0)");
@@ -2076,8 +2181,9 @@ public final class MariaDb extends AnsiSqlRenderer {
         SqlWriter.Piece count = w -> w.append("CEIL(((").piece(stop).append(") - (").piece(start).append(")) / (")
                 .piece(step).append("))");
         return writer.append("(CASE WHEN ((").piece(stop).append(") - (").piece(start).append(")) * (").piece(step)
-                .append(") > 0 THEN (SELECT JSON_ARRAYAGG((").piece(start).append(") + (__g.\"__n\" - 1) * (")
-                .piece(step).append(") ORDER BY __g.\"__n\") FROM ").piece(rows(count, "__g"))
+                .append(") > 0 THEN (SELECT ").piece(arrayAgg(false, v -> v.append("(").piece(start)
+                        .append(") + (__g.\"__n\" - 1) * (").piece(step).append(")"), v -> v.append("__g.\"__n\""), false))
+                .append(" FROM ").piece(rows(count, "__g"))
                 .append(") ELSE JSON_ARRAY() END)");
     }
 
@@ -2093,7 +2199,7 @@ public final class MariaDb extends AnsiSqlRenderer {
             return w -> {
                 for (int i = 0; i < st.fields().size(); i++) {
                     SqlType.Struct.Field f = st.fields().get(i);
-                    String field = "JSON_VALUE(" + x + ", " + memberPath(f.name()) + ")";
+                    String field = jsonText(x, memberPath(f.name()));
                     w.append(i > 0 ? ", " : "").piece(elementSortOf(scalarOfText(v -> v.append(field), f.type()), asc));
                 }
             };
@@ -2101,9 +2207,10 @@ public final class MariaDb extends AnsiSqlRenderer {
         return elementSortOf(w -> w.append(x), asc);
     }
 
-    /** One sort key, NULLs last. */
+    /** One sort key, NULLs last, its NULL placement in its direction ({@link #sortKey}). */
     private static SqlWriter.Piece elementSortOf(SqlWriter.Piece x, boolean asc) {
-        return w -> w.append("(").piece(x).append(" IS NULL), ").piece(x).append(asc ? "" : " DESC");
+        return asc ? w -> w.append("(").piece(x).append(" IS NULL), ").piece(x)
+                : w -> w.append("(").piece(x).append(" IS NOT NULL) DESC, ").piece(x).append(" DESC");
     }
 
     // ---- map calls: JSON objects (text keys)
@@ -2117,10 +2224,11 @@ public final class MariaDb extends AnsiSqlRenderer {
             case MAP_FROM_LISTS -> {
                 SqlType v = listElement(a.get(1));
                 yield writer.append("(SELECT JSON_OBJECTAGG(__k.\"k\", ").piece(jsonOf(w -> w.append("__v.\"v\""), v))
-                        .append(") FROM JSON_TABLE(").expr(a.get(0), 0).append(", '$[*]' COLUMNS (\"o\" FOR ORDINALITY,")
-                        .append(" \"k\" " + columnType(SqlType.Scalar.VARCHAR) + " PATH '$')) AS __k LEFT JOIN JSON_TABLE(")
-                        .expr(a.get(1), 0).append(", '$[*]' COLUMNS (\"o\" FOR ORDINALITY, \"v\" " + columnType(v)
-                                + " PATH '$')) AS __v ON __v.\"o\" = __k.\"o\")");
+                        .append(") FROM ").piece(jsonTable(x -> x.expr(a.get(0), 0), "'$[*]' COLUMNS (\"o\" FOR ORDINALITY,"
+                                + " \"k\" " + columnType(SqlType.Scalar.VARCHAR) + " PATH '$')", "__k"))
+                        .append(" LEFT JOIN ").piece(jsonTable(x -> x.expr(a.get(1), 0), "'$[*]' COLUMNS (\"o\" FOR"
+                                + " ORDINALITY, \"v\" " + columnType(v) + " PATH '$')", "__v"))
+                        .append(" ON __v.\"o\" = __k.\"o\")");
             }
             // DuckDB's map_from_entries: each entry a struct of (key, value), by position whatever their names
             case MAP_FROM_ENTRIES -> {
@@ -2129,10 +2237,10 @@ public final class MariaDb extends AnsiSqlRenderer {
                 }
                 SqlType vt = entry.fields().get(1).type();
                 yield writer.append("(SELECT JSON_OBJECTAGG(__e.\"k\", ").piece(jsonOf(w -> w.append("__e.\"v\""), vt))
-                        .append(") FROM JSON_TABLE(").expr(a.get(0), 0).append(", '$[*]' COLUMNS (\"k\" "
+                        .append(") FROM ").piece(jsonTable(x -> x.expr(a.get(0), 0), "'$[*]' COLUMNS (\"k\" "
                                 + columnType(SqlType.Scalar.VARCHAR) + " PATH " + memberPath(entry.fields().get(0).name())
                                 + ", \"v\" " + columnType(vt) + " PATH " + memberPath(entry.fields().get(1).name())
-                                + ")) AS __e)");
+                                + ")", "__e")).append(")");
             }
             // DuckDB's map_extract: a list of the key's value, empty when absent
             case MAP_EXTRACT -> writer.append("(CASE WHEN ").expr(a.get(0), 4).append(" IS NULL THEN NULL WHEN")
@@ -2195,20 +2303,23 @@ public final class MariaDb extends AnsiSqlRenderer {
     private enum Part {
         YEAR, QUARTER, MONTH, WEEK, DAY, HOUR, MINUTE, SECOND, MILLISECOND, MICROSECOND, DOY, DOW, ISODOW;
 
-        static Part of(SqlExpr literal, String what) {
-            String name = literal(literal, what);
+        static Part of(String name, String what, String product) {
             for (Part p : values()) {
                 if (p.name().toLowerCase(Locale.ROOT).equals(name)) {
                     return p;
                 }
             }
-            throw new DialectCapability(what + " '" + name + "' has no measured MariaDB spelling");
+            throw new DialectCapability(what + " '" + name + "' has no measured " + product + " spelling");
         }
     }
 
+    private Part part(SqlExpr literal, String what) {
+        return Part.of(literal(literal, what), what, product());
+    }
+
     /** DuckDB's date_part names; a Pure integer. dow is Sunday 0, isodow Monday 1 to Sunday 7, week the ISO week. */
-    private static SqlWriter.Piece extract(List<SqlExpr> a) {
-        Part part = Part.of(a.get(0), "an EXTRACT part");
+    private SqlWriter.Piece extract(List<SqlExpr> a) {
+        Part part = part(a.get(0), "an EXTRACT part");
         SqlExpr t = a.get(1);
         String fn = switch (part) {
             case YEAR -> "YEAR(";
@@ -2237,8 +2348,8 @@ public final class MariaDb extends AnsiSqlRenderer {
 
     /** The base's contract: year/quarter/month/week deliver a DATE, finer parts a date-time; DuckDB's week starts on
      *  Monday. */
-    private static SqlWriter.Piece dateTrunc(List<SqlExpr> a) {
-        Part part = Part.of(a.get(0), "a DATE_TRUNC part");
+    private SqlWriter.Piece dateTrunc(List<SqlExpr> a) {
+        Part part = part(a.get(0), "a DATE_TRUNC part");
         SqlExpr t = a.get(1);
         return switch (part) {
             case YEAR -> w -> w.append("MAKEDATE(YEAR(").expr(t, 0).append("), 1)");
@@ -2256,13 +2367,13 @@ public final class MariaDb extends AnsiSqlRenderer {
             case MILLISECOND -> w -> w.append("(CAST(").expr(t, 0).append(" AS DATETIME(6)) - INTERVAL MOD(MICROSECOND(")
                     .expr(t, 0).append("), 1000) MICROSECOND)");
             case MICROSECOND, DOY, DOW, ISODOW -> throw new DialectCapability("date_trunc part '"
-                    + part.name().toLowerCase(Locale.ROOT) + "' has no measured MariaDB spelling");
+                    + part.name().toLowerCase(Locale.ROOT) + "' has no measured " + product() + " spelling");
         };
     }
 
     /** A date plus an interval (MariaDB's month arithmetic clamps a month past its end, as DuckDB's: 2020-01-31 + 1
      *  month is 2020-02-29, measured); a date plus whole days is a date. Milliseconds and finer are microseconds. */
-    private static SqlWriter.Piece addInterval(List<SqlExpr> a, SqlExpr.Call c) {
+    private SqlWriter.Piece addInterval(List<SqlExpr> a, SqlExpr.Call c) {
         String unit = literal(a.get(0), c.fn().name());
         SqlExpr n = a.get(1);
         SqlExpr t = a.get(2);
@@ -2276,7 +2387,7 @@ public final class MariaDb extends AnsiSqlRenderer {
             case "to_seconds" -> new String[] {"SECOND", "1"};
             case "to_milliseconds" -> new String[] {"MICROSECOND", "1000"};
             case "to_microseconds" -> new String[] {"MICROSECOND", "1"};
-            default -> throw new DialectCapability("interval unit '" + unit + "' has no MariaDB spelling");
+            default -> throw new DialectCapability("interval unit '" + unit + "' has no " + product() + " spelling");
         };
         return w -> w.append("(").expr(t, 6).append(" + INTERVAL (").expr(n, 0).append(")" + ("1".equals(u[1]) ? ""
                 : " * " + u[1]) + " " + u[0] + ")");
@@ -2284,8 +2395,8 @@ public final class MariaDb extends AnsiSqlRenderer {
 
     /** DuckDB's date_diff counts BOUNDARIES crossed (23:59:59 to 00:00 is a day, 01-31 to 02-01 a month); its week is
      *  whole days over 7, truncated. */
-    private static SqlWriter.Piece dateDiff(List<SqlExpr> a) {
-        Part part = Part.of(a.get(0), "a DATE_DIFF part");
+    private SqlWriter.Piece dateDiff(List<SqlExpr> a) {
+        Part part = part(a.get(0), "a DATE_DIFF part");
         SqlExpr from = a.get(1);
         SqlExpr to = a.get(2);
         return switch (part) {
@@ -2302,19 +2413,19 @@ public final class MariaDb extends AnsiSqlRenderer {
             case MILLISECOND -> boundaries(from, to, 1000L);
             case MICROSECOND -> boundaries(from, to, 1L);
             case DOY, DOW, ISODOW -> throw new DialectCapability("date_diff part '"
-                    + part.name().toLowerCase(Locale.ROOT) + "' has no measured MariaDB spelling");
+                    + part.name().toLowerCase(Locale.ROOT) + "' has no measured " + product() + " spelling");
         };
     }
 
     /** The unit boundaries between two date-times: each floored to the unit, in microseconds. */
-    private static SqlWriter.Piece boundaries(SqlExpr from, SqlExpr to, long unit) {
+    private SqlWriter.Piece boundaries(SqlExpr from, SqlExpr to, long unit) {
         return w -> w.append("(FLOOR(").piece(micros(to)).append(" / " + unit + ") - FLOOR(").piece(micros(from))
                 .append(" / " + unit + "))");
     }
 
     /** DuckDB's time_bucket with the base's origins (1970-01-01; weeks the Monday 1969-12-29): fixed units binned in
      *  microseconds, floored; months and years by the month index since 1970-01, floored to the bucket's size. */
-    private static SqlWriter.Piece timeBucket(List<SqlExpr> a) {
+    private SqlWriter.Piece timeBucket(List<SqlExpr> a) {
         String unit = literal(a.get(0), "a TIME_BUCKET unit");
         SqlExpr n = a.get(1);
         SqlExpr t = a.get(2);
@@ -2328,7 +2439,7 @@ public final class MariaDb extends AnsiSqlRenderer {
         }
         int months = "to_months".equals(unit) ? 1 : "to_years".equals(unit) ? 12 : 0;
         if (months == 0) {
-            throw new DialectCapability("a " + unit + " time bucket has no MariaDB spelling");
+            throw new DialectCapability("a " + unit + " time bucket has no " + product() + " spelling");
         }
         SqlWriter.Piece k = w -> w.append("((YEAR(").expr(t, 0).append(") - 1970) * 12 + MONTH(").expr(t, 0)
                 .append(") - 1)");
@@ -2482,23 +2593,20 @@ public final class MariaDb extends AnsiSqlRenderer {
             }
             case LIST -> {
                 if (r.args().size() != 1) {
-                    throw new DialectCapability("a LIST aggregate of " + r.args().size() + " arguments reached MariaDB");
+                    throw new DialectCapability("a LIST aggregate of " + r.args().size() + " arguments reached " + product());
                 }
-                writer.append("JSON_ARRAYAGG(").append(r.distinct() ? "DISTINCT " : "").piece(json(r.args().get(0)));
-                if (!r.orderBy().isEmpty()) {
-                    writer.append(" ORDER BY ").join(r.orderBy(), ", ", this::orderKey);
-                }
-                yield writer.append(")");
+                yield writer.piece(arrayAgg(r.distinct(), json(r.args().get(0)), r.orderBy().isEmpty() ? null
+                        : w -> w.join(r.orderBy(), ", ", this::orderKey), false));
             }
             case MEDIAN -> {
                 if (r.args().size() != 1 || r.distinct()) {
-                    throw new DialectCapability("a median of this shape reached MariaDB");
+                    throw new DialectCapability("a median of this shape reached " + product());
                 }
                 yield writer.piece(quantile(SqlAgg.Fn.QUANTILE_CONT, r.args().get(0), w -> w.append("0.5"), r));
             }
             case QUANTILE_CONT, QUANTILE_DISC -> {
                 if (r.args().size() != 2 || r.distinct() || r.orderBy().size() > 1) {
-                    throw new DialectCapability(r.fn() + " of this shape reached MariaDB");
+                    throw new DialectCapability(r.fn() + " of this shape reached " + product());
                 }
                 yield writer.piece(quantile(r.fn(), r.args().get(0), w -> w.expr(r.args().get(1), 0), r));
             }
@@ -2514,13 +2622,12 @@ public final class MariaDb extends AnsiSqlRenderer {
             // the value at the key's greatest (least) row, rows of a NULL key ignored
             case ARG_MAX, ARG_MIN -> {
                 if (r.args().size() != 2 || r.distinct() || !r.orderBy().isEmpty()) {
-                    throw new DialectCapability(r.fn() + " of this shape reached MariaDB");
+                    throw new DialectCapability(r.fn() + " of this shape reached " + product());
                 }
                 SqlExpr v = r.args().get(0);
                 SqlExpr k = r.args().get(1);
-                SqlWriter.Piece first = w -> w.append("JSON_ARRAYAGG(").piece(json(v)).append(" ORDER BY (")
-                        .expr(k, 4).append(" IS NULL), ").expr(k, 0)
-                        .append(r.fn() == SqlAgg.Fn.ARG_MAX ? " DESC" : "").append(" LIMIT 1)");
+                SqlWriter.Piece first = arrayAgg(false, json(v), elementSortOf(w -> w.expr(k, 0),
+                        r.fn() != SqlAgg.Fn.ARG_MAX), true);
                 yield writer.append("(CASE WHEN count(").expr(k, 0).append(") = 0 THEN NULL ELSE ")
                         .piece(valueAt(first, w -> w.append("'$[0]'"), typeOf(v))).append(" END)");
             }
@@ -2568,8 +2675,7 @@ public final class MariaDb extends AnsiSqlRenderer {
     private SqlWriter.Piece quantile(SqlAgg.Fn fn, SqlExpr x, SqlWriter.Piece q, SqlAgg.Reducer r) {
         boolean desc = !r.orderBy().isEmpty() && !r.orderBy().get(0).ascending();
         SqlType t = typeOf(x);
-        SqlWriter.Piece sorted = w -> w.append("JSON_ARRAYAGG(").piece(json(x)).append(" ORDER BY (").expr(x, 4)
-                .append(" IS NULL), ").expr(x, 0).append(desc ? " DESC)" : ")");
+        SqlWriter.Piece sorted = arrayAgg(false, json(x), elementSortOf(w -> w.expr(x, 0), !desc), false);
         SqlWriter.Piece n = w -> w.append("count(").expr(x, 0).append(")");
         java.util.function.Function<SqlWriter.Piece, SqlWriter.Piece> at = i -> valueAt(sorted, indexPath(i),
                 fn == SqlAgg.Fn.QUANTILE_DISC ? t : SqlType.Scalar.DOUBLE);
@@ -2609,7 +2715,7 @@ public final class MariaDb extends AnsiSqlRenderer {
                 return windowOver(writer, w);
             }
             case SqlAgg.Reducer r when ORDERED_SETS.contains(r.fn()) ->
-                    throw new DialectCapability(r.fn() + " over an ordered or framed window reached MariaDB");
+                    throw new DialectCapability(r.fn() + " over an ordered or framed window reached " + product());
             case SqlAgg.Reducer r when PAIRS.contains(r.fn()) -> {
                 return writer.piece(windowPairs(r, w));
             }
@@ -2618,12 +2724,12 @@ public final class MariaDb extends AnsiSqlRenderer {
             }
             case SqlAgg.Reducer r when r.fn() == SqlAgg.Fn.ARG_MAX || r.fn() == SqlAgg.Fn.ARG_MIN
                     || r.fn() == SqlAgg.Fn.STRING_AGG || r.fn() == SqlAgg.Fn.LIST ->
-                    throw new DialectCapability("a windowed " + r.fn() + " reached MariaDB, where it is no window"
+                    throw new DialectCapability("a windowed " + r.fn() + " reached " + product() + ", where it is no window"
                             + " function");
             case SqlAgg.Reducer r when !r.orderBy().isEmpty() -> {
                 if (!w.orderBy().isEmpty() || w.frame() != null) {
                     throw new DialectCapability("an ordered " + r.fn() + " over an ordered or framed window reached"
-                            + " MariaDB");
+                            + " " + product());
                 }
                 reducer(writer, new SqlAgg.Reducer(r.fn(), r.args(), r.distinct(), List.of()));
                 return windowOver(writer, new SqlExpr.WindowCall(w.fn(), w.partitionBy(), r.orderBy(),
@@ -2738,12 +2844,12 @@ public final class MariaDb extends AnsiSqlRenderer {
             boolean range = f != null && f.kind() == SqlExpr.WindowCall.Frame.Kind.RANGE;
             if (interval) {
                 if (w.orderBy().size() != 1) {
-                    throw new DialectCapability("a RANGE frame over " + w.orderBy().size() + " keys reached MariaDB");
+                    throw new DialectCapability("a RANGE frame over " + w.orderBy().size() + " keys reached " + product());
                 }
                 SqlSelect.SortKey k = w.orderBy().get(0);
                 SqlType kt = typeOf(k.expr());
                 if (kt != SqlType.Scalar.DATE && kt != SqlType.Scalar.TIMESTAMP) {
-                    throw new DialectCapability("an interval RANGE frame over a " + kt + " key reached MariaDB");
+                    throw new DialectCapability("an interval RANGE frame over a " + kt + " key reached " + product());
                 }
                 days = true;
                 writer.append("(").piece(micros(k.expr())).append(" / 86400000000)").append(k.ascending() ? "" : " DESC");
@@ -2784,10 +2890,10 @@ public final class MariaDb extends AnsiSqlRenderer {
         };
     }
 
-    private static String intervalDays(long n, String unit, boolean days) {
+    private String intervalDays(long n, String unit, boolean days) {
         Long micros = FRAME_MICROS.get(unit.toUpperCase(Locale.ROOT));
         if (!days || micros == null) {
-            throw new DialectCapability("a " + unit + " window frame offset over this key reached MariaDB");
+            throw new DialectCapability("a " + unit + " window frame offset over this key reached " + product());
         }
         return String.valueOf(n * (double) micros / 86400000000.0);
     }
@@ -2820,13 +2926,10 @@ public final class MariaDb extends AnsiSqlRenderer {
      *  NULL, measured). */
     @Override
     protected SqlWriter jsonArrayAgg(SqlWriter writer, SqlExpr.JsonArrayAgg j) {
-        writer.append("coalesce(JSON_ARRAYAGG(").piece(json(j.value()));
-        if (!j.orderKeys().isEmpty()) {
-            writer.append(" ORDER BY ").join(j.orderKeys(), ", ",
-                    (w, k) -> w.append("(").expr(k.expr(), 4).append(" IS NULL), ").expr(k.expr(), 0)
-                            .append(k.desc() ? " DESC" : ""));
-        }
-        return writer.append("), JSON_ARRAY())");
+        SqlWriter.Piece order = j.orderKeys().isEmpty() ? null : v -> v.join(j.orderKeys(), ", ",
+                (w, k) -> w.piece(elementSortOf(x -> x.expr(k.expr(), 0), !k.desc())));
+        return writer.append("coalesce(").piece(arrayAgg(false, json(j.value()), order, false))
+                .append(", JSON_ARRAY())");
     }
 
     // ==================================================================

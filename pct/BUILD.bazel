@@ -6,6 +6,7 @@
 load("//tools/junit:defs.bzl", "junit_test")
 load("//tools/java:defs.bzl", "legend_java_library")
 load("//tools/mariadb:defs.bzl", "EMBEDDED_MARIADB_COMPATIBLE")
+load("//tools/mysql:defs.bzl", "EMBEDDED_MYSQL_COMPATIBLE")
 load("//tools/postgres:defs.bzl", "EMBEDDED_POSTGRES_COMPATIBLE")
 load("@bazel_lib//lib:write_source_files.bzl", "write_source_files")
 load("//tools/generators:defs.bzl", "UPSTREAM_ROOTS", "UPSTREAM_TREES", "program_jvm_flags")
@@ -266,6 +267,35 @@ test_suite(
     name = "pct_mariadb",
     tags = ["manual"],
     tests = [":pct_mariadb_" + s.lower() for s in _SUITES],
+)
+
+# THE MYSQL LANES — the five suites on MySQL 8.4 (LEGENDLITE_PCT_BACKEND=mysql), on a real server this JVM starts from
+# the pinned server Bazel unpacked (@embedded_mysql, //testing EmbeddedMySql): no Docker. Each suite carries MySQL's
+# OWN expected failures (Test_LegendLite_MySQL_*Functions_PCT). Manual, in //gates:heavy
+# (docs/CLOUD_BACKENDS_PCT_2026_10_11.md §14). Its driver is the MariaDB lanes' (MariaDB Connector/J speaks to MySQL).
+[junit_test(
+    name = "pct_mysql_" + s.lower(),
+    memory_mb = 4096,
+    data = [
+        "@embedded_mysql//:mysql",
+        "@embedded_mysql//:mysql/MYSQL_ROOT",
+    ],
+    env = {"LEGENDLITE_PCT_BACKEND": "mysql"},
+    jvm_flags = ["-Dembedded.mysql.root=$(rlocationpath @embedded_mysql//:mysql/MYSQL_ROOT)"],
+    select = ["--select-class=org.finos.legend.lite.pct.Test_LegendLite_MySQL_%sFunctions_PCT" % s],
+    tags = ["manual"],
+    target_compatible_with = EMBEDDED_MYSQL_COMPATIBLE,
+    runtime_deps = [
+        ":pct_tests_lib",
+        "//core:drivers",
+        "@mariadb_jdbc//jar",
+    ],
+) for s in _SUITES]
+
+test_suite(
+    name = "pct_mysql",
+    tags = ["manual"],
+    tests = [":pct_mysql_" + s.lower() for s in _SUITES],
 )
 
 # THE CLOUD LANES — the five suites on a real Databricks, Snowflake and BigQuery account

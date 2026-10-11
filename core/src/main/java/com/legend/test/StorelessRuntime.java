@@ -75,10 +75,10 @@ public final class StorelessRuntime {
             case DuckDB -> "specification: DuckDB { };\n  auth: Test";
             case H2 -> "specification: LocalH2 { };\n  auth: DefaultH2";
             case SQLite -> "specification: SQLite { };\n  auth: Test";
-            case Postgres, MariaDB -> throw new IllegalArgumentException(type + " is a server: its storeless runtime"
+            case Postgres, MariaDB, MySQL -> throw new IllegalArgumentException(type + " is a server: its storeless runtime"
                     + " declares the session's coordinates (onServer)");
             case DB2, MemSQL, Sybase, SybaseIQ, Composite, SqlServer, Hive, Snowflake, Presto, Trino, BigQuery,
-                 Redshift, Databricks, Spanner, Athena, Oracle, ClickHouse, Aurora, MySQL ->
+                 Redshift, Databricks, Spanner, Athena, Oracle, ClickHouse, Aurora ->
                     throw new IllegalArgumentException("no storeless runtime on " + type
                             + ": the platform does not execute on it");
         };

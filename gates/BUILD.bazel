@@ -286,6 +286,7 @@ test_suite(
         "//pct:pct_bigquery",
         "//pct:pct_sqlite",
         "//pct:pct_mariadb",
+        "//pct:pct_mysql",
     ],
 )
 

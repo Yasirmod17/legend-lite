@@ -5,6 +5,7 @@ package org.finos.legend.lite.pct.extension;
 
 import com.legend.model.ConnectionDefinition.DatabaseType;
 import com.legend.testing.EmbeddedMariaDb;
+import com.legend.testing.EmbeddedMySql;
 import com.legend.testing.EmbeddedPostgres;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -21,6 +22,7 @@ import java.sql.SQLException;
  *   <li>{@code postgres}: this JVM's embedded Postgres 16 (leg P2), a new session on its database;</li>
  *   <li>{@code sqlite}: a fresh in-memory SQLite (the driver's own build, in-process);</li>
  *   <li>{@code mariadb}: this JVM's embedded MariaDB 11.4, a new session on its database {@code pct};</li>
+ *   <li>{@code mysql}: this JVM's embedded MySQL 8.4, a new session on its database {@code pct};</li>
  *   <li>{@code databricks}, {@code snowflake}, {@code bigquery}: a real account's warehouse, one session held for the
  *       suite ({@link CloudLane}: its coordinates and credentials from {@code LEGENDLITE_PCT_CLOUD_PROPERTIES}).</li>
  * </ul>
@@ -57,6 +59,12 @@ final class PctBackend {
             @Override
             Connection open() throws SQLException {
                 return DriverManager.getConnection(EmbeddedMariaDb.shared().jdbcUrl("pct"));
+            }
+        },
+        MYSQL(DatabaseType.MySQL) {
+            @Override
+            Connection open() throws SQLException {
+                return DriverManager.getConnection(EmbeddedMySql.shared().jdbcUrl("pct"));
             }
         },
         POSTGRES(DatabaseType.Postgres) {
@@ -103,11 +111,12 @@ final class PctBackend {
             case "postgres" -> Lane.POSTGRES;
             case "sqlite" -> Lane.SQLITE;
             case "mariadb" -> Lane.MARIADB;
+            case "mysql" -> Lane.MYSQL;
             case "databricks" -> Lane.DATABRICKS;
             case "snowflake" -> Lane.SNOWFLAKE;
             case "bigquery" -> Lane.BIGQUERY;
             default -> throw new IllegalStateException("LEGENDLITE_PCT_BACKEND=" + backend + ": a PCT lane runs on"
-                    + " DuckDB (unset), h2, postgres, sqlite, mariadb, databricks, snowflake or bigquery");
+                    + " DuckDB (unset), h2, postgres, sqlite, mariadb, mysql, databricks, snowflake or bigquery");
         };
     }
 
@@ -120,6 +129,8 @@ final class PctBackend {
                     EmbeddedPostgres.shared().port(), "postgres");
             case MARIADB -> com.legend.test.StorelessRuntime.onServer(model, lane.type, "127.0.0.1",
                     EmbeddedMariaDb.shared().port(), "pct");
+            case MYSQL -> com.legend.test.StorelessRuntime.onServer(model, lane.type, "127.0.0.1",
+                    EmbeddedMySql.shared().port(), "pct");
             case DATABRICKS -> CloudLane.withStorelessRuntime(model, CloudLane.Cloud.DATABRICKS);
             case SNOWFLAKE -> CloudLane.withStorelessRuntime(model, CloudLane.Cloud.SNOWFLAKE);
             case BIGQUERY -> CloudLane.withStorelessRuntime(model, CloudLane.Cloud.BIGQUERY);

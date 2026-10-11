@@ -81,19 +81,22 @@ public final class Sessions {
             case BigQuery -> "Google BigQuery";
             // MariaDB Connector/J names the server it reached (measured, 3.5.10 on MariaDB 11.4)
             case MariaDB -> "MariaDB";
+            // ... and so does it on MySQL (measured, 3.5.10 on MySQL 8.4)
+            case MySQL -> "MySQL";
             case DB2, MemSQL, Sybase, SybaseIQ, Composite, SqlServer, Hive, Presto, Trino,
-                 Redshift, Spanner, Athena, Oracle, ClickHouse, Aurora, MySQL ->
+                 Redshift, Spanner, Athena, Oracle, ClickHouse, Aurora ->
                     throw new com.legend.error.NotImplementedException(
                             "sessions on database type '" + type + "' are not implemented");
         };
     }
 
-    /** The raise a MariaDB session holds after a statement failed (docs/CLOUD_BACKENDS_PCT_2026_10_11.md §13): its
+    /** The raise a MariaDB or MySQL session holds after a statement failed (docs/CLOUD_BACKENDS_PCT_2026_10_11.md §13): its
      *  dialect keeps a raised message in the session variable {@code @legend_raise} before it fails, since a MariaDB
      *  error cannot carry a raise's text. Read and cleared; null for any other session, or none held. */
     public static @com.legend.base.Nullable String raisedMessage(Connection session) {
         try {
-            if (!jdbcProduct(DatabaseType.MariaDB).equals(session.getMetaData().getDatabaseProductName())) {
+            String product = session.getMetaData().getDatabaseProductName();
+            if (!jdbcProduct(DatabaseType.MariaDB).equals(product) && !jdbcProduct(DatabaseType.MySQL).equals(product)) {
                 return null;
             }
             try (java.sql.Statement st = session.createStatement();
@@ -206,7 +209,8 @@ public final class Sessions {
                 case ConnectionSpecification.Databricks x -> refused(def);
                 case ConnectionSpecification.BigQuery x -> refused(def);
             };
-            case MariaDB -> switch (spec) {
+            // MariaDB Connector/J opens both (measured on MariaDB 11.4 and MySQL 8.4): one driver, one URL
+            case MariaDB, MySQL -> switch (spec) {
                 case ConnectionSpecification.StaticDatasource(String host, int port, String database) ->
                         new Opening.Url("jdbc:mariadb://" + host + ":" + port + "/" + database);
                 case ConnectionSpecification.InMemory x -> refused(def);
@@ -219,7 +223,7 @@ public final class Sessions {
                 case ConnectionSpecification.BigQuery x -> refused(def);
             };
             case DB2, MemSQL, Sybase, SybaseIQ, Composite, SqlServer, Hive, Snowflake, Presto, Trino, BigQuery,
-                 Redshift, Databricks, Spanner, Athena, Oracle, ClickHouse, Aurora, MySQL ->
+                 Redshift, Databricks, Spanner, Athena, Oracle, ClickHouse, Aurora ->
                     throw new com.legend.error.NotImplementedException("connections to database type '"
                             + def.databaseType() + "' are not implemented (connection '" + def.qualifiedName() + "')");
         };

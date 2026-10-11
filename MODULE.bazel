@@ -128,6 +128,11 @@ use_repo(embedded_postgres, "embedded_postgres")
 embedded_mariadb = use_extension("//tools/mariadb:extensions.bzl", "embedded_mariadb")
 use_repo(embedded_mariadb, "embedded_mariadb")
 
+# THE MYSQL the MySQL lanes run on (tools/mysql/mysql.bzl): Oracle's pinned minimal server tarball, unpacked and trimmed
+# by Bazel, with Debian's libaio and libnuma beside it -- no Docker -- and the hub @embedded_mysql (Linux x86_64 only).
+embedded_mysql = use_extension("//tools/mysql:extensions.bzl", "embedded_mysql")
+use_repo(embedded_mysql, "embedded_mysql")
+
 # test tooling, at legend-lite's own versions (root pom <junit.version>). JUnit's
 # BOM keeps the Jupiter and Platform jars in step. tools/junit/JUnitMain drives the
 # Platform Launcher itself (Bazel workplan P1-01): the launcher, the legacy XML
