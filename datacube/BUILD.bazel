@@ -12,6 +12,7 @@ load("@rules_python//python:py_binary.bzl", "py_binary")
 load("@rules_python//python:py_test.bzl", "py_test")
 load("//tools/platforms:defs.bzl", "COMPILER_LIBRARY_PLATFORMS", "compatible_with")
 load("@bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
+load("@bazel_lib//lib:params_file.bzl", "params_file")
 load("@bazel_lib//lib:write_source_files.bzl", "write_source_files")
 load("//tools/browser:defs.bzl", "browser_test")
 load("@bazel_skylib//rules:build_test.bzl", "build_test")
@@ -624,14 +625,27 @@ filegroup(
     srcs = glob(["src/**/*.ts", "test/**/*.ts"]),
 )
 
+# the files the scan reads, by their paths, in a file the generator is handed: on its command line they passed the
+# 8191 characters a Windows .bat launcher takes (the branch CI run 38175909649, the headless lane's split test files)
+params_file(
+    name = "import_scan_list",
+    out = "import_scan.params",
+    args = ["$(rootpaths :import_scan)"],
+    data = [":import_scan"],
+    newline = "unix",
+)
+
 js_run_binary(
     name = "test_imports",
-    srcs = [":import_scan"],
+    srcs = [
+        ":import_scan",
+        ":import_scan_list",
+    ],
     outs = ["test_imports_generated.bzl"],
     args = [
         package_name() + "/test_imports_generated.bzl",
         package_name(),
-        "$(rootpaths :import_scan)",
+        "@$(rootpath :import_scan_list)",
     ],
     tool = ":test_imports_tool",
 )
