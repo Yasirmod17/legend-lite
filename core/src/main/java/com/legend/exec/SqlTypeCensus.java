@@ -247,7 +247,7 @@ public final class SqlTypeCensus {
             }
             for (int i = 0; i < outs.size(); i++) {
                 String label = wireSpelling(outs.get(i).type());
-                String meta = sized(normalizeMeta(md.getColumnTypeName(i + 1)), md, i + 1);
+                String meta = sized(normalizeMeta(dialectSpelling(dialect, md.getColumnTypeName(i + 1))), md, i + 1);
                 // E2E-audit CONVERSE tripwire (measure-first): a label
                 // promising always-present is a claim the wire can
                 // refute — watch every nullable=false column for NULL
@@ -283,7 +283,8 @@ public final class SqlTypeCensus {
                 }
                 if (label.equals(meta)) {
                     WIRE_AGREE.increment();
-                } else if (delivers(outs.get(i).type(), meta) || snowflakeOwn(dialect, outs.get(i).type(), meta)) {
+                } else if (delivers(outs.get(i).type(), meta) || snowflakeOwn(dialect, outs.get(i).type(), meta)
+                        || bigQueryOwn(dialect, outs.get(i).type(), meta)) {
                     // THE DELIVERY RELATION (adjudicated 2026-08-23):
                     // value-subset narrowing (every INTEGER fits the
                     // BIGINT contract; DECIMAL(p,s) fits DECIMAL(P>=p,s))
@@ -546,6 +547,32 @@ public final class SqlTypeCensus {
         boolean integral = label == SqlType.Scalar.BIGINT || label == SqlType.Scalar.INTEGER;
         return integral && meta.startsWith("DECIMAL(") && meta.endsWith(",0)")
                 || (label instanceof SqlType.Struct || label instanceof SqlType.Map) && meta.equals("OBJECT");
+    }
+
+    /** A driver's own type names for the census's: BigQuery's (2026-10-11) INT64, FLOAT64 and DATETIME (the naive
+     *  date-time; its TIMESTAMP, an instant, folds with every TIMESTAMP spelling in normalizeMeta). */
+    private static @com.legend.base.Nullable String dialectSpelling(String dialect,
+            @com.legend.base.Nullable String name) {
+        if (!"BigQuery".equals(dialect) || name == null) {
+            return name;
+        }
+        return switch (name) {
+            case "INT64" -> "BIGINT";
+            case "FLOAT64" -> "DOUBLE";
+            case "DATETIME" -> "TIMESTAMP";
+            default -> name;
+        };
+    }
+
+    /** BigQuery's exact decimal carrier (2026-10-11): every decimal is a BIGNUMERIC (a parameterized type cannot be
+     *  cast to; its 38 digits each side hold every DECIMAL(p,s) and HUGEINT value), and a Float-declared column may
+     *  arrive as it (the numeric charter's Rule 2, as a DECIMAL does). */
+    private static boolean bigQueryOwn(String dialect, SqlType label, String meta) {
+        if (!"BigQuery".equals(dialect) || !meta.equals("BIGNUMERIC")) {
+            return false;
+        }
+        return label == SqlType.Scalar.HUGEINT || label == SqlType.Scalar.DOUBLE
+                || label instanceof SqlType.Decimal d && d.scale() <= 38 && d.precision() - d.scale() <= 38;
     }
 
     private static boolean delivers(SqlType label, String meta) {
