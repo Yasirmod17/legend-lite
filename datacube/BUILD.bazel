@@ -1105,6 +1105,7 @@ _HARNESSES = [
     "torture",
     "verify-calc-vocabulary",
     "verify-charts",
+    "verify-class",
     "verify-cubes",
     "verify-engine",
     "verify-engine-differential",
@@ -1124,6 +1125,8 @@ _HARNESSES = [
 _BROWSER_TESTS = {
     "run-stress": "enormous",
     "verify-charts": "large",
+    # Create a Class… (docs/DATACUBE_MODEL_DESIGN_2026_10_10.md §15.7): two classes of two grids, in the page's SDLC
+    "verify-class": "large",
     "verify-cubes": "large",
     "verify-layout": "large",
     "verify-page": "large",
