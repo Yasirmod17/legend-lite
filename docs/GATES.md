@@ -8659,3 +8659,50 @@ from the normalizer's include ordering instead of a refusal.
    answered): the refusal moved before Phase E (it had reported a self-include as a cycle); the cross-kind and
    self-include cases tested; the wording narrowed to the DSL's mappings and clean-sheet mappings parked; a dangling
    citation and a "below" fixed.
+
+## 2026-10-11 — A `~func` descriptor spelling a type by its package path is refused, as the engine refuses it (the Bazel program)
+
+**Landed 2026-10-11 as eabda91b8** (branch `build/func-descriptor`; run 38152032814, full gate.yml on all platforms: green on every job, 50 of 50, no re-run; main's own run of the previous landing (38147522593, on 0b29453e1) had timed out once in `//warehouse:tests_native` on linux / warehouse (300 s), a job the same commit passed in 38145210104 and again in this run, so its failed job was re-run rather than rolled back).
+Announced in `docs/IN_FLIGHT.md` the same day (9a6873d07). The DataCube line's find against legend-engine 4.145.0,
+writing the model writer's tests: a relation class mapping's `~func f():meta::pure::metamodel::relation::Relation<Any>[1]`
+compiled in lite and failed in the engine.
+
+1. **The engine's rule.** legend-pure's `FunctionDescriptor.validateType` (m3-core, `navigation/function/FunctionDescriptor.java`),
+   run by `functionDescriptorToId` on every descriptor the compiler resolves (`compiler/toPureGraph/PureModel.java`,
+   the prerequisite pass), allows no package path in a parameter or return type ("Package path not allowed in types:
+   <type>") and no function type ("Unsupported type"); a type's arguments are not read (the id keeps the head name).
+   The id conversion failing, the compiler looks the raw text up as an element and reports "Can't find the packageable
+   element".
+2. **Lite.** `MappingFromProtocol.relationFunction` cut the descriptor at its signature and resolved the name alone, so
+   the signature's spelling was never read. Now `refuseDescriptorTypes` reads each parameter type's and the return
+   type's head name (the multiplicity stripped, the arguments skipped, as the engine does) and refuses a package path
+   or a function type through the model door's own channel (`UnsupportedMappingShape`): the text door reports it at
+   the element with the descriptor's position, the JSON door as the element's `Unrepresentable`, the module path walls
+   the mapping. At every dialect: the signature means nothing in lite beyond the engine's id format, and a model written
+   so compiles nowhere. Not touched: the parser's descriptor scan, the activator's `function:` descriptor (parse-only in
+   lite), the wire.
+3. **Tests.** `RelationFunctionDescriptorTest` (the return type, a parameter type, a function type refused; the
+   simple-name form with and without the signature, and a package path inside a type argument, compile); the two
+   fixtures that spelled the long form (`RelationMappingWindowSeamTest`, `StackDesignWitnessTest`) rewritten to the
+   simple name, the only such texts in the repository (no corpus text uses the form). The parser-equivalence ratchet is unchanged (`own_corpus.matched` 2832) and the
+   lane green.
+4. **Judges.** the six corpus passes against the baseline built from main 9a6873d07 the same day: 22 result files identical, 0 differing (`evidence/func-descriptor/corpus_passes_compare.txt`); the render census, main's tree against the change, every JVM lane with the probe: 52550 (lane, dialect, kind, text) entries; 0 differ (`evidence/func-descriptor/render_census_compare.txt`); the local gate 329 targets green on the final tree (`bazel test --lockfile_mode=error //gates:local`); `//parser-equivalence/...` 6 targets green; the lane-membership query empty. The main-side census was run twice: the first run's swap to main's
+   source left the branch's new test file in place, so main's test library did not build and the core lane's records were
+   missing on that side (3384 entries "differ", all absent on main); the chain scripts now remove branch-only files
+   during the swap, and the second run is the one compared.
+5. **The audit** (`evidence/func-descriptor/AUDIT.md`: ready after fixes, 0 blockers, 5 should-fix, 6 notes, every one
+   answered): the JSON door tested (the text's protocol JSON read back and compiled, refused with the engine's phrase);
+   a JSON-carried descriptor's spaces removed outside quotes before the scan, as the engine's lexer drops them; PARK-28
+   records that the signature itself is never matched against the function's (the engine resolves by the full id
+   `f__Relation_1_`, lite by the name alone; the `~src f():R[1]` form drops its tail at parse; the activator's
+   `function:` descriptor is parse-only), anchored on the signature cut and pinned in `ParkedWorkLedgerTest`; the
+   identity guard's NAME_AFFIX_TEST re-pinned 51 → 52 with the reason (a descriptor TYPE's spelling tested for a package
+   path: the engine's rule on text never resolved into a declaration, not a name's affix); a unit type and a type
+   variable tested as accepted; the handoff note of 2026-09-02 corrected.
+6. **Two differences from the announcement, and one from the engine.** The refusal rides the model door's own channel
+   (`UnsupportedMappingShape`): a positioned `ParseException` from text, `Unrepresentable` from JSON, which
+   `Compiler.compileModel` reports as `NotImplementedException` (the channel's wording, not this rule's), not the
+   `ModelException` the announcement named; and a function type in a parameter or return position is refused too
+   ("Unsupported type"), the same `validateType`. Lite's message names the rule and the type where the engine reports
+   "Can't find the packageable element '<descriptor>'" at the class mapping (its id conversion fails and the raw text is
+   looked up): a deliberate difference, so an engine-fixture comparison of this case sees two messages.

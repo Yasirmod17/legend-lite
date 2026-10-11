@@ -73,6 +73,10 @@ generated file, never a signature we typed ourselves.
   report (two mappings of one name crashed the include ordering) fixed as the engine refuses it, "Duplicated element"
   before Phase E; PARK-25 (the kinds still slotting last-wins, a path that is also a package, the side maps keyed by
   path) and PARK-26 (two include spellings refused as a cycle) recorded.
+- **The `~func` descriptor refusal, landed** (eabda91b8; run 38152032814; GATES "A `~func` descriptor spelling a type by its package
+  path is refused"): the DataCube line's find against the engine; a descriptor's parameter and return types by simple
+  name, as legend-pure's `FunctionDescriptor.validateType` reads them, refused at the model door for both doors;
+  PARK-28 (the signature never matched against the function's) recorded.
 - **Next: L4 (Phase 6)**, then L5 (Phase 4), L6 (Phase 5), the typing-order count, L8 (the bump). The order and
   cadence: the plan's §6. Before L4: the DataCube line's compile phase split (promised 2026-10-10) and the Studio
   line's leg 8 typing changes to review ((c) reviewed 2026-10-11 with its render census; (f) pending).
