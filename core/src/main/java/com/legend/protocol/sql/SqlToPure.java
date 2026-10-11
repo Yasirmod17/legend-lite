@@ -77,6 +77,8 @@ public final class SqlToPure {
     private final String group;
     private final String leftRow;
     private final String rightRow;
+    /** A subquery's row, in the {@code exists} and {@code map} that read an expression subquery. */
+    private final String sub;
     private int fresh;
 
     private SqlToPure(Sources sources, Env env) {
@@ -87,11 +89,18 @@ public final class SqlToPure {
         this.group = "y" + level;
         this.leftRow = "a" + level;
         this.rightRow = "b" + level;
+        this.sub = "s" + level;
     }
 
-    /** What a query level sees beyond its own FROM: the WITH queries in force, the enclosing query's scope (for a
-     *  correlated subquery), and how deep it is. */
-    private record Env(Map<String, Rel> ctes, @com.legend.base.Nullable Scope outer, int level) {
+    /** What a query level sees beyond its own FROM: the WITH queries in force, the enclosing query's scope and the
+     *  lambda parameter its row is in (for a correlated subquery), and how deep it is. */
+    private record Env(Map<String, Rel> ctes, @com.legend.base.Nullable Scope outer,
+            @com.legend.base.Nullable String outerRow, int level) {
+
+        /** The same level with {@code more} WITH queries in force (a FROM subquery, a WITH query or body). */
+        Env with(Map<String, Rel> more) {
+            return new Env(java.util.Collections.unmodifiableMap(new LinkedHashMap<>(more)), outer, outerRow, level);
+        }
     }
 
     /** A translated query: its relation and its output columns. */
@@ -112,7 +121,7 @@ public final class SqlToPure {
             throw new SqlTranslationException(e.unsupported() ? SqlTranslationException.Kind.UNSUPPORTED
                     : SqlTranslationException.Kind.SYNTAX, e.reason(), e.line(), e.column());
         }
-        return new SqlToPure(sources, new Env(Map.of(), null, 0)).statement(statement).vs();
+        return new SqlToPure(sources, new Env(Map.of(), null, null, 0)).statement(statement).vs();
     }
 
     private Rel statement(SqlAst.Statement statement) {
@@ -356,7 +365,9 @@ public final class SqlToPure {
             }
             Scope outer = env.outer();
             if (outer != null) {
-                return outer.column(ref);
+                // the enclosing query's column, read from its row's lambda parameter
+                Col c = outer.column(ref);
+                return c.var() != null ? c : c.via(env.outerRow());
             }
             return notFound(ref);
         }
@@ -514,6 +525,9 @@ public final class SqlToPure {
         }
         Source source = java.util.Objects.requireNonNull(src);
         Input input = new Input(source.bindings(), source.star(), "WHERE");
+        if (env.outer() != null) {
+            noOuterAggregates(s, input);
+        }
         ValueSpecification relation = source.relation();
         SqlAst.Expr where = s.where();
         if (where != null) {
@@ -548,7 +562,7 @@ public final class SqlToPure {
             }
             case SqlAst.SubqueryFrom q -> {
                 // not LATERAL: the subquery sees the WITH queries, never this query's other FROM items
-                Rel rel = new SqlToPure(sources, new Env(env.ctes(), env.outer(), env.level())).statement(q.query());
+                Rel rel = new SqlToPure(sources, env.with(env.ctes())).statement(q.query());
                 yield bound(rel, q.alias(), q.columnAliases(), q.pos());
             }
             case SqlAst.Join j -> join(from(j.left()), from(j.right()), j.type(), j.on(), j.using(), j.natural(),
@@ -845,16 +859,19 @@ public final class SqlToPure {
     // ------------------------------------------------------------------ set operations and WITH
 
     /** {@code UNION [ALL]}: Pure's concatenate (and distinct), the right side's columns named as the left's, in
-     *  order; then the result's sort and slice, by output name or position only (Postgres's rule). INTERSECT and
-     *  EXCEPT have no Pure spelling yet. */
+     *  order. {@code INTERSECT} and {@code EXCEPT}: the left's rows that some right row equals (or none does), column
+     *  by column with two NULLs equal (Pure's {@code ==}), once each. Then the result's sort and slice, by output name
+     *  or position only (Postgres's rule). */
     private Rel setOperation(SqlAst.SetOperation s) {
-        if (s.op() != SqlAst.SetOp.UNION) {
-            throw SqlTranslationException.unsupported(s.op() + " is not supported yet", s.pos());
+        if (s.all() && s.op() != SqlAst.SetOp.UNION) {
+            throw SqlTranslationException.unsupported(s.op() + " ALL is not supported yet", s.pos());
         }
         Rel left = statement(s.left());
         Rel right = statement(s.right());
+        String op = s.op().name();
         if (left.columns().size() != right.columns().size()) {
-            throw SqlTranslationException.invalid("each UNION query must have the same number of columns", s.pos());
+            throw SqlTranslationException.invalid("each " + op + " query must have the same number of columns",
+                    s.pos());
         }
         List<String> names = new ArrayList<>();
         List<OutCol> columns = new ArrayList<>();
@@ -863,25 +880,21 @@ public final class SqlToPure {
             OutCol r = right.columns().get(i);
             if (l.kind() != r.kind()) {
                 if (l.kind() == Kind.NULL || r.kind() == Kind.NULL || l.kind().numeric() && r.kind().numeric()) {
-                    throw SqlTranslationException.unsupported("UNION of " + l.kind().name().toLowerCase(Locale.ROOT)
+                    throw SqlTranslationException.unsupported(op + " of " + l.kind().name().toLowerCase(Locale.ROOT)
                             + " and " + r.kind().name().toLowerCase(Locale.ROOT) + " columns is not supported yet",
                             s.pos());
                 }
-                throw SqlTranslationException.invalid("UNION types " + l.kind().name().toLowerCase(Locale.ROOT)
+                throw SqlTranslationException.invalid(op + " types " + l.kind().name().toLowerCase(Locale.ROOT)
                         + " and " + r.kind().name().toLowerCase(Locale.ROOT) + " cannot be matched", s.pos());
             }
             names.add(l.name());
-            columns.add(new OutCol(l.name(), l.kind(), l.nullable() || r.nullable()));
+            // INTERSECT's row is in both; EXCEPT's is the left's
+            boolean nullable = s.op() == SqlAst.SetOp.UNION ? l.nullable() || r.nullable()
+                    : s.op() == SqlAst.SetOp.INTERSECT ? l.nullable() && r.nullable() : l.nullable();
+            columns.add(new OutCol(l.name(), l.kind(), nullable));
         }
-        boolean sameNames = true;
-        for (int i = 0; i < names.size(); i++) {
-            sameNames &= names.get(i).equals(right.columns().get(i).name());
-        }
-        Rel aligned = sameNames ? right : renamed(right, names, s.pos());
-        ValueSpecification vs = call("concatenate", left.vs(), aligned.vs());
-        if (!s.all()) {
-            vs = call("distinct", vs);
-        }
+        ValueSpecification vs = s.op() == SqlAst.SetOp.UNION ? union(s, left, right, names)
+                : rowsFound(s.op() == SqlAst.SetOp.INTERSECT, left, right);
         List<ValueSpecification> sortInfos = new ArrayList<>();
         for (SqlAst.SortItem item : s.orderBy()) {
             String key = outputKey(item.expr(), names);
@@ -902,6 +915,28 @@ public final class SqlToPure {
             vs = call("limit", vs, count(limit, "LIMIT"));
         }
         return new Rel(vs, columns);
+    }
+
+    private ValueSpecification union(SqlAst.SetOperation s, Rel left, Rel right, List<String> names) {
+        boolean sameNames = true;
+        for (int i = 0; i < names.size(); i++) {
+            sameNames &= names.get(i).equals(right.columns().get(i).name());
+        }
+        Rel aligned = sameNames ? right : renamed(right, names, s.pos());
+        ValueSpecification vs = call("concatenate", left.vs(), aligned.vs());
+        return s.all() ? vs : call("distinct", vs);
+    }
+
+    /** The left's distinct rows that some row of the right equals ({@code found}), or that none does. */
+    private ValueSpecification rowsFound(boolean found, Rel left, Rel right) {
+        ValueSpecification match = null;
+        for (int i = 0; i < left.columns().size(); i++) {
+            ValueSpecification eq = call("equal", property(row, left.columns().get(i).name()),
+                    property(sub, right.columns().get(i).name()));
+            match = match == null ? eq : call("and", match, eq);
+        }
+        ValueSpecification in = call("exists", right.vs(), lambda(sub, java.util.Objects.requireNonNull(match)));
+        return call("distinct", call("filter", left.vs(), lambda(row, found ? in : call("not", in))));
     }
 
     /** A set operation's ORDER BY key: an output column's name or position. */
@@ -934,14 +969,13 @@ public final class SqlToPure {
         Map<String, Rel> ctes = new LinkedHashMap<>(env.ctes());
         for (SqlAst.Cte cte : w.ctes()) {
             String name = cte.name().quoted() ? cte.name().text() : fold(cte.name().text());
-            Rel rel = new SqlToPure(sources, new Env(java.util.Collections.unmodifiableMap(new LinkedHashMap<>(ctes)), env.outer(), env.level())).statement(
-                    cte.query());
+            Rel rel = new SqlToPure(sources, env.with(ctes)).statement(cte.query());
             if (!cte.columns().isEmpty()) {
                 rel = aliased(rel, cte.columns(), cte.name(), cte.pos());
             }
             ctes.put(name, rel);
         }
-        return new SqlToPure(sources, new Env(java.util.Collections.unmodifiableMap(new LinkedHashMap<>(ctes)), env.outer(), env.level())).statement(w.body());
+        return new SqlToPure(sources, env.with(ctes)).statement(w.body());
     }
 
     /** A query with no grouping: filter, computed columns, sort, the select list, then the slice. */
@@ -1414,6 +1448,61 @@ public final class SqlToPure {
         }
     }
 
+    /** Refuses an aggregate of only an enclosing query's columns, in any clause: Postgres makes it an aggregate of
+     *  that query, over its rows. */
+    private static void noOuterAggregates(SqlAst.Select s, Input in) {
+        List<SqlAst.Expr> all = new ArrayList<>(s.groupBy());
+        for (SqlAst.SelectItem item : s.items()) {
+            if (item instanceof SqlAst.SelectExpr x) {
+                all.add(x.expr());
+            }
+        }
+        s.orderBy().forEach(o -> all.add(o.expr()));
+        SqlAst.Expr where = s.where();
+        if (where != null) {
+            all.add(where);
+        }
+        SqlAst.Expr having = s.having();
+        if (having != null) {
+            all.add(having);
+        }
+        for (SqlAst.Expr e : all) {
+            outerAggregate(e, in);
+        }
+    }
+
+    private static void outerAggregate(SqlAst.Expr e, Input in) {
+        if (e instanceof SqlAst.FunctionCall f && isAggregate(f) && !f.star() && !f.args().isEmpty()
+                && readsOnlyOuter(f.args().get(0), in)) {
+            throw SqlTranslationException.unsupported("an aggregate of only an enclosing query's columns is not"
+                    + " supported yet", f.pos());
+        }
+        for (SqlAst.Expr child : children(e)) {
+            outerAggregate(child, in);
+        }
+    }
+
+    /** True iff {@code e} reads columns and every one is an enclosing query's. */
+    private static boolean readsOnlyOuter(SqlAst.Expr e, Input in) {
+        List<SqlAst.ColumnRef> refs = new ArrayList<>();
+        columnRefs(e, refs);
+        for (SqlAst.ColumnRef ref : refs) {
+            if (in.find(ref) != null) {
+                return false;
+            }
+        }
+        return !refs.isEmpty();
+    }
+
+    private static void columnRefs(SqlAst.Expr e, List<SqlAst.ColumnRef> out) {
+        if (e instanceof SqlAst.ColumnRef ref) {
+            out.add(ref);
+        }
+        for (SqlAst.Expr child : children(e)) {
+            columnRefs(child, out);
+        }
+    }
+
     private static void requireNumeric(Tx arg, SqlAst.FunctionCall f) {
         if (!arg.kind().numeric()) {
             throw SqlTranslationException.invalid("function " + functionName(f.name().get(0)) + "(" + arg.kind()
@@ -1547,14 +1636,19 @@ public final class SqlToPure {
             case SqlAst.Case c -> caseExpr(c, scope, row);
             case SqlAst.FunctionCall f -> function(f, scope, row);
             case SqlAst.Cast c -> throw SqlTranslationException.unsupported("casts are not supported yet", c.pos());
-            case SqlAst.ScalarSubquery q -> throw SqlTranslationException.unsupported("scalar subqueries are not"
-                    + " supported yet", q.pos());
-            case SqlAst.Exists q -> throw SqlTranslationException.unsupported("EXISTS subqueries are not supported yet",
-                    q.pos());
-            case SqlAst.InSubquery q -> throw SqlTranslationException.unsupported("IN subqueries are not supported yet",
-                    q.pos());
-            case SqlAst.Quantified q -> throw SqlTranslationException.unsupported("quantified comparisons (ANY, SOME,"
-                    + " ALL) are not supported yet", q.pos());
+            case SqlAst.ScalarSubquery q -> scalarSubquery(q, scope);
+            case SqlAst.Exists q -> {
+                // never NULL: a row or none
+                ValueSpecification found = call("exists", subquery(q.query(), scope).vs(),
+                        lambda(sub, new CBoolean(true)));
+                yield Tx.condition(found, call("not", found), false);
+            }
+            case SqlAst.InSubquery q -> {
+                // x IN (query) is x = ANY (query); NOT IN its negation (NULL stays NULL)
+                Tx any = quantified(q.operand(), SqlAst.BinaryOp.EQ, false, q.query(), scope, row, q.pos());
+                yield q.negated() ? not(any) : any;
+            }
+            case SqlAst.Quantified q -> quantified(q.left(), q.op(), q.all(), q.query(), scope, row, q.pos());
             case SqlAst.Window w -> throw SqlTranslationException.unsupported("window functions (OVER) are not"
                     + " supported yet", w.pos());
         };
@@ -1588,15 +1682,7 @@ public final class SqlToPure {
             }
             case EQ, NE, LT, LE, GT, GE -> {
                 List<Tx> sides = comparable(b.left(), b.right(), scope, row, b.pos());
-                String fn = switch (b.op()) {
-                    case EQ, NE -> "equal";
-                    case LT -> "lessThan";
-                    case LE -> "lessThanEqual";
-                    case GT -> "greaterThan";
-                    default -> "greaterThanEqual";
-                };
-                Tx test = strictTest(sides, v -> call(fn, v.get(0), v.get(1)));
-                return b.op() == SqlAst.BinaryOp.NE ? not(test) : test;
+                return compare(b.op(), sides.get(0), sides.get(1));
             }
             case PLUS, MINUS, TIMES -> {
                 Tx l = tx(b.left(), scope, row);
@@ -1656,6 +1742,19 @@ public final class SqlToPure {
         throw new IllegalStateException("unreachable: " + b.op());
     }
 
+    /** {@code l op r} for a comparison {@code op}: NULL when either side is (Postgres's comparisons are strict). */
+    private static Tx compare(SqlAst.BinaryOp op, Tx l, Tx r) {
+        String fn = switch (op) {
+            case EQ, NE -> "equal";
+            case LT -> "lessThan";
+            case LE -> "lessThanEqual";
+            case GT -> "greaterThan";
+            default -> "greaterThanEqual";
+        };
+        Tx test = strictTest(List.of(l, r), v -> call(fn, v.get(0), v.get(1)));
+        return op == SqlAst.BinaryOp.NE ? not(test) : test;
+    }
+
     private static boolean exactNumeric(Kind kind) {
         return kind == Kind.DECIMAL || kind == Kind.NUMBER;
     }
@@ -1710,13 +1809,17 @@ public final class SqlToPure {
         } else if (right instanceof SqlAst.StringLit s && readsStrings(l.kind())) {
             r = fromString(s, l.kind());
         }
+        comparableKinds(l, r, pos);
+        return List.of(l, r);
+    }
+
+    private static void comparableKinds(Tx l, Tx r, SqlAst.Pos pos) {
         boolean ok = l.kind() == r.kind() || l.kind().numeric() && r.kind().numeric()
                 || isDate(l.kind()) && isDate(r.kind()) || l.kind() == Kind.OTHER || r.kind() == Kind.OTHER;
         if (!ok) {
             throw SqlTranslationException.invalid("cannot compare " + l.kind().name().toLowerCase(Locale.ROOT)
                     + " with " + r.kind().name().toLowerCase(Locale.ROOT), pos);
         }
-        return List.of(l, r);
     }
 
     private static boolean isDate(Kind k) {
@@ -1816,6 +1919,55 @@ public final class SqlToPure {
             return Boolean.FALSE;
         }
         return null;
+    }
+
+    // ------------------------------------------------------------------ subqueries in expressions
+
+    /** A subquery in an expression: a query one level down, which sees {@code scope}'s columns beyond its own FROM
+     *  (a correlated reference reads them from this level's row). */
+    private Rel subquery(SqlAst.Statement query, Scope scope) {
+        return new SqlToPure(sources, new Env(env.ctes(), scope, row, env.level() + 1)).statement(query);
+    }
+
+    /** {@code (query)} as a value: its one column in its one row, NULL when it has no row. The subquery stays a
+     *  subquery in SQL, so more than one row is the database's error, as it is Postgres's ({@code toOne} spells the
+     *  value's type; SQL answers NULL for no row, so the value is nullable). */
+    private Tx scalarSubquery(SqlAst.ScalarSubquery q, Scope scope) {
+        Rel rel = subquery(q.query(), scope);
+        if (rel.columns().size() != 1) {
+            throw SqlTranslationException.invalid("subquery must return only one column", q.pos());
+        }
+        OutCol c = rel.columns().get(0);
+        ValueSpecification v = call("toOne", call("map", rel.vs(), lambda(sub, property(sub, c.name()))));
+        return c.kind() == Kind.BOOLEAN ? booleanValue(v, true) : Tx.value(v, c.kind(), true);
+    }
+
+    /**
+     * {@code x op ANY | ALL (query)} in three-valued logic, each subquery row's comparison strict: ANY is TRUE when
+     * some row's comparison is TRUE and FALSE when every row's is FALSE (so FALSE over no rows); ALL is TRUE when every
+     * row's is TRUE (so TRUE over no rows) and FALSE when some row's is FALSE; otherwise each is NULL.
+     */
+    private Tx quantified(SqlAst.Expr left, SqlAst.BinaryOp op, boolean all, SqlAst.Statement query,
+            Scope scope, String row, SqlAst.Pos pos) {
+        if (left instanceof SqlAst.NullLit) {
+            throw SqlTranslationException.unsupported("a NULL constant compared with a subquery's rows is not supported"
+                    + " yet", pos);
+        }
+        Rel rel = subquery(query, scope);
+        if (rel.columns().size() != 1) {
+            throw SqlTranslationException.invalid("subquery has too " + (rel.columns().size() > 1 ? "many" : "few")
+                    + " columns", pos);
+        }
+        OutCol c = rel.columns().get(0);
+        Tx each = columnValue(sub, Col.of(c.name(), c.kind(), c.nullable()));
+        Tx value = left instanceof SqlAst.StringLit s && readsStrings(each.kind()) ? fromString(s, each.kind())
+                : tx(left, scope, row);
+        comparableKinds(value, each, pos);
+        Tx test = compare(op, value, each);
+        ValueSpecification some = call("exists", rel.vs(), lambda(sub, all ? test.falseWhen() : test.vs()));
+        ValueSpecification every = call("not", call("exists", rel.vs(),
+                lambda(sub, call("not", all ? test.vs() : test.falseWhen()))));
+        return all ? Tx.condition(every, some, test.nullable()) : Tx.condition(some, every, test.nullable());
     }
 
     /** {@code x IS [NOT] TRUE | FALSE | UNKNOWN}: never NULL; UNKNOWN is a NULL condition (neither case holds). */

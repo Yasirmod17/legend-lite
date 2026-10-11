@@ -135,9 +135,65 @@ class SqlToPureTest {
         assertEquals("each UNION query must have the same number of columns",
                 refusal("select ID from tb('s::DB.T') union select ID, dept from tb('s::DB.T')")
                 .getMessage());
-        assertEquals("INTERSECT is not supported yet",
-                refusal("select ID from tb('s::DB.T') intersect select ID from tb('s::DB.T')")
+        assertEquals("INTERSECT ALL is not supported yet",
+                refusal("select ID from tb('s::DB.T') intersect all select ID from tb('s::DB.T')")
                 .getMessage());
+    }
+
+    @Test
+    void intersectKeepsTheLeftRowsSomeRightRowEqualsOnce() {
+        assertEquals("#>{s::DB.T}#->select(~[age])->filter(r|#>{s::DB.T}#->select(~[ID])->exists(s|$r.age == $s.ID))"
+                + "->distinct()", pure("select age from tb('s::DB.T') intersect select ID from tb('s::DB.T')"));
+        assertEquals("#>{s::DB.T}#->select(~[age])->filter(r|!#>{s::DB.T}#->select(~[ID])->exists(s|$r.age == $s.ID))"
+                + "->distinct()", pure("select age from tb('s::DB.T') except select ID from tb('s::DB.T')"));
+    }
+
+    // ------------------------------------------------------------------ subqueries in expressions
+
+    @Test
+    void existsIsARowOrNoneAndReadsTheEnclosingRow() {
+        // the subquery is one level down: its own row is r1, the enclosing query's r
+        assertEquals("#>{s::DB.T}#->filter(r|#>{s::DB.T}#->filter(r1|$r1.age->isNotEmpty() && ($r1.age->toOne() =="
+                        + " $r.ID))->extend(~['?column?':r1|1])->select(~['?column?'])->exists(s|true))->select(~[ID])",
+                pure("select ID from tb('s::DB.T') t where exists (select 1 from tb('s::DB.T') u where u.age = t.ID)"));
+    }
+
+    @Test
+    void inIsAnyAndKeepsPostgresNullsInBothCases() {
+        // TRUE when some row equals; FALSE when every row is known and unequal; else NULL
+        assertEquals("#>{s::DB.T}#->extend(~[v:r|if(#>{s::DB.T}#->select(~[age])->exists(s|$s.age->isNotEmpty()"
+                        + " && ($r.ID == $s.age->toOne())), |true, |if(!#>{s::DB.T}#->select(~[age])->exists("
+                        + "s|!($s.age->isNotEmpty() && ($r.ID != $s.age->toOne()))), |false, |[]))])->select(~[v])",
+                pure("select ID in (select age from tb('s::DB.T')) as v from tb('s::DB.T')"));
+        // NOT IN holds only when every row is known and unequal: one NULL row makes it NULL, never TRUE
+        assertEquals("#>{s::DB.T}#->filter(r|!#>{s::DB.T}#->select(~[age])->exists(s|!($s.age->isNotEmpty()"
+                        + " && ($r.ID != $s.age->toOne()))))->select(~[ID])",
+                pure("select ID from tb('s::DB.T') where ID not in (select age from tb('s::DB.T'))"));
+    }
+
+    @Test
+    void allIsTrueOverNoRowsAndFalseWhenSomeRowIsFalse() {
+        assertEquals("#>{s::DB.T}#->filter(r|!#>{s::DB.T}#->select(~[age])->exists(s|!($s.age->isNotEmpty()"
+                        + " && ($r.ID > $s.age->toOne()))))->select(~[ID])",
+                pure("select ID from tb('s::DB.T') where ID > all (select age from tb('s::DB.T'))"));
+    }
+
+    @Test
+    void aScalarSubqueryIsItsOneValueAndMayBeNull() {
+        assertEquals("#>{s::DB.T}#->extend(~[m:r|#>{s::DB.T}#->filter(r1|$r1.dept == $r.dept)"
+                        + "->aggregate(~[max:r1|$r1.age:y1|$y1->max()])->select(~[max])->map(s|$s.max)->toOne()])"
+                        + "->select(~[m])",
+                pure("select (select max(age) from tb('s::DB.T') u where u.dept = t.dept) as m from tb('s::DB.T') t"));
+        assertEquals("subquery must return only one column",
+                refusal("select (select ID, age from tb('s::DB.T')) from tb('s::DB.T')").getMessage());
+        assertEquals("subquery has too many columns",
+                refusal("select ID from tb('s::DB.T') where ID in (select ID, age from tb('s::DB.T'))").getMessage());
+    }
+
+    @Test
+    void anAggregateOfOnlyTheEnclosingQuerysColumnsIsRefused() {
+        assertEquals("an aggregate of only an enclosing query's columns is not supported yet",
+                refusal("select (select max(t.age) from tb('s::DB.T') u) from tb('s::DB.T') t").getMessage());
     }
 
     // ------------------------------------------------------------------ Postgres's NULL rules
