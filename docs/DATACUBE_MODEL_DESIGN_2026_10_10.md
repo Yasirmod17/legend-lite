@@ -365,6 +365,13 @@ The tab's module and Python's native library are adapters: each export a one-lin
   page opens and when its model is edited -- and grows with the classes, 4 s at 200; where its time goes (parse, resolve,
   normalize, element compile) the Compiler Rewrite line measures after its L7.
 
+  **The boot or the page** (2026-10-11, `docs/datacube-model-homework-2026-10-11/boot-split/`): the page. On a warm
+  module an empty model is held in 1 ms, so the boot layer is not in the clock. The same Java through Python's native
+  library (GraalVM) holds the 200-class page in 30 ms, against the module's 3,975 ms. So the 4 s comes from how the
+  module (TeaVM) runs this compile, about 130x, not from the compile's own work (the JVM: about 13 ms, e56d802c4). Four
+  functions take 85% of a profiled hold; naming them needs an unobfuscated build, the owners' step (the Compiler Rewrite
+  and Plan Gen / Exec Split lines).
+
 ## 12. Withdrawn from revision 2
 
 - **Every source a class, made silently** (revision 2's §3.1, step M1): sources stay relations (§3.1); a class is made on
