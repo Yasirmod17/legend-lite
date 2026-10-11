@@ -515,6 +515,10 @@ another table's rows likewise.
   as model text, which the widget's DataCube plans with. A class made in the widget's DataCube is written into Python's
   page through the page channel, not into the notebook's browser storage.
 - `page.grid(page.cls('Trade'))` reads a class; "create a project" (into an SDLC) is later, with promote (step 6).
+- **Ordered after DataCube headless (the user, 2026-10-11).** These calls come after
+  `docs/DATACUBE_HEADLESS_PYTHON_DESIGN_2026_10_11.md`'s steps 0-2: DataCube's own code runs in Python, so
+  `grid.create_class` makes its class from the grid as DataCube means it (its filters and calculated columns), not only
+  from frames and written relations.
 
 ### 15.6 The route
 

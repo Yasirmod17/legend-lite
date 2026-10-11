@@ -1,7 +1,8 @@
 # DataCube headless in Python: DataCube's own code, embedded, with no WebAssembly (design, 2026-10-11)
 
-**Status: proposed, for the user's agreement.** The user, 2026-10-11, on the measurement: "this is so awesome lets do
-it". Builds on `docs/DATACUBE_PYTHON_SHOW_DESIGN_2026_10_08.md` (the engine in Python, the notebook cube),
+**Status: agreed by the user, 2026-10-11; under review by the Plan Gen / Exec Split and Compiler Rewrite lines (§9).**
+The user, on the measurement: "this is so awesome lets do it"; on §10: "yes one one package, v8 for sure, yes do this
+before create*; yes rename would helpful". Builds on `docs/DATACUBE_PYTHON_SHOW_DESIGN_2026_10_08.md` (the engine in Python, the notebook cube),
 `docs/DATACUBE_PYTHON_PAGES_DESIGN_2026_10_09.md` (pages built in code) and `docs/DATACUBE_MODEL_DESIGN_2026_10_10.md`
 (§13's model plan; §15.5's Python). Evidence: `docs/datacube-headless-evidence-2026-10-11/`.
 
@@ -63,8 +64,8 @@ Python process
   native library's function of the same name (`lite_hold_model`, `lite_plan_json_held`, ...). `planHeld` (the plan of a
   query written as Pure text) is served by `lite_plan_text` over the held model's text. `testDataSql` has no native
   function yet; one is added (§8).
-  - `WasmPlanner` names how the browser delivers its module, not what it is. Renamed `LitePlanner` with this design (the
-    Plan Gen / Exec Split line's boundary, so it decides).
+  - `WasmPlanner` names how the browser delivers its module, not what it is. It is renamed `LitePlanner` (ruled, §10),
+    with the Plan Gen / Exec Split line, whose boundary it is.
 - **The database.** It is DataCube's `DuckDbEngine`, unchanged, over a connection whose `query(sql)` runs on Python's
   DuckDB and answers Arrow IPC, read by `apache-arrow`. DuckDB-WASM's file functions (`registerFileBuffer`, ...) are
   answered by writing into a folder of the host's own, which Python's DuckDB reads.
@@ -139,7 +140,7 @@ The measurement becomes a lane, `//datacube:headless_test`, run on all three pla
 
 ## 7. Packaging
 
-- **One package with an extra: `pip install legend-lite[datacube]`** (recommended; the user's to rule). The extra
+- **One package with an extra: `pip install legend-lite[datacube]`** (ruled, §10). The extra
   brings `mini-racer` (V8), and the wheel carries DataCube's headless bundle (small), built by Bazel's esbuild.
 - Two wheels (`legend-lite` and `legend-lite-datacube`) would keep the same parts apart. But the bundle and the native
   library must agree on their interface exactly, so two wheels would need a pinned pair and a version handshake. One
@@ -165,6 +166,9 @@ The measurement becomes a lane, `//datacube:headless_test`, run on all three pla
 
 ## 9. The plan (in order; each a landing of its own)
 
+0. **The rename** (§3): `WasmPlanner` to `LitePlanner`, `wasm-planner.ts` to `lite-planner.ts`, with its test, its
+   callers and the comments that name it. A landing of its own, so the lane's diff is only the lane. Review: the Plan
+   Gen / Exec Split line.
 1. **The lane (§6).**
    - The test helpers made asynchronous; the hooks made supported options; the web layer with its conformance tests;
      `testDataSql` natively.
@@ -178,12 +182,12 @@ The measurement becomes a lane, `//datacube:headless_test`, run on all three pla
 5. **The model plan's Python step** (§15.5) rides on it: `grid.create_class`, `create_association` and
    `create_data_space`, from grids, relations and frames.
 
-**Where it goes relative to the model plan** is the user's to place. Recommended: steps 1-2 before §15.5's Python
-calls, since `grid.create_class` depends on them. Steps 3-4 can follow the model plan's step 3 (dashboards on classes).
+**Where it goes relative to the model plan** (ruled, §10): before §15.5's Python calls, since `grid.create_class`
+depends on steps 1-2. Steps 3-4 can follow the model plan's step 3 (dashboards on classes).
 
-## 10. For the user to rule
+## 10. Ruled (the user, 2026-10-11)
 
-1. One package with a `datacube` extra (recommended), or two wheels.
-2. V8's size for the extra's users (+15-22 MB, +51 MB of memory), against QuickJS (+2 MB, no `Intl`, slower).
-3. The order relative to the model plan (§9).
-4. The rename of `WasmPlanner` to `LitePlanner` (with the Plan Gen / Exec Split line).
+1. **One package**, with a `datacube` extra, not two wheels.
+2. **V8** (`mini-racer`), at its size (+15-22 MB, +51 MB of memory), not QuickJS.
+3. **Before the model plan's Python calls** (§15.5): this design's steps 0-2 first.
+4. **The rename**, `WasmPlanner` to `LitePlanner`, with the Plan Gen / Exec Split line.
