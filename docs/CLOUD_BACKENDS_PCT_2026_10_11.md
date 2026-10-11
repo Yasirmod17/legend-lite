@@ -50,10 +50,9 @@ measured on the account before it is trusted (execution beats documentation).
 4. **Then, after the three clouds, the open ones first (the user's order, 2026-10-11): SQLite, MariaDB/MySQL,
    Trino, ClickHouse, MongoDB, Elasticsearch, then SingleStore.** Each runs locally with no account (embedded, or a Docker
    image: this container has Docker):
-   - **SQLite**: today it is no dialect class, only `Lexicon.SQLITE` handed to `AnsiSqlRenderer`, with the gaps
-     that lexicon row's comment lists (no aliased `VALUES`, typed date literals, lists, `QUALIFY`, as-of, pivot). Make
-     it a sibling dialect like the others, give it the five PCT suites as a lane over the embedded driver
-     (`@sqlite_jdbc`, already a dependency), then pin and burn down. Starting point: `docs/SQLITE_BACKEND.md`.
+   - **SQLite: done** (§12): a sibling dialect like the others, the five PCT suites as a lane over the embedded
+     driver (`@sqlite_jdbc`, already a dependency), pinned and burned down. Until then it was no dialect class, only
+     `Lexicon.SQLITE` handed to `AnsiSqlRenderer`.
    - **MariaDB / MySQL**: one dialect family over `AnsiSqlRenderer`. MariaDB embedded through MariaDB4j, as
      `docs/MARIADB_BACKEND.md` designs it (a feasibility design measured on MariaDB 11.4, not built); MySQL 8 as
      a sibling where the two differ (JSON functions, their regex engines). Lists have to be JSON arrays (neither has
@@ -97,6 +96,8 @@ measured on the account before it is trusted (execution beats documentation).
   1,250 tests, the census at 0 divergence (no ceiling raised).
 - **BigQuery: done** (2026-10-11, §10): the dialect, all five suites green on the account with 83 pinned rows of
   1,250 tests, the census at 0 divergence (no ceiling raised).
+- **SQLite: done** (2026-10-11, §12): the dialect, all five suites green in-process with 52 pinned rows of 1,249
+  tests, the census at 0 divergence (no ceiling raised).
 - **Not yet**: the CI workflow (step 4 of the ask; not requested in this pass).
 
 ## 4. The properties file
@@ -374,3 +375,65 @@ holds: the store executes, and what it cannot express is a `DialectCapability` w
   single row. Licences: Elasticsearch server is under Elastic, SSPL or AGPL licences; OpenSearch is Apache-2.0 and
   has its own SQL and PPL.
 
+
+## 12. SQLite, measured (2026-10-11)
+
+The first of the open ones (§2, item 4). No account: the product's own driver, in-process and in memory.
+
+**Result:** all five suites pass on SQLite, each failure pinned by its message: 1,249 tests, 52 pinned (Grammar 13 of
+137, Essential 29 of 345, Relation 2 of 469, Standard 2 of 205, Unclassified 6 of 93), the census divergence 0 in
+every suite (no ceiling raised). SQLite was a lexicon row over `AnsiSqlRenderer` until now; that row failed 985 tests
+on its first lane run. The dialect class's first run failed 144 (Essential 42, Grammar 15, Relation 26, Standard 24,
+Unclassified 37), and it was burned down from there to the 52 in fifteen runs.
+
+What the 52 are: 34 are the platform's own, pinned on the DuckDB lane by the same cause; 2 are the portable carrier
+strategies' own, pinned on Postgres and BigQuery too (a lambda's parameter read as a table's column where a literal
+list was folded). The other 16 are SQLite's own limits, each measured:
+
+- no digest function, so no MD5, SHA-1 or SHA-256 (3);
+- an integer past 64 bits (3), raised rather than delivered as a REAL;
+- no hash function (2, as on Postgres);
+- no session user (2);
+- no Jaro-Winkler function (2, as on Postgres and the clouds);
+- a date past the years 0000-9999 (2): one is raised, and the other is a five-digit year that compares as text;
+- no time zone but UTC (1);
+- the 1,000,000-byte statement cap (1): a mixed list's sort compares each Float by its text canon, and each capture
+  group's regular-expression walk is written separately.
+
+The driver is xerial `sqlite-jdbc` 3.47.1.0 (`@sqlite_jdbc`, already a dependency; its own build of SQLite 3.47.1, with
+the math functions and the driver's statistics extension). Each executed expression gets a fresh in-memory database
+(`jdbc:sqlite::memory:`), and the session runs `PRAGMA case_sensitive_like = ON`.
+
+The work:
+- `core/.../sql/dialect/SQLite.java`, a sibling of `BigQuery` and `Postgres`, with an exhaustive decision per `SqlFn`
+  and `SqlAgg.Fn`;
+- `SqliteRegex.java`, regular expressions as a recursive walk in SQL;
+- `CommonSubexpressions.java`, a rewrite pass for the statement cap;
+- SQLite rows in `TypeNames`, `Spellings` and `CarrierStrategies.Caps`;
+- `Databases.dialect` constructs it;
+- the wire census reads SQLite's type names (`SqlTypeCensus.sqliteOwn`, `dialectSpelling`).
+
+What differs from DuckDB, and the dialect's answer:
+
+| Measured | Consequence |
+|---|---|
+| a value has no declared type, only a storage class (INTEGER, REAL, TEXT, BLOB, NULL); a CAST to a type name casts by its affinity only (`CAST('2024-01-01' AS DATE)` is 2024); the driver names a column by its first value's class (`NUMERIC` for a NULL) | every cast is decided by the dialect: a boolean is 1 or 0, a date and a date-time are their ISO text; the census reads INTEGER as delivering Boolean and HUGEINT labels, TEXT as delivering temporal, JSON, composite and decimal ones, FLOAT as DOUBLE, and a NULL first value as claiming no type |
+| no exact decimal | a decimal is a REAL; a root decimal column is its text at its scale (`printf('%.Nf')`), read back exact (`normalize`) |
+| no array, struct or map type | JSON1 text (`json_array`, `json_object`); a list operation is a correlated subquery over `json_each(xs)`, and a fold is a correlated `WITH RECURSIVE` (both measured to correlate inside a scalar subquery); a nested value that leaves a JSON function through a column is put back with `json()` |
+| no LATERAL, no VALUES alias list, no QUALIFY, no ORDER BY or LIMIT on a UNION branch, no quantified comparison | a lateral subquery's rows are `json_each` over those rows aggregated as JSON objects; the explosions are markers (`ExplosionMarkers`) joined to `json_each` over the longest list; VALUES columns are renamed through a subselect; QUALIFY is a wrapping subselect; a union branch is wrapped |
+| no regular-expression function (REGEXP is application-defined, and none is registered: the database executes, never the host) | a literal pattern is compiled at render time to its automaton's transition table, as `VALUES` rows; a recursive query walks the table over the text (`SqliteRegex`: matches, extract, extract-all, replace); a pattern that is not a literal is a wall |
+| no base64, no Levenshtein | recursive walks: base64 over the text's hex bytes three at a time (`unhex` back); Levenshtein over the edit-distance table, a row at a time as a JSON array |
+| no RAISE outside a trigger | a bad JSON path's error carries its text (`json_extract('{}', <message>)`), so a message is raised as one; a quote travels as U+001D (`RaisedErrors.QUOTE_MARK`), since SQLite doubles it in the error |
+| a statement is at most 1,000,000 bytes (`SQLITE_TOOBIG`) | a repeated large subexpression is written once, as a column of a one-row derived table (`CommonSubexpressions`); a repeating function's large operands are bound once; a float's shortest text reads its value once |
+| integer arithmetic overflows to a REAL silently (`9223372036854775807 + 3`) | a big integer's root column raises past 64 bits |
+| dates are texts of the years 0000-9999, and a date function answers NULL past them; a date with an unpadded month (`2014-2-27`) is NULL | adding an interval raises past them; a parsed or cast date's fields are padded first; a month past the month's end is clamped (`'floor'`, SQLite 3.46+) |
+| LIKE is case-insensitive | `PRAGMA case_sensitive_like = ON`, the dialect's session setup |
+| the statistics extension's aggregates (stdev, variance, median, mode) are not window functions | a windowed variance, deviation, covariance or correlation is computed from window sums |
+| an aggregate inside a table-valued function's argument in a subquery is "misuse of aggregate function" | argMax and argMin are `json_group_array`'s own `ORDER BY` (SQLite 3.44+) |
+| `acos`/`asin` outside [-1, 1] answer NULL (DuckDB raises) | raised |
+| the platform's schema-qualified tables (an `ATTACH`ed database is held by its connection: "database already in use") | a schema's table is one table named `"schema.table"` |
+
+The lanes: `//pct:pct_sqlite_<suite>` and `//pct:pct_sqlite`, run from a desk with `bazel test //pct:pct_sqlite`.
+They are tagged `manual`, in no per-push lane: they sit in `//gates:heavy`, beside the three cloud lanes, which were
+in no lane of `gates/BUILD.bazel` until now (CI's lane guard would have refused them). A per-push lane for SQLite is
+the user's call.

@@ -153,6 +153,26 @@ public record Spellings(Map<SqlFn, String> fnNames) {
         return m;
     }
 
+    /** SQLite EXECUTION spellings (3.47.1, the product's driver build, 2026-10-11): ONLY a name that exists there with
+     *  DuckDB's arguments and meaning, each measured -- the math functions, the driver's statistics extension
+     *  ({@code cot}, {@code reverse}) and the core text functions. */
+    public static final Spellings SQLITE = new Spellings(sqlite());
+
+    private static Map<SqlFn, String> sqlite() {
+        Map<SqlFn, String> m = new EnumMap<>(SqlFn.class);
+        for (SqlFn f : new SqlFn[] {SqlFn.ABS, SqlFn.ATAN, SqlFn.ATAN2, SqlFn.COS, SqlFn.COSH,
+                SqlFn.COT, SqlFn.SIN, SqlFn.SINH, SqlFn.TAN, SqlFn.TANH, SqlFn.DEGREES, SqlFn.RADIANS, SqlFn.EXP,
+                SqlFn.LN, SqlFn.LOG10, SqlFn.SQRT, SqlFn.LOWER, SqlFn.UPPER, SqlFn.LTRIM, SqlFn.RTRIM, SqlFn.TRIM,
+                SqlFn.REPLACE, SqlFn.REVERSE_STRING, SqlFn.FLOOR_RAW, SqlFn.SUBSTRING, SqlFn.JSON_ARRAY_LENGTH}) {
+            m.put(f, DUCKDB.fnNames().get(f));
+        }
+        m.put(SqlFn.POW, "pow");
+        m.put(SqlFn.CHR, "char");
+        m.put(SqlFn.STRPOS, "instr");
+        m.put(SqlFn.LIST_LENGTH, "json_array_length");
+        return m;
+    }
+
     private static Map<SqlFn, String> build() {
         Map<SqlFn, String> m = new EnumMap<>(SqlFn.class);
         m.put(SqlFn.ABS, "abs");

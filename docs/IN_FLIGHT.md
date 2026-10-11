@@ -765,8 +765,15 @@ edits: `exec/Executor.java` (the timestamp re-fetch keeps the Timestamp when the
 and shared); rows in `Lexicon`, `TypeNames`, `Spellings`, `CarrierStrategies.Caps`; arms in `database/Databases.java`
 and `exec/Sessions.java`; `exec/SqlTypeCensus.java` (BigQuery's type names, BIGNUMERIC as its decimal carrier);
 `tools/census/RenderCensus.java` renders BigQuery.
-**Next** (the user's order): SQLite, MariaDB/MySQL, Trino, ClickHouse, MongoDB, Elasticsearch, SingleStore (the plan's
-§2).
+**2026-10-11, SQLite landed on the branch** (all five suites green in-process, 52 pinned of 1,249; the plan's §12):
+new `sql/dialect/SQLite.java` (no longer the `Lexicon.SQLITE` row handed to `AnsiSqlRenderer`), `SqliteRegex.java`
+(regular expressions as a recursive walk in SQL) and `CommonSubexpressions.java` (a SQLite pass: the statement cap);
+rows in `TypeNames`, `Spellings`, `CarrierStrategies.Caps`; arm in `database/Databases.java`; two exec edits:
+`exec/RaisedErrors.java` (a raised message's quote mark, U+001D) and `exec/SqlTypeCensus.java` (SQLite's type names);
+guard edits, each with its dated reason: `DialectBoundaryTest` (the census's dialect label; the four new dialects'
+constructions owned by `Databases`); `gates/BUILD.bazel` puts the cloud and SQLite lanes in `heavy` (the cloud lanes
+were in no lane); `tools/census/RenderCensus.java` renders SQLite.
+**Next** (the user's order): MariaDB/MySQL, Trino, ClickHouse, MongoDB, Elasticsearch, SingleStore (the plan's §2).
 
 ## Rules between sessions
 

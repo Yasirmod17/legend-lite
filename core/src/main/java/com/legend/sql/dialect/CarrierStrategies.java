@@ -72,6 +72,9 @@ public final class CarrierStrategies extends SqlRewriter {
         /** BigQuery (2026-10-11): the portable strategies (static pivot and as-of emulation, explode placements, list
          *  reductions fused), as on Postgres: arrays are native but lambda-less; FULL OUTER is native. */
         public static final Caps BIGQUERY = new Caps(false, true, true, true);
+        /** SQLite (2026-10-11): the portable strategies over its JSON lists (json_each correlates, measured); FULL
+         *  OUTER is native (3.39). */
+        public static final Caps SQLITE = new Caps(false, true, true, true);
     }
 
     private final Caps caps;

@@ -215,6 +215,28 @@ test_suite(
     tests = [":pct_postgres_" + s.lower() for s in _SUITES],
 )
 
+# THE SQLITE LANES — the five suites on SQLite (LEGENDLITE_PCT_BACKEND=sqlite), in-process and in memory through the
+# product's own driver (//core:drivers), with SQLite's OWN expected failures (Test_LegendLite_SQLite_*Functions_PCT),
+# as gate 7P's. Manual, in //gates:heavy (docs/CLOUD_BACKENDS_PCT_2026_10_11.md §12): a per-push lane is the user's
+# call.
+[junit_test(
+    name = "pct_sqlite_" + s.lower(),
+    memory_mb = 4096,
+    env = {"LEGENDLITE_PCT_BACKEND": "sqlite"},
+    select = ["--select-class=org.finos.legend.lite.pct.Test_LegendLite_SQLite_%sFunctions_PCT" % s],
+    tags = ["manual"],
+    runtime_deps = [
+        ":pct_tests_lib",
+        "//core:drivers",
+    ],
+) for s in _SUITES]
+
+test_suite(
+    name = "pct_sqlite",
+    tags = ["manual"],
+    tests = [":pct_sqlite_" + s.lower() for s in _SUITES],
+)
+
 # THE CLOUD LANES — the five suites on a real Databricks, Snowflake and BigQuery account
 # (docs/CLOUD_BACKENDS_PCT_2026_10_11.md; LEGENDLITE_PCT_BACKEND selects the cloud). Each suite carries the cloud's
 # OWN expected failures (Test_LegendLite_<Cloud>_*Functions_PCT), as gate 7P's. The account's coordinates and

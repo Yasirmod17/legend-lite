@@ -48,10 +48,9 @@ public final class Databases {
             case Databricks -> new com.legend.sql.dialect.Databricks();
             case Snowflake -> new com.legend.sql.dialect.Snowflake();
             case BigQuery -> new com.legend.sql.dialect.BigQuery();
-            // SQLite differs from the ANSI baseline ONLY lexically — a Lexicon row, not a dialect subclass
-            // (remediation T3.2)
-            case SQLite -> new com.legend.sql.dialect.AnsiSqlRenderer(com.legend.sql.dialect.Lexicon.SQLITE,
-                    com.legend.sql.dialect.TypeNames.ANSI, com.legend.sql.dialect.Spellings.DUCKDB);
+            // a dialect of its own since 2026-10-11 (docs/CLOUD_BACKENDS_PCT_2026_10_11.md §12): T3.2 made it a
+            // Lexicon row when it differed only lexically; its PCT lane measured otherwise
+            case SQLite -> new com.legend.sql.dialect.SQLite();
             case DB2, MemSQL, Sybase, SybaseIQ, Composite, SqlServer, Hive, Presto, Trino,
                  Redshift, Spanner, Athena, Oracle, ClickHouse, Aurora ->
                     throw new com.legend.error.NotImplementedException(

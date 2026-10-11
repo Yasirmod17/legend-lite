@@ -278,6 +278,13 @@ test_suite(
         "//parser-equivalence:diagnostics",
         "//pct:update_ratchets_test",
         "//tools/python:requirements.test",
+        # the PCT suites on other databases (2026-10-11, docs/CLOUD_BACKENDS_PCT_2026_10_11.md): the cloud lanes need an
+        # account's credentials (its §4, never in the repository; a CI workflow for them is not built), and the SQLite
+        # lanes run in-process but are manual until a per-push lane for them is the user's call
+        "//pct:pct_databricks",
+        "//pct:pct_snowflake",
+        "//pct:pct_bigquery",
+        "//pct:pct_sqlite",
     ],
 )
 

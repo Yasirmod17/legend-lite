@@ -284,7 +284,7 @@ public final class SqlTypeCensus {
                 if (label.equals(meta)) {
                     WIRE_AGREE.increment();
                 } else if (delivers(outs.get(i).type(), meta) || snowflakeOwn(dialect, outs.get(i).type(), meta)
-                        || bigQueryOwn(dialect, outs.get(i).type(), meta)) {
+                        || bigQueryOwn(dialect, outs.get(i).type(), meta) || sqliteOwn(dialect, outs.get(i).type(), meta)) {
                     // THE DELIVERY RELATION (adjudicated 2026-08-23):
                     // value-subset narrowing (every INTEGER fits the
                     // BIGINT contract; DECIMAL(p,s) fits DECIMAL(P>=p,s))
@@ -549,10 +549,37 @@ public final class SqlTypeCensus {
                 || (label instanceof SqlType.Struct || label instanceof SqlType.Map) && meta.equals("OBJECT");
     }
 
+    /** SQLite's own types, which are the platform's by design (2026-10-11): a VALUE has a storage class, a column
+     *  none, and the driver names a column by its first value's (INTEGER, FLOAT, TEXT, and NUMERIC for a NULL,
+     *  measured). A boolean is an INTEGER (1 or 0); a date, a date-time, a list, a struct, a map and a Variant are their
+     *  text, and a root decimal its text at its scale; a NULL first value claims no type. */
+    private static boolean sqliteOwn(String dialect, SqlType label, String meta) {
+        if (!"SQLite".equals(dialect)) {
+            return false;
+        }
+        return switch (meta) {
+            case "NULL" -> true;
+            case "INTEGER" -> label == SqlType.Scalar.BOOLEAN || label == SqlType.Scalar.HUGEINT;
+            case "VARCHAR" -> label == SqlType.Scalar.DATE || label == SqlType.Scalar.TIMESTAMP
+                    || label == SqlType.Scalar.TIMESTAMPTZ || label == SqlType.Scalar.JSON
+                    || label instanceof SqlType.Array || label instanceof SqlType.Struct || label instanceof SqlType.Map
+                    || label instanceof SqlType.Decimal;
+            default -> false;
+        };
+    }
+
     /** A driver's own type names for the census's: BigQuery's (2026-10-11) INT64, FLOAT64 and DATETIME (the naive
-     *  date-time; its TIMESTAMP, an instant, folds with every TIMESTAMP spelling in normalizeMeta). */
+     *  date-time; its TIMESTAMP, an instant, folds with every TIMESTAMP spelling in normalizeMeta); SQLite's FLOAT (a
+     *  REAL value) and NUMERIC (its name for a NULL value, measured: no storage class). */
     private static @com.legend.base.Nullable String dialectSpelling(String dialect,
             @com.legend.base.Nullable String name) {
+        if ("SQLite".equals(dialect) && name != null) {
+            return switch (name) {
+                case "FLOAT" -> "DOUBLE";
+                case "NUMERIC" -> "NULL";
+                default -> name;
+            };
+        }
         if (!"BigQuery".equals(dialect) || name == null) {
             return name;
         }

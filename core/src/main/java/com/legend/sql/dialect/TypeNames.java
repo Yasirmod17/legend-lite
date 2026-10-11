@@ -103,6 +103,27 @@ public record TypeNames(Map<SqlType.Scalar, String> scalarNames,
         return m;
     }
 
+    /** SQLite (2026-10-11): a CAST target names an AFFINITY only (INTEGER, REAL, TEXT): every scalar's storage class.
+     *  The dialect decides each cast itself (a DATE name is NUMERIC affinity there, measured); no STRUCT. */
+    public static final TypeNames SQLITE = new TypeNames(sqlite(), false);
+
+    private static Map<SqlType.Scalar, String> sqlite() {
+        Map<SqlType.Scalar, String> m = new EnumMap<>(SqlType.Scalar.class);
+        m.put(SqlType.Scalar.BOOLEAN, "INTEGER");
+        m.put(SqlType.Scalar.INTEGER, "INTEGER");
+        m.put(SqlType.Scalar.BIGINT, "INTEGER");
+        m.put(SqlType.Scalar.HUGEINT, "INTEGER");
+        m.put(SqlType.Scalar.DOUBLE, "REAL");
+        m.put(SqlType.Scalar.VARCHAR, "TEXT");
+        m.put(SqlType.Scalar.LITERAL, "TEXT");
+        m.put(SqlType.Scalar.TEMPORAL_TEXT, "TEXT");
+        m.put(SqlType.Scalar.DATE, "TEXT");
+        m.put(SqlType.Scalar.TIMESTAMP, "TEXT");
+        m.put(SqlType.Scalar.TIMESTAMPTZ, "TEXT");
+        m.put(SqlType.Scalar.JSON, "TEXT");
+        return m;
+    }
+
     private static Map<SqlType.Scalar, String> postgres() {
         Map<SqlType.Scalar, String> m = base();
         m.put(SqlType.Scalar.HUGEINT, "NUMERIC(38)");
