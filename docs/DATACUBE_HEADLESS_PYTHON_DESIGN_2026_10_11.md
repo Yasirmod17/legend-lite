@@ -1,7 +1,8 @@
 # DataCube headless in Python: DataCube's own code, embedded, with no WebAssembly (design, 2026-10-11)
 
 **Status: agreed by the user, 2026-10-11. Reviewed by the Plan Gen / Exec Split line (yes, with one gap, closed in
-§3: the plan of a query over a held model natively); under review by the Compiler Rewrite line (§9).**
+§3: the plan of a query over a held model natively) and by the Compiler Rewrite line (no blocker; the lane in
+`//gates:warehouse`, and the build's shape, §6).**
 The user, on the measurement: "this is so awesome lets do it"; on §10: "yes one one package, v8 for sure, yes do this
 before create*; yes rename would helpful". Builds on `docs/DATACUBE_PYTHON_SHOW_DESIGN_2026_10_08.md` (the engine in Python, the notebook cube),
 `docs/DATACUBE_PYTHON_PAGES_DESIGN_2026_10_09.md` (pages built in code) and `docs/DATACUBE_MODEL_DESIGN_2026_10_10.md`
@@ -128,7 +129,7 @@ page.export('trades.xlsx')  # a page's export, as the screen writes it
 
 ## 6. Keeping it proven: the lane
 
-The measurement becomes a lane, `//datacube:headless_test`, run on all three platforms:
+The measurement becomes a test, `//datacube:headless_test`, run on all three platforms:
 
 - DataCube's non-screen test files, run in V8 by Python, through the production paths of §3.
 - **The test helpers made asynchronous**, landing for real: `datacube/test/lite-compiler.ts` and
@@ -147,6 +148,32 @@ The measurement becomes a lane, `//datacube:headless_test`, run on all three pla
 - **An opportunity, not a commitment:** with the lane, DataCube's unit tests no longer need Node to run (the "no Node in
   legend-lite" goal).
 
+**In the build** (the Compiler Rewrite line's review, 2026-10-11):
+
+- **Its lane is `//gates:warehouse`**, beside `//datacube:python_engine_test`, not `datacube` and not a lane of its own.
+  The test loads the native library (`//native:compiler`), a whole-machine native-image build. The warehouse lane builds
+  that image in a step of its own before its tests; the `datacube` lane is in `//gates:local` and does not build it.
+  So the test is not in the local gate: it is run by name (`bazel test //datacube:headless_test`) before a push, as
+  `//python`'s tests are. In CI it runs on all three platforms, and linux-arm runs the warehouse lane alone, so four
+  of the five wheel targets are tested (macOS x86_64 has no runner, as for the wheel today).
+- **`mini-racer==0.14.1`** in `tools/python/requirements.in`, with a dated reason, relocked by
+  `bazel run //tools/python:requirements.update`. `MODULE.bazel.lock` moves with it, held by
+  `//tools/python:lock_matches_requirements`. The test takes `deps = ["@pypi//mini_racer"]`, as `//python`'s take
+  `@pypi//duckdb`: Bazel fetches the wheel by its lock hash and unpacks it at fetch time, so the test installs
+  nothing, and V8 and its ICU data come inside the wheel. `target_compatible_with =
+  compatible_with(COMPILER_LIBRARY_PLATFORMS)`, so Windows on Arm skips it rather than failing it.
+- **The bundles:** one testonly `esbuild_bundle` (`--platform=neutral`), the test files as its entry points into one
+  output directory (one cached action). The fetch-needing files are left out in BUILD by name, with the reason, so the
+  exclusion is the build's, not the run's. `apache-arrow` comes through `//engine-client:engine_client`. The `node:stream`
+  stub is a file of the package named as an esbuild alias, and the no-Node guard knows of it. `whatwg-url` goes into
+  `datacube/package.json`, relocked through Bazel's pnpm and held by `//tools/js:lock_matches_package_json_test`.
+- **The test:** a `py_test`, `size = "medium"`; deps `//python:compiler`, `@pypi//mini_racer`, `@pypi//duckdb`,
+  `@pypi//pyarrow`, `@rules_python//python/runfiles`; data `//native:compiler` and the bundles; env as
+  `python/BUILD.bazel`'s `_ENV`; its DuckDB files under `TEST_TMPDIR`. No path, program or PATH lookup.
+- **Windows:** the native library and duckdb's extension load under Bazel on Windows already. The first Windows run
+  checks that `py_mini_racer` loads its `mini_racer.dll` (with `icudtl.dat` and the snapshot beside it, and the MSVC
+  runtime, which windows-2022 has). If it does not, the fix is how the DLL is loaded, never a host install.
+
 ## 7. Packaging
 
 - **One package with an extra: `pip install legend-lite[datacube]`** (ruled, §10). The extra
@@ -154,7 +181,10 @@ The measurement becomes a lane, `//datacube:headless_test`, run on all three pla
 - Two wheels (`legend-lite` and `legend-lite-datacube`) would keep the same parts apart. But the bundle and the native
   library must agree on their interface exactly, so two wheels would need a pinned pair and a version handshake. One
   package has one version.
-- The existing `notebook` extra is the same pattern.
+- The existing `notebook` extra is the same pattern. `//python:wheel_test`'s offline install from Bazel's downloads
+  gains `mini_racer` in its package lists, per platform, as the notebook's lists are.
+- **The extra raises the glibc floor for its users only:** `mini-racer`'s Linux wheels are `manylinux_2_27`, and
+  legend-lite's wheel says `2_17`. The extra's documentation says so.
 - **An interface check at start, by lists, not a version** (the Plan Gen line's review: `Boundary` has no version, and a
   hand-kept one gets forgotten). The bundle lists the request kinds it sends; the native library lists the functions
   it exports (`lite_interface()`). A kind with no function fails at once, with both lists named.
@@ -182,9 +212,14 @@ The measurement becomes a lane, `//datacube:headless_test`, run on all three pla
    name agreed by the Plan Gen / Exec Split line.
 1. **The lane (§6).**
    - The test helpers made asynchronous; the hooks made supported options; the web layer with its conformance tests;
-     the worker's request kinds as one type, with their guard; `lite_plan_held` and `lite_test_data_sql` natively.
-   - Reviews: the Compiler Rewrite line for the BUILD lines and the new pinned Python dependency (`mini-racer` in
-     `@pypi`); the Plan Gen / Exec Split line for the planner's hooks and the rename.
+     the worker's request kinds as one type, with their guard; `lite_plan_held` and `lite_test_data_sql` natively
+     (entry points in `native/` over `Boundary`'s existing functions, announced in docs/IN_FLIGHT.md on main first).
+   - Reviews: the Compiler Rewrite line for the BUILD diff and the new pinned Python dependency (`mini-racer` in
+     `@pypi`); the Plan Gen / Exec Split line for the planner's hooks, the worker contract and the native entry points.
+   - Before the push: the lane query (`tests(//...) except tests(//gates:lanes) except tests(//gates:heavy)` empty),
+     `bazel test //datacube:headless_test` by name, and CI on the branch with `-f gates=warehouse,checks,datacube -f
+     platforms=all`. The lock change rolls CI's downloads cache key, so that first run downloads everything again,
+     once.
 2. **The headless grid** (§4: the bundle's entry point; `grid.view()`, `grid.relation`, `grid.to_pandas()`), and the
    engine's loop thread (§5).
 3. **The page engine** (§4): the page's orchestration moved out of the screen, shared by the screen and Python; then
