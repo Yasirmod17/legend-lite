@@ -138,9 +138,10 @@ class Headless:
         self._mr.set_hard_memory_limit(memory_limit)
         # no WebAssembly in this process (the user's ruling, 2026-10-11): anything that reached for it fails here, loudly
         self._mr.eval('delete globalThis.WebAssembly;')
-        # mini-racer 0.14's setTimeout waits on Atomics.waitAsync, which with a delay of 0 answers at once, without a
+        # mini-racer 0.14.1's setTimeout waits on Atomics.waitAsync, which with a delay of 0 answers at once, without a
         # promise, and the timer throws: each delay held to at least a millisecond, a real timer on V8's own loop (a
-        # browser's own timeouts fire after 0 to 4 ms)
+        # browser's own timeouts fire after 0 to 4 ms). A defect of mini-racer's, to be reported to it; this goes when
+        # the pin (tools/python/requirements.in) moves past its fix -- //datacube:headless_test's cube-state tests say so
         self._mr.eval('{ const engines = setTimeout;'
                       ' globalThis.setTimeout = (f, ms, ...args) => engines(f, Math.max(1, Number(ms) || 0), ...args); }')
         # the host's calls first, as a browser's globals are there before a page's scripts: a module may plan as it loads

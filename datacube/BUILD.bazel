@@ -112,6 +112,8 @@ _SCANNED = {
     "state-guardrail": [":src"],
     # the WASM list against the files that load the planner (A28)
     "wasm-flag": ["BUILD.bazel", ":scanned_tests"],
+    # the headless lane's roster against the test files and the helpers they import
+    "headless-roster": ["BUILD.bazel", ":scanned_test_code"],
 }
 
 filegroup(
@@ -136,6 +138,11 @@ filegroup(
 filegroup(
     name = "scanned_tests",
     srcs = glob(["test/*.test.ts"]),
+)
+
+filegroup(
+    name = "scanned_test_code",
+    srcs = glob(["test/**/*.ts"]),
 )
 
 # Each test's inputs by runfiles path ($(rlocationpath); tools/js/runfiles.mts), beside _EXTRA_DATA.
@@ -364,6 +371,12 @@ _HEADLESS_LEFT_OUT = {
     "pivot-panel": "screen tests beside non-screen ones",
     "share-link": "node:crypto as its reference",
     "window": "screen tests beside non-screen ones",
+    # the chart renderer (ECharts) draws on a DOM canvas: a screen test, though it imports no jsdom itself
+    "chart-echarts": "ECharts draws on a DOM canvas",
+    # the lane's own stand-ins and web layer, held to Node's built-ins: they need the Node they compare against
+    "headless-assert": "node:assert/strict, its reference",
+    "headless-test-runner": "node:test's own run, its reference",
+    "headless-web": "Node's web built-ins, its reference",
 }
 
 esbuild_bundle(

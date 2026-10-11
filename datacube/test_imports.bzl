@@ -1279,6 +1279,7 @@ TEST_IMPORTS = {
     ],
     "guardrails": [],
     "headless-assert": [],
+    "headless-roster": [],
     "headless-test-runner": [],
     "headless-web": [
         "src/headless/url.ts",
