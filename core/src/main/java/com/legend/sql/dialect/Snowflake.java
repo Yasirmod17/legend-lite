@@ -71,26 +71,32 @@ public final class Snowflake extends AnsiSqlRenderer {
      */
     /** The labels of the statement being rendered, as planned (its root's outputs before this dialect's passes):
      *  the contract the executor reads, and the census checks, the root's columns against. */
-    private List<com.legend.sql.OutputCol> rootLabels = List.of();
+    private final Deque<List<com.legend.sql.OutputCol>> roots = new ArrayDeque<>();
 
     @Override
     public String render(SqlQuery query) {
-        rootLabels = query.outputs();
+        roots.push(query.outputs());
         try {
             return super.render(query);
         } finally {
-            rootLabels = List.of();
+            roots.pop();
         }
     }
 
     @Override
     public RenderedStatement renderStatement(SqlQuery query) {
-        rootLabels = query.outputs();
+        roots.push(query.outputs());
         try {
             return super.renderStatement(query);
         } finally {
-            rootLabels = List.of();
+            roots.pop();
         }
+    }
+
+    /** The labels of the statement being rendered (none outside a render). */
+    private List<com.legend.sql.OutputCol> rootLabels() {
+        List<com.legend.sql.OutputCol> labels = roots.peek();
+        return labels == null ? List.of() : labels;
     }
 
     @Override
@@ -352,11 +358,12 @@ public final class Snowflake extends AnsiSqlRenderer {
             }
             // an unqualified read of an exploded column (corr's SELECT CORR(a, b) FROM (SELECT UNNEST(xs) AS a, ...)):
             // the FLATTEN that carries it, when exactly one of the innermost select's does
-            if (r.kind() == Binding.NONE && !laterals.isEmpty()) {
-                List<String> owners = laterals.peek().entrySet().stream()
-                        .filter(e -> e.getValue().containsKey(c.name())).map(Map.Entry::getKey).toList();
+            Map<String, Map<String, SqlExpr>> innermost = laterals.peek();
+            if (r.kind() == Binding.NONE && innermost != null) {
+                List<Map.Entry<String, Map<String, SqlExpr>>> owners = innermost.entrySet().stream()
+                        .filter(e -> e.getValue().containsKey(c.name())).toList();
                 if (owners.size() == 1) {
-                    return column(writer, new SqlExpr.Column(owners.get(0), c.name(), c.type(), c.origin()));
+                    return explodedColumn(writer, owners.get(0).getKey(), c, owners.get(0).getValue());
                 }
             }
             return writer.append(columnRef(c));
@@ -375,13 +382,18 @@ public final class Snowflake extends AnsiSqlRenderer {
         for (Map<String, Map<String, SqlExpr>> scope : laterals) {
             Map<String, SqlExpr> cols = scope.get(table);
             if (cols != null && cols.containsKey(c.name())) {
-                SqlExpr list = cols.get(c.name());
-                SqlType t = typeOf(c) != null ? typeOf(c) : listElement(list);
-                return writer.piece(typed(w -> w.append("GET(").expr(list, 0).append(", ")
-                        .append(aliasIdent(table)).append(".\"INDEX\")"), t));
+                return explodedColumn(writer, table, c, cols);
             }
         }
         return writer.append(columnRef(c));
+    }
+
+    /** {@code c}, an exploded column of the FLATTEN {@code table}: its list's element at the FLATTEN's position. */
+    private SqlWriter explodedColumn(SqlWriter writer, String table, SqlExpr.Column c, Map<String, SqlExpr> cols) {
+        SqlExpr list = java.util.Objects.requireNonNull(cols.get(c.name()), "exploded column");
+        SqlType t = typeOf(c) != null ? typeOf(c) : listElement(list);
+        return writer.piece(typed(w -> w.append("GET(").expr(list, 0).append(", ").append(aliasIdent(table))
+                .append(".\"INDEX\")"), t));
     }
 
     /** A VARIANT read as type {@code t}: a scalar cast to it, a list to ARRAY, a struct or map to OBJECT; a variant
@@ -1106,47 +1118,11 @@ public final class Snowflake extends AnsiSqlRenderer {
 
             // ---- strings
             // MATCHES is the PARTIAL test (REGEXP_LIKE is anchored, measured); REGEXP_FULL_MATCH is REGEXP_LIKE
-            case MATCHES -> {
-                Pattern p = pattern(a.get(1), 0);
-                yield writer.append("(REGEXP_INSTR(").expr(a.get(0), 0).append(", ").piece(p.text())
-                        .append(", 1, 1, 0, ").append(stringLit(p.params())).append(") > 0)");
-            }
-            case REGEXP_FULL_MATCH -> {
-                Pattern p = pattern(a.get(1), 0);
-                yield writer.append("REGEXP_LIKE(").expr(a.get(0), 0).append(", ").piece(p.text()).append(", ")
-                        .append(stringLit(p.params())).append(")");
-            }
-            // DuckDB's regexp_extract(s, p[, g]): group g (0, the match) of the first match, '' when none
-            case REGEXP_EXTRACT -> {
-                SqlWriter.Piece before = textBeforeMatch(a);
-                if (before != null) {
-                    yield writer.piece(before);
-                }
-                Pattern p = pattern(a.get(1), groupRead(a));
-                writer.append("COALESCE(REGEXP_SUBSTR(").expr(a.get(0), 0).append(", ").piece(p.text())
-                        .append(", 1, 1, ").append(stringLit(p.params() + "e")).append(", ");
-                yield (a.size() > 2 ? writer.expr(a.get(2), 0) : writer.append("0")).append("), '')");
-            }
-            case REGEXP_EXTRACT_ALL -> {
-                Pattern p = pattern(a.get(1), groupRead(a));
-                writer.append("REGEXP_SUBSTR_ALL(").expr(a.get(0), 0).append(", ").piece(p.text())
-                        .append(", 1, 1, ").append(stringLit(p.params() + "e")).append(", ");
-                yield (a.size() > 2 ? writer.expr(a.get(2), 0) : writer.append("0")).append(")");
-            }
-            // DuckDB replaces the first match unless 'g' (occurrence 1 here; 0 is every one); \1 is a group in both
-            case REGEXP_REPLACE -> {
-                String options = a.size() > 3 && a.get(3) instanceof SqlExpr.StringLit o ? o.value() : "";
-                if (a.size() > 3 && !(a.get(3) instanceof SqlExpr.StringLit)) {
-                    throw wall(c.fn(), "computed regexp options");
-                }
-                // a replacement that reads no group reads none of the pattern's numbering
-                boolean readsGroups = !(a.get(2) instanceof SqlExpr.StringLit r) || r.value().matches("(?s).*\\\\[0-9].*");
-                Pattern p = pattern(a.get(1), readsGroups ? Integer.MAX_VALUE : 0);
-                String params = p.params() + (options.contains("i") ? "i" : "");
-                yield writer.append("REGEXP_REPLACE(").expr(a.get(0), 0).append(", ").piece(p.text()).append(", ")
-                        .expr(a.get(2), 0).append(", 1, " + (options.contains("g") ? 0 : 1) + ", ")
-                        .append(stringLit(params)).append(")");
-            }
+            case MATCHES -> matches(writer, a);
+            case REGEXP_FULL_MATCH -> fullMatch(writer, a);
+            case REGEXP_EXTRACT -> regexpExtract(writer, a);
+            case REGEXP_EXTRACT_ALL -> regexpExtractAll(writer, a);
+            case REGEXP_REPLACE -> regexpReplace(writer, a);
             case SPLIT -> writer.piece(split(a.get(0), a.get(1)));
             case STRPOS -> writer.append("CHARINDEX(").expr(a.get(1), 0).append(", ").expr(a.get(0), 0).append(")");
             case SHA256 -> writer.append("SHA2(").expr(a.get(0), 0).append(", 256)");
@@ -1443,11 +1419,11 @@ public final class Snowflake extends AnsiSqlRenderer {
             SqlExpr x = a.get(arg++);
             boolean zero = !m.group(2).isEmpty();
             int width = m.group(3).isEmpty() ? 0 : Integer.parseInt(m.group(3));
-            String conversion = m.group(5);
+            char conversion = m.group(5).charAt(0);
             SqlWriter.Piece value = switch (conversion) {
-                case "s" -> isText(x) ? w -> w.expr(x, 0) : w -> w.append("TO_VARCHAR(").expr(x, 0).append(")");
-                case "d" -> w -> w.append("TO_VARCHAR(").expr(x, 0).append(")");
-                case "f" -> {
+                case 's' -> isText(x) ? w -> w.expr(x, 0) : w -> w.append("TO_VARCHAR(").expr(x, 0).append(")");
+                case 'd' -> w -> w.append("TO_VARCHAR(").expr(x, 0).append(")");
+                case 'f' -> {
                     int precision = m.group(4) == null ? 6 : Integer.parseInt(m.group(4));
                     // a negative value rounding to zero keeps its sign in Java's %f (-0.00); a NUMBER has no -0
                     String number = " AS NUMBER(38, " + precision + "))";
@@ -1457,7 +1433,7 @@ public final class Snowflake extends AnsiSqlRenderer {
                 }
                 default -> throw new IllegalStateException("the directive pattern admits s, d, f: " + conversion);
             };
-            if (width > 0 && conversion.equals("d") && zero) {
+            if (width > 0 && conversion == 'd' && zero) {
                 SqlWriter.Piece digits = w -> w.append("TO_VARCHAR(ABS(").expr(x, 0).append("))");
                 parts.add(w -> w.append("(CASE WHEN ").expr(x, 0).append(" < 0 THEN '-' || LPAD(").piece(digits)
                         .append(", " + (width - 1) + ", '0') ELSE LPAD(").piece(digits).append(", " + width + ", '0') END)"));
@@ -1477,6 +1453,54 @@ public final class Snowflake extends AnsiSqlRenderer {
             parts.add(w -> w.append(t));
         }
         return w -> w.append("(").join(parts, " || ", (v, part) -> v.piece(part)).append(")");
+    }
+
+    // ---- regular-expression calls (each pattern through pattern())
+
+    private SqlWriter matches(SqlWriter writer, List<SqlExpr> a) {
+        Pattern p = pattern(a.get(1), 0);
+        return writer.append("(REGEXP_INSTR(").expr(a.get(0), 0).append(", ").piece(p.text())
+                .append(", 1, 1, 0, ").append(stringLit(p.params())).append(") > 0)");
+    }
+
+    private SqlWriter fullMatch(SqlWriter writer, List<SqlExpr> a) {
+        Pattern p = pattern(a.get(1), 0);
+        return writer.append("REGEXP_LIKE(").expr(a.get(0), 0).append(", ").piece(p.text()).append(", ")
+                .append(stringLit(p.params())).append(")");
+    }
+
+    /** DuckDB's regexp_extract(s, p[, g]): group g (0, the match) of the first match, '' when none. */
+    private SqlWriter regexpExtract(SqlWriter writer, List<SqlExpr> a) {
+        SqlWriter.Piece before = textBeforeMatch(a);
+        if (before != null) {
+            return writer.piece(before);
+        }
+        Pattern p = pattern(a.get(1), groupRead(a));
+        writer.append("COALESCE(REGEXP_SUBSTR(").expr(a.get(0), 0).append(", ").piece(p.text())
+                .append(", 1, 1, ").append(stringLit(p.params() + "e")).append(", ");
+        return (a.size() > 2 ? writer.expr(a.get(2), 0) : writer.append("0")).append("), '')");
+    }
+
+    private SqlWriter regexpExtractAll(SqlWriter writer, List<SqlExpr> a) {
+        Pattern p = pattern(a.get(1), groupRead(a));
+        writer.append("REGEXP_SUBSTR_ALL(").expr(a.get(0), 0).append(", ").piece(p.text())
+                .append(", 1, 1, ").append(stringLit(p.params() + "e")).append(", ");
+        return (a.size() > 2 ? writer.expr(a.get(2), 0) : writer.append("0")).append(")");
+    }
+
+    /** DuckDB replaces the first match unless 'g' (occurrence 1 here; 0 is every one); \1 is a group in both. */
+    private SqlWriter regexpReplace(SqlWriter writer, List<SqlExpr> a) {
+        String options = a.size() > 3 && a.get(3) instanceof SqlExpr.StringLit o ? o.value() : "";
+        if (a.size() > 3 && !(a.get(3) instanceof SqlExpr.StringLit)) {
+            throw wall(SqlFn.REGEXP_REPLACE, "computed regexp options");
+        }
+        // a replacement that reads no group reads none of the pattern's numbering
+        boolean readsGroups = !(a.get(2) instanceof SqlExpr.StringLit r) || r.value().matches("(?s).*\\\\[0-9].*");
+        Pattern p = pattern(a.get(1), readsGroups ? Integer.MAX_VALUE : 0);
+        String params = p.params() + (options.contains("i") ? "i" : "");
+        return writer.append("REGEXP_REPLACE(").expr(a.get(0), 0).append(", ").piece(p.text()).append(", ")
+                .expr(a.get(2), 0).append(", 1, " + (options.contains("g") ? 0 : 1) + ", ")
+                .append(stringLit(params)).append(")");
     }
 
     // ---- regular expressions
@@ -2220,8 +2244,8 @@ public final class Snowflake extends AnsiSqlRenderer {
             String alias = freshName("u");
             List<SqlSelect.Projection> ps = new ArrayList<>();
             // the root's slots are the plan's own labels, before this dialect's passes re-typed its expressions
-            List<com.legend.sql.OutputCol> labels = depth == 0 && rootLabels.size() == s.projections().size()
-                    ? rootLabels : s.outputs();
+            List<com.legend.sql.OutputCol> labels = depth == 0 && rootLabels().size() == s.projections().size()
+                    ? rootLabels() : s.outputs();
             boolean aligned = labels.size() == s.projections().size();
             for (int i = 0; i < s.projections().size(); i++) {
                 SqlSelect.Projection p = s.projections().get(i);
@@ -2248,8 +2272,8 @@ public final class Snowflake extends AnsiSqlRenderer {
             } else {
                 // a list's element, min or max over the NULL list is NULL: written as its slot's NULL (ARRAY_MIN(NULL)
                 // and GET(NULL, 0) are VARIANT columns under the label, measured)
-                List<com.legend.sql.OutputCol> labels = depth == 0 && rootLabels.size() == s.projections().size()
-                        ? rootLabels : s.outputs();
+                List<com.legend.sql.OutputCol> labels = depth == 0 && rootLabels().size() == s.projections().size()
+                        ? rootLabels() : s.outputs();
                 boolean aligned = labels.size() == s.projections().size();
                 for (int i = 0; i < s.projections().size(); i++) {
                     SqlSelect.Projection p = s.projections().get(i);

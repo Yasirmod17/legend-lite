@@ -175,6 +175,10 @@ class CodeShapeGuardrailTest {
             // NormalizeRequired inline α-rename counter — same lifecycle as
             // UserCallInliner.fresh (fresh-name generation per compile)
             "AlphaRename.nrFresh",
+            // 2026-10-11 (cloud backends, docs/CLOUD_BACKENDS_PCT_2026_10_11.md §9): the Snowflake dialect's fresh
+            // names -- its lambda parameters and FLATTEN aliases (fresh), its select-list explosion pass's aliases
+            // (next): unique within one statement, the same lifecycle as Lowerer.aliasCounter
+            "Snowflake.fresh", "Snowflake.next",
             // render mode toggle + import memo
             "AnsiSqlRenderer.inlineMode", "ModelOrchestrator.cachedImports",
             // normalizer emission frame: Pipeline IS the frame object; expr
