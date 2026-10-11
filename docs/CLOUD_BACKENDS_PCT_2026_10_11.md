@@ -47,6 +47,19 @@ Each dialect is a sibling over `AnsiSqlRenderer`, as `Postgres` is: an exhaustiv
 switches (`Databases.dialect`, `.servers`, `.loadsRowsInBulk`, `Sessions.jdbcProduct`, ...). Every spelling is
 measured on the account before it is trusted (execution beats documentation).
 
+4. **Then, after the three clouds (the user, 2026-10-11): finish SQLite, then MySQL/MariaDB.** Both are local, no
+   account and no Docker:
+   - **SQLite**: today it is no dialect class, only `Lexicon.SQLITE` handed to `AnsiSqlRenderer`, with the gaps
+     that lexicon row's comment lists (no aliased `VALUES`, typed date literals, lists, `QUALIFY`, as-of, pivot). Make
+     it a sibling dialect like the others, give it the five PCT suites as a lane over the embedded driver
+     (`@sqlite_jdbc`, already a dependency), then pin and burn down. Starting point: `docs/SQLITE_BACKEND.md`.
+   - **MySQL / MariaDB**: one dialect family over `AnsiSqlRenderer`. MariaDB embedded through MariaDB4j, as
+     `docs/MARIADB_BACKEND.md` designs it (a feasibility design measured on MariaDB 11.4, not built); MySQL 8 as
+     a sibling where the two differ (JSON functions, their regex engines). Lists have to be JSON arrays (neither has
+     an array type), and neither has `FULL OUTER JOIN` or `QUALIFY`. Lanes `//pct:pct_mariadb_<suite>` and
+     `//pct:pct_mysql_<suite>`.
+   - **Further backends: open, the user's call.** The candidates and the case for each are in §9.
+
 ## 3. What is in place (this branch)
 
 - **Drivers** (`tools/deps/jars_table.bzl`, users `pct` only until the server opens these databases), each one
@@ -227,3 +240,43 @@ answer:
 | arrays, structs, maps and variants arrive over JDBC as JSON text; `getObject(i, LocalDateTime.class)` answers a String | the executor's JSON carrier parses lists; a struct's text is decoded by the dialect's `normalize`; the timestamp re-fetch keeps the driver's `Timestamp` when the driver answers another class |
 | a correlated scalar subquery in a join condition is refused | the as-of join is a wall (a window-based form is possible later) |
 | `QUALIFY`, `SELECT * EXCEPT`, native `PIVOT` (columns named by the `IN` aliases), `listagg ... WITHIN GROUP`, `median`, `mode`, `percentile_cont/disc ... WITHIN GROUP`, `max_by`, `max(boolean)`, `explode`, correlated `(SELECT agg FROM explode(t.xs))` | used as they are |
+
+## 9. Further backends: candidates (open, the user's call)
+
+Nothing here is decided. legend-lite replaces legend-engine, so the first list is the relational databases the
+engine supports that are not on the plan yet (`DynaFn` names several: MemSQL, Spanner, Trino), ordered by how much an
+existing dialect carries over and by what users run:
+
+| Backend | Carried over from | How it is tested | Notes |
+|---|---|---|---|
+| Redshift | `Postgres` (Redshift forked Postgres 8) | an AWS account (Redshift Serverless has a running cost) | the cheapest to add: mostly walls where Redshift lacks newer Postgres features |
+| Trino (Presto, Athena, Starburst) | `Databricks` (typed arrays, lambdas, maps) | the `trinodb/trino` image with the memory connector | one dialect covers Athena too |
+| SQL Server | none | the `mssql/server` image (free Developer edition) | large enterprise use; the hardest of these: no boolean type, `TOP` and `OFFSET ... FETCH`, lists through JSON (`OPENJSON`) |
+| Oracle | none | the `gvenzl/oracle-free` image (23ai) | `''` is NULL, a deep divergence that will pin many tests; BOOLEAN only since 23ai |
+| SingleStore (MemSQL) | MySQL | its free developer image | follows the MySQL dialect |
+| Spanner | `BigQuery` (GoogleSQL) | Google's Spanner emulator | |
+| ClickHouse | `Databricks`/`Trino` (arrays, lambdas) | the `clickhouse/clickhouse-server` image | not in legend-engine; popular for analytics |
+| DB2, Sybase ASE/IQ | the engine-text printers (`EngineStyleDB2`) are text only, not an execution dialect | licences make a lane hard | low priority |
+
+The images need Docker, which this cloud container has (`/usr/bin/docker`); CI would need it too, or the engines' own
+packages.
+
+**Stores that are not SQL.** legend-engine has both: a MongoDB store (class queries to aggregation pipelines) and an
+Elasticsearch store (relation queries to the query DSL). In legend-lite they fit beside `SqlDialect`, not inside it:
+the Lowerer's output (the `SqlQuery` IR) stays the input, and a new target translates it into the store's own query
+language. The executor gains a second chartered seam beside JDBC (the store's own client). The execution tenet still
+holds: the store executes, and what it cannot express is a `DialectCapability` wall, never a fallback computed in Java.
+
+- **MongoDB: a good fit.** The aggregation pipeline covers most of the relation algebra: `$match` (filter), `$set`
+  (extend), `$project` (select), `$group` (groupBy), `$sort`, `$limit`/`$skip`, `$lookup` (join), `$setWindowFields`
+  (over), `$unionWith` (concatenate), and `$documents` for a literal relation (so the PCT's `#TDS` literals need no
+  loading). Its expression language has lambdas (`$map`, `$filter`, `$reduce`), so lists are native. Nested
+  documents suit Pure classes. Scalar PCT runs as `$documents: [{}]` then `$project`. Tested with the `mongo` image or
+  an embedded `mongod`.
+- **Elasticsearch / OpenSearch: narrower.** Filter, sort, page, and grouped aggregates map well (DataCube's
+  dashboard shape). There is no general join, window or computed-list support, so most of the relation PCT would be
+  walls. Two ways in: ES|QL, a pipe language that reads like a relation chain (`FROM | WHERE | EVAL | STATS ... BY |
+  SORT | LIMIT`), or the query DSL. A literal relation must be loaded into an index first, since ES|QL's `ROW` is a
+  single row. Licences: Elasticsearch server is under Elastic, SSPL or AGPL licences; OpenSearch is Apache-2.0 and
+  has its own SQL and PPL.
+
