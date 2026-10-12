@@ -3494,8 +3494,8 @@ public final class SqlToPure {
         for (String side : List.of("left", "right")) {
             m.put(side, (t, f, a, s, r) -> {
                 kinds(f, a, Kind.STRING, Kind.INTEGER);
-                // a negative length counts from the other end in Postgres
-                nonNegative(f, 1);
+                // a negative count leaves that many off the other end, in Postgres and in Pure's relational left and
+                // right alike (measured on DuckDB and Postgres, 2026-10-12)
                 return strict(Kind.STRING, a, v -> call(side, v.get(0), v.get(1)));
             });
         }
@@ -3521,8 +3521,29 @@ public final class SqlToPure {
         });
         for (String position : List.of("strpos", "position")) {
             m.put(position, (t, f, a, s, r) -> {
-                throw SqlTranslationException.unsupported(position + "(...) is not supported yet: it is Pure's indexOf"
-                        + " plus one, and legend-lite lowers indexOf one too high (PCT pins it)", f.pos());
+                // the RELATIONAL indexOf is strpos: 1-based, 0 when not found, 1 for '' -- legend-engine's relational
+                // lowering (locate()), the acceptance surface; platform Pure's is 0-based, a divergence PCT ledgers
+                // (Test_LegendLite_EssentialFunctions_PCT), and the parity corpus pins the relational one here
+                kinds(f, a, Kind.STRING, Kind.STRING);
+                return strict(Kind.INTEGER, a, v -> call("indexOf", v.get(0), v.get(1)));
+            });
+        }
+        for (String sub : List.of("substring", "substr")) {
+            m.put(sub, (t, f, a, s, r) -> substring(f, a));
+        }
+        m.put("trunc", (t, f, a, s, r) -> trunc(f, a));
+        for (String power : List.of("power", "pow")) {
+            m.put(power, (t, f, a, s, r) -> {
+                arity(f, a, 2);
+                List<Tx> lr = typedOperands(a.get(0), a.get(1), ",", f.pos());
+                numericOperand(lr.get(0), f.args().get(0));
+                numericOperand(lr.get(1), f.args().get(1));
+                // power of a numeric is numeric in Postgres, exact; of integers and doubles, double precision
+                if (exactNumeric(lr.get(0).kind()) || exactNumeric(lr.get(1).kind())) {
+                    throw SqlTranslationException.unsupported(functionName(f.name().get(0)) + "(...) of numeric values"
+                            + " (exact in Postgres) is not supported yet", f.pos());
+                }
+                return strict(Kind.FLOAT, lr, v -> call("pow", v.get(0), v.get(1)));
             });
         }
         m.put("starts_with", (t, f, a, s, r) -> {
@@ -3686,17 +3707,119 @@ public final class SqlToPure {
     /** {@code round(x)} (and {@code round(x, 0)}) of an exact number: Postgres's numeric round, half away from
      *  zero. Pure's round is half to even, so this is {@link #halfAwayFromZero}. A double precision rounds half to
      *  even in Postgres; {@code round(x, n)} for another n has no Pure spelling here yet: both refused. */
-    private static Tx round(SqlAst.FunctionCall f, List<Tx> args) {
-        // an integer rounded to n >= 0 places is itself
-        boolean whole = !args.isEmpty() && args.get(0).kind() == Kind.INTEGER;
-        if (args.size() == 2 && !(f.args().get(1) instanceof SqlAst.IntegerLit n
-                && (n.value().signum() == 0 || whole && n.value().signum() > 0))) {
-            throw SqlTranslationException.unsupported("round(x, n) is not supported yet (Pure's round is half to even,"
-                    + " Postgres's half away from zero)", f.pos());
+    /** {@code substring(s, start [, length])}, {@code substr}: the characters from {@code start} (1-based) on, {@code
+     *  length} of them -- Pure's relational substring, SQL's substring(start, length). A start before 1 still counts
+     *  its places in Postgres ({@code substring('hello', 0, 3)} is {@code 'he'}): constants are moved to start at 1.
+     *  A negative length is Postgres's error. */
+    private static Tx substring(SqlAst.FunctionCall f, List<Tx> a) {
+        if (a.size() == 2 && f.args().get(1) instanceof SqlAst.StringLit) {
+            throw SqlTranslationException.unsupported("substring(... FROM pattern) (a regular expression) is not"
+                    + " supported yet", f.pos());
         }
+        if (a.size() == 2) {
+            kinds(f, a, Kind.STRING, Kind.INTEGER);
+            return strict(Kind.STRING, a, v -> call("substring", v.get(0), v.get(1)));
+        }
+        kinds(f, a, Kind.STRING, Kind.INTEGER, Kind.INTEGER);
+        for (Tx x : a) {
+            if (isNullConstant(x)) {
+                return nullOf(Kind.STRING);
+            }
+        }
+        Long start = constantInteger(f.args().get(1));
+        Long length = constantInteger(f.args().get(2));
+        if (start == null || length == null) {
+            throw SqlTranslationException.unsupported(functionName(f.name().get(0)) + " with a start or a length other"
+                    + " than a constant is not supported yet", f.pos());
+        }
+        if (length < 0) {
+            throw SqlTranslationException.invalid("negative substring length not allowed", f.args().get(2).pos());
+        }
+        long from = Math.max(start, 1);
+        long count = Math.max(start + length - from, 0);
+        return strict(Kind.STRING, List.of(a.get(0)), v -> call("substring", v.get(0),
+                integer(java.math.BigInteger.valueOf(from)), integer(java.math.BigInteger.valueOf(count))));
+    }
+
+    /** An integer constant ({@code 3}, {@code -3}), or null. */
+    private static @com.legend.base.Nullable Long constantInteger(SqlAst.Expr e) {
+        java.math.BigInteger k = e instanceof SqlAst.IntegerLit n ? n.value()
+                : e instanceof SqlAst.Unary u && u.op() == SqlAst.UnaryOp.MINUS
+                        && u.operand() instanceof SqlAst.IntegerLit n ? n.value().negate() : null;
+        return k == null || k.bitLength() >= 63 ? null : k.longValue();
+    }
+
+    /** {@code x} to {@code places} decimal places (negative: to tens, hundreds...), exactly: the scaled value rounded
+     *  half away from zero (Postgres's numeric round) or truncated (trunc), then scaled back by a decimal constant --
+     *  decimal multiplication, exact on every database (a divide would go through a double). */
+    private static ValueSpecification toPlaces(ValueSpecification x, long places, boolean halfAway) {
+        BigDecimal up = BigDecimal.ONE.scaleByPowerOfTen((int) places);
+        ValueSpecification scaled = places == 0 ? x : places > 0
+                ? AppliedFunction.infixRun("times", List.of(x, integer(up.toBigIntegerExact())))
+                : AppliedFunction.infixRun("times", List.of(x, new CDecimal(up)));
+        ValueSpecification whole = halfAway ? halfAwayFromZero(scaled) : towardZero(scaled);
+        BigDecimal down = BigDecimal.ONE.scaleByPowerOfTen((int) -places);
+        return places == 0 ? whole : places > 0
+                ? AppliedFunction.infixRun("times", List.of(whole, new CDecimal(down)))
+                : AppliedFunction.infixRun("times", List.of(whole, integer(down.toBigIntegerExact())));
+    }
+
+    /** The whole number toward zero. */
+    private static ValueSpecification towardZero(ValueSpecification x) {
+        return call("if", call("greaterThanEqual", x, new CInteger(0L)), thunk(call("floor", x)),
+                thunk(call("ceiling", x)));
+    }
+
+    /** {@code trunc(x [, places])}: toward zero -- numeric for a numeric (exact), double precision otherwise. */
+    private static Tx trunc(SqlAst.FunctionCall f, List<Tx> args) {
         if (args.size() != 2) {
             arity(f, args, 1);
         }
+        Tx x = args.get(0);
+        numericOperand(x, f.args().get(0));
+        if (args.size() == 1) {
+            if (x.kind() == Kind.NULL) {
+                // trunc has numeric, double precision and macaddr forms: a NULL is no one of them
+                throw SqlTranslationException.invalid("function trunc(unknown) is not unique", f.pos());
+            }
+            return wholeNumber(x, SqlToPure::towardZero);
+        }
+        return places(f, args, false);
+    }
+
+    /** round(x, n) or trunc(x, n): a numeric (an integer read as one) to a constant number of places, exactly. */
+    private static Tx places(SqlAst.FunctionCall f, List<Tx> args, boolean halfAway) {
+        Tx x = args.get(0);
+        String fn = functionName(f.name().get(0));
+        if (isNullConstant(x) || isNullConstant(args.get(1))) {
+            return nullOf(Kind.DECIMAL);
+        }
+        if (x.kind() == Kind.FLOAT) {
+            // a double has no such function in Postgres; but a quotient of numerics is a numeric there and a double
+            // here (Pure's divide), whose ties a double may round the wrong way: refused, never answered
+            throw SqlTranslationException.unsupported(fn + "(x, n) of a double precision value (or of a quotient of"
+                    + " numerics, a double here) is not supported yet", f.pos());
+        }
+        Long n = constantInteger(f.args().get(1));
+        if (n == null || Math.abs(n) > 18) {
+            throw SqlTranslationException.unsupported(fn + "(x, n) with n other than a constant (of at most 18) is not"
+                    + " supported yet", f.args().get(1).pos());
+        }
+        if (x.kind() == Kind.INTEGER && n >= 0) {
+            // an integer to n >= 0 places is itself
+            return Tx.value(x.vs(), Kind.DECIMAL, x.nullable());
+        }
+        long places = n;
+        return strict(Kind.DECIMAL, List.of(x), v -> toPlaces(v.get(0), places, halfAway));
+    }
+
+    private static Tx round(SqlAst.FunctionCall f, List<Tx> args) {
+        if (args.size() == 2) {
+            numericOperand(args.get(0), f.args().get(0));
+            // Postgres's numeric round: half away from zero (Pure's round(Decimal, n) breaks ties to even)
+            return places(f, args, true);
+        }
+        arity(f, args, 1);
         Tx x = args.get(0);
         numericOperand(x, f.args().get(0));
         if (x.kind() == Kind.FLOAT) {
@@ -3704,9 +3827,8 @@ public final class SqlToPure {
                     + " Postgres) is not supported yet", f.pos());
         }
         if (x.kind() == Kind.INTEGER) {
-            // round(int) is round(double precision) in Postgres; round(int, n) round(numeric, n): the value itself
-            return args.size() == 2 ? Tx.value(x.vs(), Kind.DECIMAL, x.nullable())
-                    : strict(Kind.FLOAT, List.of(x), v -> call("toFloat", v.get(0)));
+            // round(int) is round(double precision) in Postgres: the value itself, a double
+            return strict(Kind.FLOAT, List.of(x), v -> call("toFloat", v.get(0)));
         }
         return wholeNumber(x, SqlToPure::halfAwayFromZero);
     }

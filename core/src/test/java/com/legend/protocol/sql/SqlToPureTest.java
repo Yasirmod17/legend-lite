@@ -253,8 +253,14 @@ class SqlToPureTest {
         assertEquals("#>{s::DB.T}#->extend(~[r:r|if($r.ID * 1.5D >= 0, |floor(($r.ID * 1.5D) + 0.5D),"
                 + " |(($r.ID * 1.5D) - 0.5D)->ceiling())])->select(~[r])",
                 pure("select round(ID * 1.5) as r from tb('s::DB.T')"));
-        assertEquals("round(x, n) is not supported yet (Pure's round is half to even, Postgres's half away from zero)",
-                refusal("select round(age * 1.5, 1) from tb('s::DB.T')").getMessage());
+        // to n places, exactly: scaled, rounded half away from zero, scaled back by a decimal constant
+        assertEquals("#>{s::DB.T}#->extend(~[r:r|if(if($r.age->isEmpty(), |[], |$r.age->toOne() * 1.5D)->isEmpty(), |[], |"
+                + "if(if($r.age->isEmpty(), |[], |$r.age->toOne() * 1.5D)->toOne() * 10 >= 0, |floor((if($r.age->isEmpt"
+                + "y(), |[], |$r.age->toOne() * 1.5D)->toOne() * 10) + 0.5D), |((if($r.age->isEmpty(), |[], |$r.age->to"
+                + "One() * 1.5D)->toOne() * 10) - 0.5D)->ceiling()) * 0.1D)])->select(~[r])",
+                pure("select round(age * 1.5, 1) as r from tb('s::DB.T')"));
+        assertEquals(SqlTranslationException.Kind.UNSUPPORTED,
+                refusal("select round(age / 3.0, 1) from tb('s::DB.T')").kind());
     }
 
     @Test

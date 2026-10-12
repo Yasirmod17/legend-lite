@@ -182,3 +182,22 @@ tests:
     sql: "SELECT 1 || 2 AS a FROM departments WHERE id = 1"
   - id: concat_with_null
     sql: "SELECT id, name || NULL AS a, NULL || name AS b, concat(NULL, name, NULL) AS c FROM persons ORDER BY id"
+  # substring and substr: from a 1-based start, a start before 1 counting its places; strpos and position (the
+  # relational indexOf); left and right with a negative count
+  - id: substring_and_substr
+    sql: "SELECT id, substring(val, 2) AS a, substring(val FROM 2 FOR 3) AS b, substr(val, 1, 3) AS c, substring(val, 0, 3) AS d, substring(val, -1, 3) AS e, substring(val, 4, 0) AS f, substr(val, 9) AS g FROM strings ORDER BY id"
+  - id: substring_with_a_negative_length_is_an_error
+    sql: "SELECT substring(val, 2, -1) AS a FROM strings WHERE id = 1"
+  - id: substring_from_a_pattern_is_refused
+    sql: "SELECT substring(val FROM '[a-z]+') AS a FROM strings WHERE id = 1"
+  - id: strpos_position_left_right
+    sql: "SELECT id, strpos(val, 'l') AS a, position('o' IN val) AS b, strpos(val, '') AS c, left(val, -2) AS d, right(val, -2) AS e, left(val, 2) AS f FROM strings ORDER BY id"
+  # round(x, n) half away from zero and trunc(x, n) toward zero, exactly (ties a double misrounds: 1.005, 0.285)
+  - id: round_and_trunc_to_places
+    sql: "SELECT round(2.665, 2) AS a, round(1.005, 2) AS b, round(0.285, 2) AS c, round(-2.665, 2) AS d, round(1234.5, -2) AS e, round(1250, -2) AS f, trunc(2.679, 2) AS g, trunc(-2.679, 1) AS h, trunc(-2.7) AS i, trunc(7) AS j FROM departments WHERE id = 1"
+  - id: round_and_trunc_of_columns
+    sql: "SELECT id, round(salary, -3) AS b, trunc(salary * 1.07, 1) AS c, round(numeric_val, 2) AS d, round(numeric_val * 3, 4) AS e FROM persons p JOIN numbers n USING (id) ORDER BY id"
+  - id: round_of_a_double_to_places_is_refused
+    sql: "SELECT round(float_val, 2) AS a FROM numbers WHERE id = 1"
+  - id: power_of_integers_and_doubles
+    sql: "SELECT id, power(small_val, 2) AS a, power(float_val, 2) AS b, pow(2, small_val) AS c FROM numbers WHERE small_val BETWEEN -10 AND 10 ORDER BY id"
