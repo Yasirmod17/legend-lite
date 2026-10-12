@@ -153,7 +153,7 @@ public final class SqlAst {
     /** A value expression. */
     public sealed interface Expr permits ColumnRef, IntegerLit, NumericLit, StringLit, BooleanLit, NullLit, TypedLit,
             Param, Unary, Binary, Operator, IsNull, IsTruth, IsDistinct, InList, Between, Like, Case, FunctionCall,
-            Cast, ScalarSubquery, Exists, InSubquery, Quantified, Window {
+            Cast, ScalarSubquery, Exists, InSubquery, Quantified, Window, Subscript {
         Pos pos();
     }
 
@@ -211,6 +211,10 @@ public final class SqlAst {
      *  means is the translator's business, which refuses those it does not know. */
     public record Operator(String operator, @com.legend.base.Nullable Expr left, Expr right, Pos pos)
             implements Expr {
+    }
+
+    /** A subscript: {@code base[index]} (a jsonb member or element, or an array's element). */
+    public record Subscript(Expr base, Expr index, Pos pos) implements Expr {
     }
 
     /** {@code x IS [NOT] NULL}. */

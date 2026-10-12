@@ -45,6 +45,10 @@ class SqlToPureTest {
         return assertThrows(SqlTranslationException.class, () -> pure(sql));
     }
 
+    private static SqlTranslationException refusal(String sql, List<Col> columns) {
+        return assertThrows(SqlTranslationException.class, () -> pure(sql, columns));
+    }
+
     // ------------------------------------------------------------------ shapes
 
     @Test
@@ -314,10 +318,42 @@ class SqlToPureTest {
         SqlTranslationException regex = refusal("select ID from tb('s::DB.T') where dept ~ 'e'");
         assertEquals(SqlTranslationException.Kind.UNSUPPORTED, regex.kind());
         assertEquals("regular expression operators (~, ~*, !~, !~*) are not supported yet", regex.getMessage());
-        assertEquals("the operator ->> is not supported yet",
-                refusal("select dept ->> 'k' from tb('s::DB.T')").getMessage());
+        assertEquals("the operator @> is not supported yet",
+                refusal("select dept @> 'k' from tb('s::DB.T')").getMessage());
         assertEquals("a select list with no columns is not supported yet",
                 refusal("select from tb('s::DB.T')").getMessage());
+    }
+
+    // ------------------------------------------------------------------ jsonb
+
+    /** A Variant column: Postgres's jsonb (register S48). */
+    private static final List<Col> JSON_COLUMNS = List.of(new Col("ID", "Integer", false),
+            new Col("j", "meta::pure::metamodel::variant::Variant", true));
+
+    @Test
+    void jsonbNavigationIsVariantGetAndItsTextIsTo() {
+        assertEquals("#>{s::DB.T}#->extend(~[a:r|$r.j->get('a'), z:r|$r.j->get(0), b:r|$r.j->get('b')->to(@String)])"
+                + "->select(~[a, z, b])", pure("select j -> 'a' as a, j -> 0 as z, j ->> 'b' as b from tb('s::DB.T')", JSON_COLUMNS));
+        assertEquals("#>{s::DB.T}#->extend(~[p:r|$r.j->get('a')->get('b c'), t:r|$r.j->get('a')->to(@String),"
+                + " k:r|$r.j->get('k')])->select(~[p, t, k])", pure("select j #> '{a,\"b c\"}' as p, j #>> '{a}' as t, j['k'] as k from tb('s::DB.T')",
+                JSON_COLUMNS));
+        assertEquals("#>{s::DB.T}#->extend(~[v:r|meta::pure::functions::variant::convert::fromJson('{\"a\":1}')->get('a')"
+                + "->to(@String), s:r|meta::pure::functions::variant::convert::fromJson('\"x\"')])->select(~[v, s])", pure("select '{\"a\":1}'::jsonb ->> 'a' as v, to_jsonb('x') as s from tb('s::DB.T')",
+                JSON_COLUMNS));
+    }
+
+    @Test
+    void jsonbFormsWithoutAFaithfulPureSpellingAreRefusedByName() {
+        assertEquals("ORDER BY of a jsonb value is not supported yet (jsonb orders and compares by its own rules)",
+                refusal("select ID from tb('s::DB.T') order by j", JSON_COLUMNS).getMessage());
+        assertEquals("a path element that is a number (0) reads an array's element or an object's member by the value"
+                + " it meets; it is not supported yet", refusal("select j #> '{0}' from tb('s::DB.T')", JSON_COLUMNS).getMessage());
+        assertEquals("reading a jsonb value out of a jsonb constant is not supported yet (its text, with ->> or #>>,"
+                + " is)", refusal("select '{\"a\":1}'::jsonb -> 'a' from tb('s::DB.T')", JSON_COLUMNS).getMessage());
+        assertEquals("jsonb_array_length(...) is not supported yet",
+                refusal("select jsonb_array_length(j) from tb('s::DB.T')", JSON_COLUMNS).getMessage());
+        assertEquals(SqlTranslationException.Kind.INVALID,
+                refusal("select ID -> 'a' from tb('s::DB.T')").kind());
     }
 
     @Test

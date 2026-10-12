@@ -50,7 +50,7 @@ public final class SqlParser {
             "second", "to", "union", "varying", "where", "window", "with", "within", "without", "year");
 
     /** The operators the levels below {@code Op} read themselves; Postgres reads every other one at {@code Op}. */
-    private static final Set<String> OWN_LEVEL_OPERATORS = Set.of("+", "-", "*", "/", "%", "^", "<", ">", "=", "<=",
+    private static final Set<String> OWN_LEVEL_OPERATORS = Set.of(":", "+", "-", "*", "/", "%", "^", "<", ">", "=", "<=",
             ">=", "<>", "!=", "::", "=>");
 
     /** The SQL value functions written without parentheses (Postgres §9.9.5): read as calls with no arguments. */
@@ -812,7 +812,13 @@ public final class SqlParser {
                 Token op = next();
                 e = new SqlAst.Cast(e, typeName(), op.pos());
             } else if (peek().kind() == Kind.LBRACKET) {
-                throw unsupported("array subscripts are");
+                Token open = next();
+                SqlAst.Expr index = expr();
+                if (peek().isOp(":")) {
+                    throw unsupported("array slices are");
+                }
+                expect(Kind.RBRACKET);
+                e = new SqlAst.Subscript(e, index, open.pos());
             } else if (peek().is("at") && (peekAt(1).is("time") || peekAt(1).is("local"))) {
                 throw unsupported("AT TIME ZONE is");
             } else if (peek().is("collate")) {

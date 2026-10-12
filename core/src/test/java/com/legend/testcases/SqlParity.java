@@ -424,6 +424,10 @@ public final class SqlParity {
             case Float f -> f.doubleValue();
             case Double d -> d;
             case Boolean b -> b;
+            // a json or jsonb value, from Postgres (a PGobject) or from DuckDB (its JsonNode): the JSON value it holds
+            case Object o when o.getClass().getName().equals("org.postgresql.util.PGobject")
+                    && JSON_TYPES.contains(pgObject(o, "getType")) -> JsonValue.of(pgObject(o, "getValue"));
+            case Object o when o.getClass().getName().equals("org.duckdb.JsonNode") -> JsonValue.of(o.toString());
             case java.sql.Timestamp ts -> timestamp(ts.toLocalDateTime());
             case java.sql.Date d -> d.toLocalDate().toString();
             case java.time.LocalDate d -> d.toString();
@@ -449,6 +453,59 @@ public final class SqlParity {
             case byte[] b -> "\\x" + java.util.HexFormat.of().formatHex(b);
             default -> v.toString();
         };
+    }
+
+    private static final Set<String> JSON_TYPES = Set.of("json", "jsonb");
+
+    private static boolean jsonContainerText(String s) {
+        String t = s.strip();
+        return t.startsWith("{") && t.endsWith("}") || t.startsWith("[") && t.endsWith("]");
+    }
+
+    private static String pgObject(Object o, String getter) {
+        try {
+            return String.valueOf(o.getClass().getMethod(getter).invoke(o));
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /**
+     * A JSON value in a cell, as its canonical text: an object's keys sorted, a number by its value, no spaces. Two
+     * cells holding JSON agree when their values do: Postgres's jsonb writes a space after each ',' and ':' and keeps
+     * its own key order (the shorter key first), DuckDB's JSON neither, and legend-lite's Variant is either, by the
+     * database it runs on; a JSON object's keys have no order (RFC 8259).
+     */
+    public record JsonValue(String canonical) {
+
+        static JsonValue of(String text) {
+            return new JsonValue(canonical(Json.parse(text)));
+        }
+
+        private static String canonical(Json.Node n) {
+            return switch (n) {
+                case Json.Obj o -> {
+                    StringBuilder b = new StringBuilder("{");
+                    o.fields().keySet().stream().sorted().forEach(k -> b.append(b.length() > 1 ? "," : "")
+                            .append(Json.toCompact(k)).append(':').append(canonical(o.fields().get(k))));
+                    yield b.append('}').toString();
+                }
+                case Json.Arr a -> "[" + String.join(",", a.items().stream().map(JsonValue::canonical).toList()) + "]";
+                case Json.Str str -> Json.toCompact(str.value());
+                case Json.Num num -> {
+                    BigDecimal d = num.decimalValue() != null ? num.decimalValue()
+                            : new BigDecimal(num.token() != null ? num.token() : Double.toString(num.doubleValue()));
+                    yield d.signum() == 0 ? "0" : d.stripTrailingZeros().toPlainString();
+                }
+                case Json.Bool bool -> Boolean.toString(bool.value());
+                case Json.Null ignored -> "null";
+            };
+        }
+
+        @Override
+        public String toString() {
+            return canonical;
+        }
     }
 
     /** {@code 2023-01-10 09:00:00}, a fraction of a second only when there is one ({@code .5}, never {@code .0}). */
@@ -581,6 +638,20 @@ public final class SqlParity {
         }
         if (expected instanceof Boolean && actual instanceof Boolean) {
             return expected.equals(actual);
+        }
+        // a JSON value is only ever a JSON value: a jsonb 42 is not the integer 42, nor a jsonb "x" the text x
+        if (expected instanceof JsonValue || actual instanceof JsonValue) {
+            return expected.equals(actual);
+        }
+        // the text of a JSON object or array (->> of one, register S48): the same JSON, in DuckDB's compact spelling or
+        // jsonb's (a space after each ',' and ':')
+        if (expected instanceof String es && actual instanceof String as && jsonContainerText(es)
+                && jsonContainerText(as)) {
+            try {
+                return JsonValue.of(es).equals(JsonValue.of(as));
+            } catch (RuntimeException notJson) {
+                return es.equals(as);
+            }
         }
         return expected.toString().equals(actual.toString());
     }
@@ -760,6 +831,7 @@ public final class SqlParity {
             case BigDecimal n -> "d" + n.toPlainString();
             case Double d -> "f" + d;
             case Boolean b -> "b" + b;
+            case JsonValue j -> "j" + j.canonical();
             default -> "s" + v;
         };
     }
@@ -774,6 +846,7 @@ public final class SqlParity {
             case 'd' -> new BigDecimal(v);
             case 'f' -> Double.valueOf(v);
             case 'b' -> Boolean.valueOf(v);
+            case 'j' -> new JsonValue(v);
             case 's' -> v;
             default -> throw new IllegalStateException("a cell of no known type: " + s);
         };

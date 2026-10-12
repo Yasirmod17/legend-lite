@@ -84,18 +84,18 @@
 {"id":"functions/aggregate_functions/cume_dist__variadicORDERBYvariadic__no_generator","columns":["result"],"rows":[["i1"]]}
 {"id":"functions/aggregate_functions/dense_rank__variadicORDERBYvariadic__no_generator","columns":["result"],"rows":[["i1"]]}
 {"id":"functions/aggregate_functions/every__bool__from_table","columns":["result"],"rows":[["bfalse"]]}
-{"id":"functions/aggregate_functions/json_agg__anyelement__from_table","columns":["result"],"rows":[["s[\"hello\", \"WORLD\", \"MiXeD CaSe\"]"]]}
-{"id":"functions/aggregate_functions/json_agg_strict__anyelement__from_table","columns":["result"],"rows":[["s[\"hello\", \"WORLD\", \"MiXeD CaSe\"]"]]}
-{"id":"functions/aggregate_functions/json_object_agg__any_any__from_table","columns":["result"],"rows":[["s{ \"1\" : \"hello\", \"2\" : \"WORLD\", \"3\" : \"MiXeD CaSe\" }"]]}
-{"id":"functions/aggregate_functions/json_object_agg_strict__any_any__from_table","columns":["result"],"rows":[["s{ \"1\" : \"hello\", \"2\" : \"WORLD\", \"3\" : \"MiXeD CaSe\" }"]]}
-{"id":"functions/aggregate_functions/json_object_agg_unique__any_any__from_table","columns":["result"],"rows":[["s{ \"1\" : \"hello\", \"2\" : \"WORLD\", \"3\" : \"MiXeD CaSe\" }"]]}
-{"id":"functions/aggregate_functions/json_object_agg_unique_strict__any_any__from_table","columns":["result"],"rows":[["s{ \"1\" : \"hello\", \"2\" : \"WORLD\", \"3\" : \"MiXeD CaSe\" }"]]}
-{"id":"functions/aggregate_functions/jsonb_agg__anyelement__from_table","columns":["result"],"rows":[["s[\"hello\", \"WORLD\", \"MiXeD CaSe\"]"]]}
-{"id":"functions/aggregate_functions/jsonb_agg_strict__anyelement__from_table","columns":["result"],"rows":[["s[\"hello\", \"WORLD\", \"MiXeD CaSe\"]"]]}
-{"id":"functions/aggregate_functions/jsonb_object_agg__any_any__from_table","columns":["result"],"rows":[["s{\"1\": \"hello\", \"2\": \"WORLD\", \"3\": \"MiXeD CaSe\"}"]]}
-{"id":"functions/aggregate_functions/jsonb_object_agg_strict__any_any__from_table","columns":["result"],"rows":[["s{\"1\": \"hello\", \"2\": \"WORLD\", \"3\": \"MiXeD CaSe\"}"]]}
-{"id":"functions/aggregate_functions/jsonb_object_agg_unique__any_any__from_table","columns":["result"],"rows":[["s{\"1\": \"hello\", \"2\": \"WORLD\", \"3\": \"MiXeD CaSe\"}"]]}
-{"id":"functions/aggregate_functions/jsonb_object_agg_unique_strict__any_any__from_table","columns":["result"],"rows":[["s{\"1\": \"hello\", \"2\": \"WORLD\", \"3\": \"MiXeD CaSe\"}"]]}
+{"id":"functions/aggregate_functions/json_agg__anyelement__from_table","columns":["result"],"rows":[["j[\"hello\",\"WORLD\",\"MiXeD CaSe\"]"]]}
+{"id":"functions/aggregate_functions/json_agg_strict__anyelement__from_table","columns":["result"],"rows":[["j[\"hello\",\"WORLD\",\"MiXeD CaSe\"]"]]}
+{"id":"functions/aggregate_functions/json_object_agg__any_any__from_table","columns":["result"],"rows":[["j{\"1\":\"hello\",\"2\":\"WORLD\",\"3\":\"MiXeD CaSe\"}"]]}
+{"id":"functions/aggregate_functions/json_object_agg_strict__any_any__from_table","columns":["result"],"rows":[["j{\"1\":\"hello\",\"2\":\"WORLD\",\"3\":\"MiXeD CaSe\"}"]]}
+{"id":"functions/aggregate_functions/json_object_agg_unique__any_any__from_table","columns":["result"],"rows":[["j{\"1\":\"hello\",\"2\":\"WORLD\",\"3\":\"MiXeD CaSe\"}"]]}
+{"id":"functions/aggregate_functions/json_object_agg_unique_strict__any_any__from_table","columns":["result"],"rows":[["j{\"1\":\"hello\",\"2\":\"WORLD\",\"3\":\"MiXeD CaSe\"}"]]}
+{"id":"functions/aggregate_functions/jsonb_agg__anyelement__from_table","columns":["result"],"rows":[["j[\"hello\",\"WORLD\",\"MiXeD CaSe\"]"]]}
+{"id":"functions/aggregate_functions/jsonb_agg_strict__anyelement__from_table","columns":["result"],"rows":[["j[\"hello\",\"WORLD\",\"MiXeD CaSe\"]"]]}
+{"id":"functions/aggregate_functions/jsonb_object_agg__any_any__from_table","columns":["result"],"rows":[["j{\"1\":\"hello\",\"2\":\"WORLD\",\"3\":\"MiXeD CaSe\"}"]]}
+{"id":"functions/aggregate_functions/jsonb_object_agg_strict__any_any__from_table","columns":["result"],"rows":[["j{\"1\":\"hello\",\"2\":\"WORLD\",\"3\":\"MiXeD CaSe\"}"]]}
+{"id":"functions/aggregate_functions/jsonb_object_agg_unique__any_any__from_table","columns":["result"],"rows":[["j{\"1\":\"hello\",\"2\":\"WORLD\",\"3\":\"MiXeD CaSe\"}"]]}
+{"id":"functions/aggregate_functions/jsonb_object_agg_unique_strict__any_any__from_table","columns":["result"],"rows":[["j{\"1\":\"hello\",\"2\":\"WORLD\",\"3\":\"MiXeD CaSe\"}"]]}
 {"id":"functions/aggregate_functions/max__anyarray__no_generator","columns":["result"],"rows":[["i1"]]}
 {"id":"functions/aggregate_functions/max__anyenum__no_generator","columns":["result"],"rows":[["i1"]]}
 {"id":"functions/aggregate_functions/max__big__from_table","columns":["result"],"rows":[["i9223372036854775807"]]}
@@ -521,10 +521,10 @@
 {"id":"functions/formatting_functions/to_char__ts_txt__from_table","columns":["result"],"rows":[["s1970-01-01 00:00:00"],["s1999-12-31 23:59:59"],["s2000-01-01 12:00:00"],["s2020-02-29 00:00:00"],["s2023-01-15 10:30:00"],["s2023-07-04 12:00:00"],["s2024-06-15 08:30:00"],["s2025-12-25 18:00:00"],["s2026-01-01 06:00:00"]]}
 {"id":"functions/formatting_functions/to_date__txt_txt__from_table","columns":["result"],"rows":[["s2023-01-15"]]}
 {"id":"functions/formatting_functions/to_number__txt_txt__from_table","columns":["result"],"rows":[["d12345.67"]]}
-{"id":"functions/json_functions/json_arrow_get_field","columns":["result"],"rows":[["s1"]]}
-{"id":"functions/json_functions/jsonb_arrow_get_field","columns":["result"],"rows":[["s\"hello\""]]}
-{"id":"functions/json_functions/json_arrow_get_index","columns":["result"],"rows":[["s1"]]}
-{"id":"functions/json_functions/jsonb_arrow_get_index","columns":["result"],"rows":[["s2"]]}
+{"id":"functions/json_functions/json_arrow_get_field","columns":["result"],"rows":[["j1"]]}
+{"id":"functions/json_functions/jsonb_arrow_get_field","columns":["result"],"rows":[["j\"hello\""]]}
+{"id":"functions/json_functions/json_arrow_get_index","columns":["result"],"rows":[["j1"]]}
+{"id":"functions/json_functions/jsonb_arrow_get_index","columns":["result"],"rows":[["j2"]]}
 {"id":"functions/json_functions/json_arrow_text_get_field","columns":["result"],"rows":[["shello"]]}
 {"id":"functions/json_functions/jsonb_arrow_text_get_field","columns":["result"],"rows":[["shello"]]}
 {"id":"functions/json_functions/json_arrow_text_get_index","columns":["result"],"rows":[["s1"]]}
@@ -538,72 +538,72 @@
 {"id":"functions/json_functions/jsonb_exists_key","columns":["result"],"rows":[["btrue"]]}
 {"id":"functions/json_functions/jsonb_exists_any","columns":["result"],"rows":[["btrue"]]}
 {"id":"functions/json_functions/jsonb_exists_all","columns":["result"],"rows":[["btrue"]]}
-{"id":"functions/json_functions/jsonb_concat","columns":["result"],"rows":[["s{\"a\": 1, \"b\": \"hello\", \"c\": null, \"d\": 4}"]]}
-{"id":"functions/json_functions/jsonb_delete_key_column","columns":["result"],"rows":[["s{\"a\": 1, \"b\": \"hello\"}"]]}
-{"id":"functions/json_functions/jsonb_delete_index","columns":["result"],"rows":[["s[2, 3]"]]}
-{"id":"functions/json_functions/jsonb_delete_keys","columns":["result"],"rows":[["s{\"b\": \"hello\"}"]]}
+{"id":"functions/json_functions/jsonb_concat","columns":["result"],"rows":[["j{\"a\":1,\"b\":\"hello\",\"c\":null,\"d\":4}"]]}
+{"id":"functions/json_functions/jsonb_delete_key_column","columns":["result"],"rows":[["j{\"a\":1,\"b\":\"hello\"}"]]}
+{"id":"functions/json_functions/jsonb_delete_index","columns":["result"],"rows":[["j[2,3]"]]}
+{"id":"functions/json_functions/jsonb_delete_keys","columns":["result"],"rows":[["j{\"b\":\"hello\"}"]]}
 {"id":"functions/json_functions/jsonb_delete_path_column","error":{"state":"42703","message":"ERROR: column \"jsonb_val\" does not exist"}}
 {"id":"functions/json_functions/jsonb_path_exists_op","columns":["result"],"rows":[["btrue"]]}
 {"id":"functions/json_functions/jsonb_path_match_op","columns":["result"],"rows":[["btrue"]]}
 {"id":"functions/json_functions/json_chained_arrow","columns":["result"],"rows":[["snested"]]}
 {"id":"functions/json_functions/jsonb_chained_arrow","columns":["result"],"rows":[["snested"]]}
-{"id":"functions/json_functions/jsonb_subscript_field","columns":["result"],"rows":[["s1"]]}
-{"id":"functions/json_functions/jsonb_subscript_nested","columns":["result"],"rows":[["s\"nested\""]]}
-{"id":"functions/json_functions/jsonb_subscript_array_index","columns":["result"],"rows":[["s1"]]}
+{"id":"functions/json_functions/jsonb_subscript_field","columns":["result"],"rows":[["j1"]]}
+{"id":"functions/json_functions/jsonb_subscript_nested","columns":["result"],"rows":[["j\"nested\""]]}
+{"id":"functions/json_functions/jsonb_subscript_array_index","columns":["result"],"rows":[["j1"]]}
 {"id":"functions/json_functions/to_json__from_column","error":{"state":"42883","message":"ERROR: could not identify an ordering operator for type json"}}
-{"id":"functions/json_functions/to_jsonb__from_column","columns":["result"],"rows":[["s\"\""],["s\"  spaces  \""],["s\"MiXeD CaSe\""],["s\"UPPERCASE\""],["s\"WORLD\""],["s\"abcdefghij\""],["s\"hello\""],["s\"repeat\""],["s\"special!@#$%\""],["s\"the quick brown fox\""]]}
-{"id":"functions/json_functions/array_to_json__unsupported_type","columns":["result"],"rows":[["s[1,2,3]"]]}
-{"id":"functions/json_functions/array_to_json__bool__unsupported_type","columns":["result"],"rows":[["s[1,\n 2,\n 3]"]]}
-{"id":"functions/json_functions/row_to_json__unsupported_type","columns":["result"],"rows":[["s{\"id\":1,\"name\":\"Alice\",\"age\":30,\"salary\":50000.00,\"hire_date\":\"2020-01-15\",\"active\":true,\"dept_id\":1}"]]}
-{"id":"functions/json_functions/row_to_json__bool__unsupported_type","columns":["result"],"rows":[["s{\"id\":1,\n \"name\":\"Alice\",\n \"age\":30,\n \"salary\":50000.00,\n \"hire_date\":\"2020-01-15\",\n \"active\":true,\n \"dept_id\":1}"]]}
-{"id":"functions/json_functions/json_build_array__empty","columns":["result"],"rows":[["s[]"]]}
-{"id":"functions/json_functions/json_build_array__variadic__from_column","columns":["result"],"rows":[["s[1, \"hello\"]"],["s[2, null]"],["s[3, null]"]]}
-{"id":"functions/json_functions/jsonb_build_array__empty","columns":["result"],"rows":[["s[]"]]}
-{"id":"functions/json_functions/jsonb_build_array__variadic__from_column","columns":["result"],"rows":[["s[1, \"hello\"]"],["s[2, null]"],["s[3, null]"]]}
-{"id":"functions/json_functions/json_build_object__empty","columns":["result"],"rows":[["s{}"]]}
-{"id":"functions/json_functions/json_build_object__variadic__from_column","columns":["result"],"rows":[["s{\"id\" : 1, \"val\" : \"hello\"}"],["s{\"id\" : 2, \"val\" : null}"],["s{\"id\" : 3, \"val\" : null}"]]}
-{"id":"functions/json_functions/jsonb_build_object__empty","columns":["result"],"rows":[["s{}"]]}
-{"id":"functions/json_functions/jsonb_build_object__variadic__from_column","columns":["result"],"rows":[["s{\"id\": 1, \"val\": \"hello\"}"],["s{\"id\": 2, \"val\": null}"],["s{\"id\": 3, \"val\": null}"]]}
-{"id":"functions/json_functions/json_object__text_array","columns":["result"],"rows":[["s{\"a\" : \"1\", \"b\" : \"2\"}"]]}
-{"id":"functions/json_functions/json_object__keys_values","columns":["result"],"rows":[["s{\"a\" : \"1\", \"b\" : \"2\"}"]]}
-{"id":"functions/json_functions/jsonb_object__text_array","columns":["result"],"rows":[["s{\"a\": \"1\", \"b\": \"2\"}"]]}
-{"id":"functions/json_functions/jsonb_object__keys_values","columns":["result"],"rows":[["s{\"a\": \"1\", \"b\": \"2\"}"]]}
-{"id":"functions/json_functions/json_array_elements__from_column","columns":["result"],"rows":[["s1"],["s2"],["s3"]]}
+{"id":"functions/json_functions/to_jsonb__from_column","columns":["result"],"rows":[["j\"\""],["j\"  spaces  \""],["j\"MiXeD CaSe\""],["j\"UPPERCASE\""],["j\"WORLD\""],["j\"abcdefghij\""],["j\"hello\""],["j\"repeat\""],["j\"special!@#$%\""],["j\"the quick brown fox\""]]}
+{"id":"functions/json_functions/array_to_json__unsupported_type","columns":["result"],"rows":[["j[1,2,3]"]]}
+{"id":"functions/json_functions/array_to_json__bool__unsupported_type","columns":["result"],"rows":[["j[1,2,3]"]]}
+{"id":"functions/json_functions/row_to_json__unsupported_type","columns":["result"],"rows":[["j{\"active\":true,\"age\":30,\"dept_id\":1,\"hire_date\":\"2020-01-15\",\"id\":1,\"name\":\"Alice\",\"salary\":50000}"]]}
+{"id":"functions/json_functions/row_to_json__bool__unsupported_type","columns":["result"],"rows":[["j{\"active\":true,\"age\":30,\"dept_id\":1,\"hire_date\":\"2020-01-15\",\"id\":1,\"name\":\"Alice\",\"salary\":50000}"]]}
+{"id":"functions/json_functions/json_build_array__empty","columns":["result"],"rows":[["j[]"]]}
+{"id":"functions/json_functions/json_build_array__variadic__from_column","columns":["result"],"rows":[["j[1,\"hello\"]"],["j[2,null]"],["j[3,null]"]]}
+{"id":"functions/json_functions/jsonb_build_array__empty","columns":["result"],"rows":[["j[]"]]}
+{"id":"functions/json_functions/jsonb_build_array__variadic__from_column","columns":["result"],"rows":[["j[1,\"hello\"]"],["j[2,null]"],["j[3,null]"]]}
+{"id":"functions/json_functions/json_build_object__empty","columns":["result"],"rows":[["j{}"]]}
+{"id":"functions/json_functions/json_build_object__variadic__from_column","columns":["result"],"rows":[["j{\"id\":1,\"val\":\"hello\"}"],["j{\"id\":2,\"val\":null}"],["j{\"id\":3,\"val\":null}"]]}
+{"id":"functions/json_functions/jsonb_build_object__empty","columns":["result"],"rows":[["j{}"]]}
+{"id":"functions/json_functions/jsonb_build_object__variadic__from_column","columns":["result"],"rows":[["j{\"id\":1,\"val\":\"hello\"}"],["j{\"id\":2,\"val\":null}"],["j{\"id\":3,\"val\":null}"]]}
+{"id":"functions/json_functions/json_object__text_array","columns":["result"],"rows":[["j{\"a\":\"1\",\"b\":\"2\"}"]]}
+{"id":"functions/json_functions/json_object__keys_values","columns":["result"],"rows":[["j{\"a\":\"1\",\"b\":\"2\"}"]]}
+{"id":"functions/json_functions/jsonb_object__text_array","columns":["result"],"rows":[["j{\"a\":\"1\",\"b\":\"2\"}"]]}
+{"id":"functions/json_functions/jsonb_object__keys_values","columns":["result"],"rows":[["j{\"a\":\"1\",\"b\":\"2\"}"]]}
+{"id":"functions/json_functions/json_array_elements__from_column","columns":["result"],"rows":[["j1"],["j2"],["j3"]]}
 {"id":"functions/json_functions/json_array_elements_text__from_column","columns":["result"],"rows":[["sone"],["stwo"],["sthree"]]}
-{"id":"functions/json_functions/jsonb_array_elements__from_column","columns":["result"],"rows":[["s1"],["s2"],["s3"]]}
+{"id":"functions/json_functions/jsonb_array_elements__from_column","columns":["result"],"rows":[["j1"],["j2"],["j3"]]}
 {"id":"functions/json_functions/jsonb_array_elements_text__from_column","columns":["result"],"rows":[["sone"],["stwo"],["sthree"]]}
 {"id":"functions/json_functions/json_array_length__from_column","columns":["result"],"rows":[["i3"]]}
 {"id":"functions/json_functions/jsonb_array_length__from_column","columns":["result"],"rows":[["i3"]]}
-{"id":"functions/json_functions/json_each__from_column","columns":["key","value"],"rows":[["sa","s1"],["sb","s\"hello\""],["sc","snull"]]}
+{"id":"functions/json_functions/json_each__from_column","columns":["key","value"],"rows":[["sa","j1"],["sb","j\"hello\""],["sc","jnull"]]}
 {"id":"functions/json_functions/json_each_text__from_column","columns":["key","value"],"rows":[["sa","s1"],["sb","shello"],["sc",null]]}
-{"id":"functions/json_functions/jsonb_each__from_column","columns":["key","value"],"rows":[["sa","s1"],["sb","s\"hello\""],["sc","snull"]]}
+{"id":"functions/json_functions/jsonb_each__from_column","columns":["key","value"],"rows":[["sa","j1"],["sb","j\"hello\""],["sc","jnull"]]}
 {"id":"functions/json_functions/jsonb_each_text__from_column","columns":["key","value"],"rows":[["sa","s1"],["sb","shello"],["sc",null]]}
-{"id":"functions/json_functions/json_extract_path__from_column","columns":["result"],"rows":[["s\"nested\""]]}
+{"id":"functions/json_functions/json_extract_path__from_column","columns":["result"],"rows":[["j\"nested\""]]}
 {"id":"functions/json_functions/json_extract_path_text__from_column","columns":["result"],"rows":[["snested"]]}
-{"id":"functions/json_functions/jsonb_extract_path__from_column","columns":["result"],"rows":[["s\"nested\""]]}
+{"id":"functions/json_functions/jsonb_extract_path__from_column","columns":["result"],"rows":[["j\"nested\""]]}
 {"id":"functions/json_functions/jsonb_extract_path_text__from_column","columns":["result"],"rows":[["snested"]]}
 {"id":"functions/json_functions/json_object_keys__from_column","columns":["result"],"rows":[["sa"],["sb"],["sc"]]}
 {"id":"functions/json_functions/jsonb_object_keys__from_column","columns":["result"],"rows":[["sa"],["sb"],["sc"]]}
 {"id":"functions/json_functions/json_typeof__from_column","columns":["result"],"rows":[["sobject"]]}
 {"id":"functions/json_functions/json_typeof__array_column","columns":["result"],"rows":[["sarray"]]}
 {"id":"functions/json_functions/jsonb_typeof__from_column","columns":["result"],"rows":[["sobject"]]}
-{"id":"functions/json_functions/json_strip_nulls__from_column","columns":["result"],"rows":[["s{\"a\":1,\"b\":\"hello\"}"]]}
-{"id":"functions/json_functions/jsonb_strip_nulls__from_column","columns":["result"],"rows":[["s{\"a\": 1, \"b\": \"hello\"}"]]}
+{"id":"functions/json_functions/json_strip_nulls__from_column","columns":["result"],"rows":[["j{\"a\":1,\"b\":\"hello\"}"]]}
+{"id":"functions/json_functions/jsonb_strip_nulls__from_column","columns":["result"],"rows":[["j{\"a\":1,\"b\":\"hello\"}"]]}
 {"id":"functions/json_functions/jsonb_pretty__from_column","columns":["result"],"rows":[["s{\n    \"a\": 1,\n    \"b\": \"hello\",\n    \"c\": null\n}"]]}
-{"id":"functions/json_functions/jsonb_set__from_column","columns":["result"],"rows":[["s{\"a\": 99, \"b\": \"hello\", \"c\": null}"]]}
-{"id":"functions/json_functions/jsonb_set__create_missing_false","columns":["result"],"rows":[["s{\"a\": 1, \"b\": \"hello\", \"c\": null}"]]}
-{"id":"functions/json_functions/jsonb_insert__from_column","columns":["result"],"rows":[["s{\"a\": 1, \"b\": \"hello\", \"c\": null, \"d\": \"inserted\"}"]]}
-{"id":"functions/json_functions/jsonb_insert__after_true","columns":["result"],"rows":[["s[1, 2, 99, 3]"]]}
+{"id":"functions/json_functions/jsonb_set__from_column","columns":["result"],"rows":[["j{\"a\":99,\"b\":\"hello\",\"c\":null}"]]}
+{"id":"functions/json_functions/jsonb_set__create_missing_false","columns":["result"],"rows":[["j{\"a\":1,\"b\":\"hello\",\"c\":null}"]]}
+{"id":"functions/json_functions/jsonb_insert__from_column","columns":["result"],"rows":[["j{\"a\":1,\"b\":\"hello\",\"c\":null,\"d\":\"inserted\"}"]]}
+{"id":"functions/json_functions/jsonb_insert__after_true","columns":["result"],"rows":[["j[1,2,99,3]"]]}
 {"id":"functions/json_functions/jsonb_path_exists__from_column","columns":["result"],"rows":[["btrue"]]}
 {"id":"functions/json_functions/jsonb_path_match__from_column","columns":["result"],"rows":[["btrue"]]}
-{"id":"functions/json_functions/jsonb_path_query__from_column","columns":["result"],"rows":[["s1"]]}
-{"id":"functions/json_functions/jsonb_path_query_array__from_column","columns":["result"],"rows":[["s[1, 2, 3]"]]}
-{"id":"functions/json_functions/jsonb_path_query_first__from_column","columns":["result"],"rows":[["s1"]]}
+{"id":"functions/json_functions/jsonb_path_query__from_column","columns":["result"],"rows":[["j1"]]}
+{"id":"functions/json_functions/jsonb_path_query_array__from_column","columns":["result"],"rows":[["j[1,2,3]"]]}
+{"id":"functions/json_functions/jsonb_path_query_first__from_column","columns":["result"],"rows":[["j1"]]}
 {"id":"functions/json_functions/jsonb_path_exists__with_vars","columns":["result"],"rows":[["btrue"]]}
-{"id":"functions/json_functions/json_agg__from_column","columns":["result"],"rows":[["s[\"hello\", null, null, null]"]]}
-{"id":"functions/json_functions/jsonb_agg__from_column","columns":["result"],"rows":[["s[\"hello\", null, null, null]"]]}
-{"id":"functions/json_functions/json_object_agg__from_column","columns":["result"],"rows":[["s{ \"1\" : \"hello\", \"2\" : null, \"3\" : null, \"4\" : null }"]]}
-{"id":"functions/json_functions/jsonb_object_agg__from_column","columns":["result"],"rows":[["s{\"1\": \"hello\", \"2\": null, \"3\": null, \"4\": null}"]]}
+{"id":"functions/json_functions/json_agg__from_column","columns":["result"],"rows":[["j[\"hello\",null,null,null]"]]}
+{"id":"functions/json_functions/jsonb_agg__from_column","columns":["result"],"rows":[["j[\"hello\",null,null,null]"]]}
+{"id":"functions/json_functions/json_object_agg__from_column","columns":["result"],"rows":[["j{\"1\":\"hello\",\"2\":null,\"3\":null,\"4\":null}"]]}
+{"id":"functions/json_functions/jsonb_object_agg__from_column","columns":["result"],"rows":[["j{\"1\":\"hello\",\"2\":null,\"3\":null,\"4\":null}"]]}
 {"id":"functions/json_functions/json_arrow_null","columns":["result"],"rows":[[null]]}
 {"id":"functions/json_functions/jsonb_arrow_null","columns":["result"],"rows":[[null]]}
 {"id":"functions/json_functions/json_array_length__null","columns":["result"],"rows":[[null]]}
@@ -1354,17 +1354,17 @@
 {"id":"structural/joins/join_with_agg","columns":["dept_name","emp_count","total_salary"],"rows":[["sEngineering","i2","d110000.50"],["sMarketing","i3","d200001.00"],["sSales","i3","d270000.00"]]}
 {"id":"structural/joins/join_with_agg_having","columns":["dept_name","emp_count"],"rows":[["sEngineering","i3"],["sMarketing","i3"],["sSales","i3"]]}
 {"id":"structural/joins/join_with_agg_avg","columns":["dept_name","avg_salary"],"rows":[["sEngineering","d55000.250000000000"],["sMarketing","d66667.000000000000"],["sSales","d90000.000000000000"]]}
-{"id":"structural/json_operators/json_extract_field","columns":["result"],"rows":[["s1"]]}
-{"id":"structural/json_operators/json_extract_field_nested","columns":["result"],"rows":[["s3"]]}
-{"id":"structural/json_operators/json_extract_array_index","columns":["result"],"rows":[["s20"]]}
-{"id":"structural/json_operators/json_extract_array_negative_index","columns":["result"],"rows":[["s30"]]}
+{"id":"structural/json_operators/json_extract_field","columns":["result"],"rows":[["j1"]]}
+{"id":"structural/json_operators/json_extract_field_nested","columns":["result"],"rows":[["j3"]]}
+{"id":"structural/json_operators/json_extract_array_index","columns":["result"],"rows":[["j20"]]}
+{"id":"structural/json_operators/json_extract_array_negative_index","columns":["result"],"rows":[["j30"]]}
 {"id":"structural/json_operators/json_extract_text_field","columns":["result"],"rows":[["shello"]]}
 {"id":"structural/json_operators/json_extract_text_number","columns":["result"],"rows":[["s1"]]}
 {"id":"structural/json_operators/json_extract_text_array_index","columns":["result"],"rows":[["sb"]]}
 {"id":"structural/json_operators/json_extract_text_null_key","columns":["result"],"rows":[[null]]}
-{"id":"structural/json_operators/json_path_extract","columns":["result"],"rows":[["s{\"c\": 42}"]]}
-{"id":"structural/json_operators/json_path_extract_array","columns":["result"],"rows":[["s2"]]}
-{"id":"structural/json_operators/json_path_extract_deep","columns":["result"],"rows":[["s\"deep\""]]}
+{"id":"structural/json_operators/json_path_extract","columns":["result"],"rows":[["j{\"c\":42}"]]}
+{"id":"structural/json_operators/json_path_extract_array","columns":["result"],"rows":[["j2"]]}
+{"id":"structural/json_operators/json_path_extract_deep","columns":["result"],"rows":[["j\"deep\""]]}
 {"id":"structural/json_operators/json_path_extract_text","columns":["result"],"rows":[["shello"]]}
 {"id":"structural/json_operators/json_path_extract_text_number","columns":["result"],"rows":[["s42"]]}
 {"id":"structural/json_operators/jsonb_contains_right","columns":["result"],"rows":[["btrue"]]}
@@ -1379,15 +1379,15 @@
 {"id":"structural/json_operators/jsonb_has_any_key_false","columns":["result"],"rows":[["bfalse"]]}
 {"id":"structural/json_operators/jsonb_has_all_keys","columns":["result"],"rows":[["btrue"]]}
 {"id":"structural/json_operators/jsonb_has_all_keys_false","columns":["result"],"rows":[["bfalse"]]}
-{"id":"structural/json_operators/jsonb_concat_objects","columns":["result"],"rows":[["s{\"a\": 1, \"b\": 2}"]]}
-{"id":"structural/json_operators/jsonb_concat_override","columns":["result"],"rows":[["s{\"a\": 2}"]]}
-{"id":"structural/json_operators/jsonb_concat_arrays","columns":["result"],"rows":[["s[1, 2, 3, 4]"]]}
-{"id":"structural/json_operators/jsonb_concat_value_to_array","columns":["result"],"rows":[["s[1, 2, 3]"]]}
-{"id":"structural/json_operators/jsonb_delete_key","columns":["result"],"rows":[["s{\"a\": 1, \"c\": 3}"]]}
-{"id":"structural/json_operators/jsonb_delete_array_element","columns":["result"],"rows":[["s[\"a\", \"c\"]"]]}
-{"id":"structural/json_operators/jsonb_delete_missing_key","columns":["result"],"rows":[["s{\"a\": 1, \"b\": 2}"]]}
-{"id":"structural/json_operators/jsonb_delete_path","columns":["result"],"rows":[["s{\"a\": {\"c\": 2}}"]]}
-{"id":"structural/json_operators/jsonb_delete_path_array","columns":["result"],"rows":[["s{\"a\": [1, 3]}"]]}
+{"id":"structural/json_operators/jsonb_concat_objects","columns":["result"],"rows":[["j{\"a\":1,\"b\":2}"]]}
+{"id":"structural/json_operators/jsonb_concat_override","columns":["result"],"rows":[["j{\"a\":2}"]]}
+{"id":"structural/json_operators/jsonb_concat_arrays","columns":["result"],"rows":[["j[1,2,3,4]"]]}
+{"id":"structural/json_operators/jsonb_concat_value_to_array","columns":["result"],"rows":[["j[1,2,3]"]]}
+{"id":"structural/json_operators/jsonb_delete_key","columns":["result"],"rows":[["j{\"a\":1,\"c\":3}"]]}
+{"id":"structural/json_operators/jsonb_delete_array_element","columns":["result"],"rows":[["j[\"a\",\"c\"]"]]}
+{"id":"structural/json_operators/jsonb_delete_missing_key","columns":["result"],"rows":[["j{\"a\":1,\"b\":2}"]]}
+{"id":"structural/json_operators/jsonb_delete_path","columns":["result"],"rows":[["j{\"a\":{\"c\":2}}"]]}
+{"id":"structural/json_operators/jsonb_delete_path_array","columns":["result"],"rows":[["j{\"a\":[1,3]}"]]}
 {"id":"structural/json_operators/jsonb_path_exists","columns":["result"],"rows":[["btrue"]]}
 {"id":"structural/json_operators/jsonb_path_exists_false","columns":["result"],"rows":[["bfalse"]]}
 {"id":"structural/json_operators/jsonb_path_match","columns":["result"],"rows":[["btrue"]]}
@@ -1399,7 +1399,7 @@
 {"id":"structural/json_operators/json_column_nested_extract_in_where_is_not_null","columns":["id"],"rows":[["i2"]]}
 {"id":"structural/json_operators/json_column_nested_extract_in_where_not_is_null","columns":["id"],"rows":[["i2"]]}
 {"id":"structural/json_operators/json_column_extract_text_in_where_equals","columns":["id"],"rows":[["i1"]]}
-{"id":"structural/json_operators/json_column_nested_extract_in_select_and_where","columns":["id","nested"],"rows":[["i2","s{\"c\":\"nested\"}"]]}
+{"id":"structural/json_operators/json_column_nested_extract_in_select_and_where","columns":["id","nested"],"rows":[["i2","j{\"c\":\"nested\"}"]]}
 {"id":"structural/lateral_joins/lateral_cross_basic","columns":["name","val"],"rows":[["sAlice","i1"],["sBob","i1"],["sCharlie","i1"],["sCharlie","i2"]]}
 {"id":"structural/lateral_joins/lateral_cross_subquery","columns":["name","colleague"],"rows":[["sAlice","sBob"],["sAlice","sHank"],["sBob","sAlice"],["sBob","sHank"],["sCharlie","sDiana"],["sCharlie","sIvy"]]}
 {"id":"structural/lateral_joins/lateral_left_join","columns":["name","top_sal"],"rows":[["sAlice","d60000.50"],["sBob","d60000.50"],["sCharlie","d80000.25"],["sDiana","d80000.25"],["sEve","d120000.00"]]}
@@ -1714,6 +1714,36 @@
 {"id":"lite/joins/union_type_mismatch","error":{"state":"42804","message":"ERROR: UNION types character varying and integer cannot be matched"}}
 {"id":"lite/joins/parenthesized_union_operands","columns":["id"],"rows":[["i1"],["i2"],["i9"],["i10"]]}
 {"id":"lite/joins/union_of_three","columns":["src","n"],"rows":[["sd","i10"],["so","i10"],["sp","i10"]]}
+{"id":"lite/json/member_of_each_row","columns":["id","a"],"rows":[["i1","j1"],["i2","j{\"b\":{\"c\":\"nested\"}}"],["i3",null],["i4",null],["i5",null]]}
+{"id":"lite/json/member_that_is_null_is_jsonb_null","columns":["id","c","is_sql_null"],"rows":[["i1","jnull","bfalse"]]}
+{"id":"lite/json/element_from_the_end","columns":["id","last","third_last"],"rows":[["i1","j3","j1"],["i2","j{\"x\":2}",null],["i3","j\"three\"","j\"one\""],["i4","jnull","jtrue"],["i5",null,null]]}
+{"id":"lite/json/element_past_either_end_is_null","columns":["id","past","before"],"rows":[["i1",null,null],["i2",null,null],["i3",null,null],["i4",null,null],["i5",null,null]]}
+{"id":"lite/json/key_on_an_array_and_index_on_an_object_are_null","columns":["id","k","i"],"rows":[["i1",null,null],["i2",null,null],["i3",null,null],["i4",null,null],["i5",null,null]]}
+{"id":"lite/json/chained_members","columns":["id","deep"],"rows":[["i1",null],["i2","j\"nested\""],["i3",null],["i4",null],["i5",null]]}
+{"id":"lite/json/member_of_an_element","columns":["id","x"],"rows":[["i1",null],["i2","j2"],["i3",null],["i4",null],["i5",null]]}
+{"id":"lite/json/index_from_a_column","columns":["id","e"],"rows":[["i1","j1"],["i2","j{\"x\":2}"],["i3","j\"three\""],["i4",null]]}
+{"id":"lite/json/text_of_strings_numbers_booleans_and_null","columns":["id","first","third"],"rows":[["i1","s1","s3"],["i2","s{\"x\": 1}",null],["i3","sone","sthree"],["i4","strue",null],["i5",null,null]]}
+{"id":"lite/json/text_of_a_member","columns":["id","b","num","name"],"rows":[["i1","shello",null,null],["i2",null,null,null],["i3",null,null,"sAlice"],["i4",null,"s42",null],["i5",null,null,null]]}
+{"id":"lite/json/text_keeps_quotes_and_escapes","columns":["a","b"],"rows":[["ssay \"hi\"","stab\tend"]]}
+{"id":"lite/json/text_of_an_object","columns":["id","a"],"rows":[["i2","s{\"b\": {\"c\": \"nested\"}}"]]}
+{"id":"lite/json/text_in_where_and_case","columns":["id","what"],"rows":[["i1","sgreeting"],["i2","snone"],["i3","sAlice"],["i4","snone"],["i5","snone"]]}
+{"id":"lite/json/text_cast_to_integer","columns":["id","next"],"rows":[["i4","i43"]]}
+{"id":"lite/json/path_to_a_member","columns":["id","ab","abc"],"rows":[["i1",null,null],["i2","j{\"c\":\"nested\"}","snested"],["i3",null,null],["i4",null,null],["i5",null,null]]}
+{"id":"lite/json/path_with_quoted_keys","columns":["v"],"rows":[["s1"]]}
+{"id":"lite/json/empty_path_is_the_value","columns":["id","whole"],"rows":[["i1","j[1,2,3]"]]}
+{"id":"lite/json/path_with_an_index_is_refused","columns":["id","v"],"rows":[["i1","j1"]]}
+{"id":"lite/json/subscripts","columns":["id","a","first","last"],"rows":[["i1","j1","j1","j3"],["i2","j{\"b\":{\"c\":\"nested\"}}","j{\"x\":1}","j{\"x\":2}"],["i3",null,"j\"one\"","j\"three\""],["i4",null,"jtrue","jnull"],["i5",null,null,null]]}
+{"id":"lite/json/subscript_that_meets_the_wrong_container","columns":["id","i","k"],"rows":[["i1",null,null],["i2",null,null],["i3",null,null],["i4",null,null],["i5",null,null]]}
+{"id":"lite/json/array_length_is_refused","columns":["id","n"],"rows":[["i1","i3"],["i2","i2"],["i3","i3"],["i4","i3"],["i5",null]]}
+{"id":"lite/json/extract_path_and_its_text","columns":["id","ab","abc"],"rows":[["i1",null,null],["i2","j{\"c\":\"nested\"}","snested"],["i3",null,null],["i4",null,null],["i5",null,null]]}
+{"id":"lite/json/to_jsonb_of_each_kind","columns":["id","n","a","b","s"],"rows":[["i1","j\"Alice\"","j30","jtrue","j50000"],["i2","j\"Bob\"","j25","jtrue","j60000.5"],["i3","j\"Charlie\"","j35","jfalse","j75000.75"],["i4","j\"Diana\"","j28","jtrue","j80000.25"],["i5","j\"Eve\"","j45","jtrue","j95000"],["i6","j\"Frank\"","j32","jfalse","j55000"],["i7","j\"Grace\"",null,"jtrue","j70000"],["i8","j\"Hank\"","j50",null,null],["i9","j\"Ivy\"","j22","jtrue","j45000"],["i10","j\"Jack\"","j38","jtrue","j120000"]]}
+{"id":"lite/json/to_jsonb_of_text_with_quotes","columns":["v"],"rows":[["j\"say \\\"hi\\\"\""]]}
+{"id":"lite/json/text_parsed_as_jsonb","columns":["k"],"rows":[["sEngineering"],["sMarketing"],["sSales"],["sHR"],["sFinance"],["sLegal"],["sSupport"],["sResearch"],["sOperations"],["sDesign"]]}
+{"id":"lite/json/text_that_is_not_json_is_an_error","error":{"state":"22P02","message":"ERROR: invalid input syntax for type json"}}
+{"id":"lite/json/order_by_jsonb_is_refused","columns":["id"],"rows":[["i1"],["i2"],["i3"],["i4"],["i5"]]}
+{"id":"lite/json/jsonb_equality_is_refused","columns":["id"],"rows":[["i1"]]}
+{"id":"lite/json/containment_is_refused","columns":["id"],"rows":[["i1"]]}
+{"id":"lite/json/a_text_column_has_no_arrow","error":{"state":"42883","message":"ERROR: operator does not exist: character varying -> unknown"}}
 {"id":"lite/subqueries/in_subquery","columns":["name"],"rows":[["sAlice"],["sBob"],["sCharlie"],["sDiana"],["sEve"],["sFrank"],["sJack"]]}
 {"id":"lite/subqueries/not_in_subquery","columns":["name"],"rows":[["sGrace"],["sHank"],["sIvy"]]}
 {"id":"lite/subqueries/not_in_a_null_row_is_never_true","columns":["name"],"rows":[]}

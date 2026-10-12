@@ -3,6 +3,7 @@
 
 package com.legend.protocol.sql;
 
+import com.legend.protocol.TypeExpression;
 import com.legend.protocol.spec.AppliedFunction;
 import com.legend.protocol.spec.AppliedProperty;
 import com.legend.protocol.spec.CBoolean;
@@ -15,6 +16,7 @@ import com.legend.protocol.spec.ColSpecArray;
 import com.legend.protocol.spec.EnumValue;
 import com.legend.protocol.spec.LambdaFunction;
 import com.legend.protocol.spec.PureCollection;
+import com.legend.protocol.spec.TypeAnnotation;
 import com.legend.protocol.spec.ValueSpecification;
 import com.legend.protocol.spec.Variable;
 import com.legend.values.PureDateLiteral;
@@ -140,7 +142,7 @@ public final class SqlToPure {
     // ------------------------------------------------------------------ kinds
 
     /** What the translator knows of a value's type: enough to choose a Postgres meaning, nothing more. */
-    enum Kind { INTEGER, FLOAT, DECIMAL, NUMBER, STRING, BOOLEAN, DATE, DATETIME, NULL, OTHER;
+    enum Kind { INTEGER, FLOAT, DECIMAL, NUMBER, STRING, BOOLEAN, DATE, DATETIME, JSON, NULL, OTHER;
 
         boolean numeric() {
             return this == INTEGER || this == FLOAT || this == DECIMAL || this == NUMBER;
@@ -159,6 +161,8 @@ public final class SqlToPure {
             case "Boolean" -> Kind.BOOLEAN;
             case "StrictDate" -> Kind.DATE;
             case "DateTime" -> Kind.DATETIME;
+            // a Variant is Postgres's jsonb (register S48)
+            case "Variant", VARIANT -> Kind.JSON;
             default -> Kind.OTHER;
         };
     }
@@ -892,6 +896,9 @@ public final class SqlToPure {
                 throw SqlTranslationException.invalid(op + " types " + l.kind().name().toLowerCase(Locale.ROOT)
                         + " and " + r.kind().name().toLowerCase(Locale.ROOT) + " cannot be matched", s.pos());
             }
+            if (!s.all()) {
+                notJsonKey(l.kind(), s.op().name(), s.pos());
+            }
             names.add(l.name());
             // INTERSECT's row is in both; EXCEPT's is the left's
             boolean nullable = s.op() == SqlAst.SetOp.UNION ? l.nullable() || r.nullable()
@@ -1039,10 +1046,12 @@ public final class SqlToPure {
             Col col;
             if (key instanceof SqlAst.ColumnRef ref) {
                 Col source = in.column(ref);
+                notJsonKey(source.kind(), "GROUP BY", key.pos());
                 col = source;
                 keyBySource.put(source.name(), source);
             } else {
                 Tx t = tx(key, in, row);
+                notJsonKey(t.kind(), "GROUP BY", key.pos());
                 col = Col.of(fresh(names), t.kind(), t.nullable());
                 computedKeys.add(new ColSpec(col.name(), lambda(row, valueOf(t)), null, null));
             }
@@ -1171,12 +1180,15 @@ public final class SqlToPure {
             List<ColSpec> computed = new ArrayList<>();
             List<String> partitionKeys = new ArrayList<>();
             for (SqlAst.Expr e : spec.partitionBy()) {
-                partitionKeys.add(windowKey(e, scope, present, computed).name());
+                Col key = windowKey(e, scope, present, computed);
+                notJsonKey(key.kind(), "PARTITION BY", e.pos());
+                partitionKeys.add(key.name());
             }
             List<ValueSpecification> sorts = new ArrayList<>();
             Kind sortKind = null;
             for (SqlAst.SortItem o : spec.orderBy()) {
                 Col key = windowKey(o.expr(), scope, present, computed);
+                notJsonKey(key.kind(), "a window's ORDER BY", o.expr().pos());
                 sortKind = sortKind == null ? key.kind() : sortKind;
                 boolean nullsFirst = o.nullsFirst() != null ? java.util.Objects.requireNonNull(o.nullsFirst())
                         : o.descending();
@@ -1364,6 +1376,9 @@ public final class SqlToPure {
                     case "min", "max" -> argKind;
                     default -> Kind.FLOAT;
                 };
+                if (fn.equals("min") || fn.equals("max")) {
+                    notJsonKey(argKind, fn, f.pos());
+                }
                 if (!fn.equals("count") && !fn.equals("min") && !fn.equals("max") && !argKind.numeric()) {
                     throw SqlTranslationException.invalid("function " + fn + "(" + argKind.name().toLowerCase(
                             Locale.ROOT) + ") does not exist", f.pos());
@@ -1608,6 +1623,8 @@ public final class SqlToPure {
             case SqlAst.FunctionCall f -> functionName(f.name().get(f.name().size() - 1));
             case SqlAst.Window w -> functionName(w.call().name().get(w.call().name().size() - 1));
             case SqlAst.Case c -> "case";
+            // a subscripted value keeps its name (Postgres's FigureColname reads through the indirection)
+            case SqlAst.Subscript sub -> defaultName(sub.base());
             case SqlAst.Cast c -> defaultName(c.operand()).equals("?column?") ? c.type().name()
                     : defaultName(c.operand());
             default -> "?column?";
@@ -1648,6 +1665,9 @@ public final class SqlToPure {
             selection.add(colSpec(o.internal()));
         }
         if (s.distinct()) {
+            for (Output o : outputs) {
+                notJsonKey(o.kind(), "SELECT DISTINCT", s.pos());
+            }
             relation = call("distinct", call("select", relation, new ColSpecArray(selection)));
             if (!sortInfos.isEmpty()) {
                 relation = call("sort", relation, new PureCollection(sortInfos));
@@ -1687,6 +1707,7 @@ public final class SqlToPure {
                 throw SqlTranslationException.invalid("ORDER BY position " + n.value() + " is not in select list",
                         n.pos());
             }
+            notJsonKey(outputs.get(n.value().intValue() - 1).kind(), "ORDER BY", n.pos());
             return outputs.get(n.value().intValue() - 1).internal();
         }
         if (e instanceof SqlAst.ColumnRef ref && ref.parts().size() == 1) {
@@ -1694,6 +1715,7 @@ public final class SqlToPure {
             if (found != null) {
                 for (Output o : outputs) {
                     if (o.name().equals(found)) {
+                        notJsonKey(o.kind(), "ORDER BY", e.pos());
                         return o.internal();
                     }
                 }
@@ -1705,6 +1727,7 @@ public final class SqlToPure {
             for (Output o : outputs) {
                 SqlAst.Expr oe = o.expr();
                 if (oe != null && canon(oe, inputScope(inputs)).equals(canon)) {
+                    notJsonKey(o.kind(), "ORDER BY", e.pos());
                     return o.internal();
                 }
             }
@@ -1713,12 +1736,15 @@ public final class SqlToPure {
         }
         Col g = scope.grouped(e);
         if (g != null) {
+            notJsonKey(g.kind(), "ORDER BY", e.pos());
             return g.name();
         }
         if (e instanceof SqlAst.ColumnRef ref) {
+            notJsonKey(scope.column(ref).kind(), "ORDER BY", e.pos());
             return scope.column(ref).name();
         }
         Tx t = tx(e, scope, row);
+        notJsonKey(t.kind(), "ORDER BY", e.pos());
         String name = fresh(present);
         computed.add(new ColSpec(name, lambda(row, valueOf(t)), null, null));
         return name;
@@ -1829,6 +1855,9 @@ public final class SqlToPure {
             if (f.distinct() && !fn.equals("count")) {
                 throw SqlTranslationException.unsupported(fn + "(DISTINCT ...) is not supported yet", f.pos());
             }
+            if (f.distinct()) {
+                notJsonKey(arg.kind(), "count(DISTINCT ...)", f.pos());
+            }
             ValueSpecification values = new Variable(group);
             if (f.distinct()) {
                 values = call("distinct", values);
@@ -1851,10 +1880,12 @@ public final class SqlToPure {
                     reduce = call("average", values);
                 }
                 case "min" -> {
+                    notJsonKey(arg.kind(), fn, f.pos());
                     kind = arg.kind();
                     reduce = call("min", values);
                 }
                 case "max" -> {
+                    notJsonKey(arg.kind(), fn, f.pos());
                     kind = arg.kind();
                     reduce = call("max", values);
                 }
@@ -2051,6 +2082,9 @@ public final class SqlToPure {
                     + " supported yet", p.pos());
             case SqlAst.Unary u -> unary(u, scope, row);
             case SqlAst.Binary b -> binary(b, scope, row);
+            case SqlAst.Operator o when o.left() != null && JSON_OPERATORS.contains(o.operator()) ->
+                    jsonOperator(o, scope, row);
+            case SqlAst.Subscript sub -> subscript(sub, scope, row);
             case SqlAst.Operator o -> throw SqlTranslationException.unsupported((REGEX_OPERATORS.contains(o.operator())
                     ? "regular expression operators (~, ~*, !~, !~*) are" : "the operator " + o.operator() + " is")
                     + " not supported yet", o.pos());
@@ -2167,8 +2201,8 @@ public final class SqlToPure {
                 for (SqlAst.Expr operand : concatenated(b)) {
                     Tx t = tx(operand, scope, row);
                     if (t.kind() != Kind.STRING) {
-                        throw SqlTranslationException.unsupported("|| is supported for text values only, so far",
-                                operand.pos());
+                        throw SqlTranslationException.unsupported("|| is supported for text values only, so far"
+                                + (t.kind() == Kind.JSON ? " (jsonb's || merges values)" : ""), operand.pos());
                     }
                     operands.add(t);
                 }
@@ -2218,6 +2252,10 @@ public final class SqlToPure {
         if (isDate(t.kind())) {
             throw SqlTranslationException.unsupported("date and timestamp arithmetic is not supported yet", e.pos());
         }
+        if (t.kind() == Kind.JSON) {
+            throw SqlTranslationException.unsupported("jsonb's - (deleting a key or an element) is not supported yet",
+                    e.pos());
+        }
         if (t.kind() == Kind.OTHER) {
             throw SqlTranslationException.unsupported("arithmetic on values of this type is not supported yet",
                     e.pos());
@@ -2250,6 +2288,8 @@ public final class SqlToPure {
     }
 
     private static void comparableKinds(Tx l, Tx r, SqlAst.Pos pos) {
+        notJsonKey(l.kind(), "a comparison", pos);
+        notJsonKey(r.kind(), "a comparison", pos);
         boolean ok = l.kind() == r.kind() || l.kind().numeric() && r.kind().numeric()
                 || isDate(l.kind()) && isDate(r.kind()) || l.kind() == Kind.OTHER || r.kind() == Kind.OTHER;
         if (!ok) {
@@ -2670,6 +2710,18 @@ public final class SqlToPure {
             return strict(Kind.INTEGER, a, v -> call("rem", v.get(0), v.get(1)));
         });
         m.put("round", (t, f, a, s, r) -> round(f, a));
+        // jsonb (a Variant, register S48): json's functions read it as jsonb's do
+        for (String family : List.of("json", "jsonb")) {
+            // an array's length is refused: Pure's toMany(@Variant) drops an array's null elements on DuckDB, and
+            // reads a value that is not an array (Postgres's error) as an empty list on Postgres
+            m.put(family + "_array_length", (t, f, a, s, r) -> {
+                throw SqlTranslationException.unsupported(functionName(f.name().get(0)) + "(...) is not supported"
+                        + " yet", f.pos());
+            });
+            m.put(family + "_extract_path", (t, f, a, s, r) -> extractPath(f, a, false));
+            m.put(family + "_extract_path_text", (t, f, a, s, r) -> extractPath(f, a, true));
+            m.put("to_" + family, (t, f, a, s, r) -> toJson(f, a));
+        }
         m.put("nullif", (t, f, a, s, r) -> t.nullif(f, s, r));
         m.put("concat", (t, f, a, s, r) -> concat(f, a));
         m.put("greatest", (t, f, a, s, r) -> extreme(f, a, true));
@@ -2797,7 +2849,8 @@ public final class SqlToPure {
             Map.entry("text", Kind.STRING), Map.entry("varchar", Kind.STRING),
             Map.entry("character varying", Kind.STRING), Map.entry("boolean", Kind.BOOLEAN),
             Map.entry("bool", Kind.BOOLEAN), Map.entry("date", Kind.DATE), Map.entry("timestamp", Kind.DATETIME),
-            Map.entry("timestamp without time zone", Kind.DATETIME));
+            Map.entry("timestamp without time zone", Kind.DATETIME), Map.entry("json", Kind.JSON),
+            Map.entry("jsonb", Kind.JSON));
 
     /** The date fields that are whole numbers, and Pure's functions for them; Postgres's seconds and epochs carry
      *  fractions. */
@@ -3024,6 +3077,9 @@ public final class SqlToPure {
         }
         // Postgres's integer (int4) is narrower than Pure's: a value it cannot hold is Postgres's error
         boolean narrow = NARROW_INTEGERS.contains(type);
+        if (c.operand() instanceof SqlAst.StringLit s && target == Kind.JSON) {
+            return jsonConstant(s);
+        }
         if (c.operand() instanceof SqlAst.StringLit s) {
             Tx read = target == Kind.STRING ? Tx.value(new CString(s.value()), Kind.STRING, false)
                     : fromString(s, target);
@@ -3052,6 +3108,8 @@ public final class SqlToPure {
             case FLOAT -> x.kind().numeric() ? "toFloat" : x.kind() == Kind.STRING ? "parseFloat" : null;
             case DATE -> x.kind() == Kind.DATETIME ? "datePart" : null;
             case BOOLEAN -> x.kind() == Kind.INTEGER ? "notEqual" : null;
+            // text parses into jsonb; a jsonb's text (with its strings quoted) is not Pure's to(@String)
+            case JSON -> x.kind() == Kind.STRING ? FROM_JSON : null;
             default -> null;
         };
         if (convert == null) {
@@ -3075,6 +3133,7 @@ public final class SqlToPure {
             case "date" -> dateFromString(new SqlAst.StringLit(lit.value(), lit.pos()), Kind.DATE);
             case "timestamp", "timestamp without time zone" ->
                     dateFromString(new SqlAst.StringLit(lit.value(), lit.pos()), Kind.DATETIME);
+            case "json", "jsonb" -> jsonConstant(new SqlAst.StringLit(lit.value(), lit.pos()));
             default -> throw SqlTranslationException.unsupported("constants of type " + lit.type().name() + " are not"
                     + " supported yet", lit.pos());
         };
@@ -3160,6 +3219,252 @@ public final class SqlToPure {
         return true;
     }
 
+    // ------------------------------------------------------------------ jsonb
+
+    /** Pure's semi-structured value: Postgres's jsonb here (register S48). */
+    private static final String VARIANT = "meta::pure::metamodel::variant::Variant";
+    private static final String FROM_JSON = "meta::pure::functions::variant::convert::fromJson";
+
+    /** jsonb's navigation operators: {@code ->} a member or an element, {@code ->>} its text, {@code #>} and
+     *  {@code #>>} the same along a path. */
+    private static final Set<String> JSON_OPERATORS = Set.of("->", "->>", "#>", "#>>");
+
+    /** {@code '...'::jsonb}: the text parsed (text that is not JSON is Postgres's error, and fromJson's). */
+    private static Tx jsonConstant(SqlAst.StringLit s) {
+        // jsonb's 'null' is a value, not SQL's NULL; a database may hold it either way
+        return Tx.value(call(FROM_JSON, new CString(s.value())), Kind.JSON, s.value().strip().equals("null"));
+    }
+
+    private Tx jsonOperator(SqlAst.Operator o, Scope scope, String row) {
+        if (!o.operator().endsWith(">>")) {
+            constantNavigation(java.util.Objects.requireNonNull(o.left()), o.pos());
+        }
+        Tx value = jsonOperand(tx(java.util.Objects.requireNonNull(o.left()), scope, row), o.operator(), o.pos());
+        Tx got;
+        if (o.operator().startsWith("#")) {
+            if (!(o.right() instanceof SqlAst.StringLit path)) {
+                throw SqlTranslationException.unsupported("a path for " + o.operator() + " other than a constant"
+                        + " ('{a,b}') is not supported yet", o.right().pos());
+            }
+            got = value;
+            for (String key : jsonPath(path)) {
+                got = member(got, key, path.pos());
+            }
+        } else {
+            got = navigate(value, o.right(), tx(o.right(), scope, row), o.operator());
+        }
+        return o.operator().endsWith(">>") ? jsonText(got) : got;
+    }
+
+    /** {@code base[index]}: jsonb's subscript, a member or an element as {@code ->} reads it. */
+    private Tx subscript(SqlAst.Subscript sub, Scope scope, String row) {
+        constantNavigation(sub.base(), sub.pos());
+        Tx base = tx(sub.base(), scope, row);
+        if (base.kind() != Kind.JSON) {
+            throw SqlTranslationException.unsupported("subscripts of values other than jsonb (arrays) are not"
+                    + " supported yet", sub.pos());
+        }
+        return navigate(base, sub.index(), tx(sub.index(), scope, row), "[]");
+    }
+
+    /** A jsonb value read out of a jsonb CONSTANT is refused: legend-lite's Postgres lowering folds the navigation of a
+     *  literal Variant at compile time, and re-emits a picked string, number or boolean as a plain SQL literal, not a
+     *  jsonb value (its text, read by ->>, is right). A column's, or any value's not a constant's, is not folded. */
+    private static void constantNavigation(SqlAst.Expr base, SqlAst.Pos pos) {
+        if (isJsonConstant(base)) {
+            throw SqlTranslationException.unsupported("reading a jsonb value out of a jsonb constant is not supported"
+                    + " yet (its text, with ->> or #>>, is)", pos);
+        }
+    }
+
+    private static boolean isJsonConstant(SqlAst.Expr e) {
+        return switch (e) {
+            case SqlAst.Cast c -> JSON_TYPES.contains(c.type().name())
+                    && (c.operand() instanceof SqlAst.StringLit || isJsonConstant(c.operand()));
+            case SqlAst.TypedLit t -> JSON_TYPES.contains(t.type().name());
+            case SqlAst.Operator o -> o.left() != null && (o.operator().equals("->") || o.operator().equals("#>"))
+                    && isJsonConstant(java.util.Objects.requireNonNull(o.left()));
+            case SqlAst.Subscript sub -> isJsonConstant(sub.base());
+            default -> false;
+        };
+    }
+
+    private static final Set<String> JSON_TYPES = Set.of("json", "jsonb");
+
+    private static Tx jsonOperand(Tx t, String operator, SqlAst.Pos pos) {
+        if (t.kind() == Kind.JSON) {
+            return t;
+        }
+        if (t.kind() == Kind.NULL || t.kind() == Kind.OTHER) {
+            throw SqlTranslationException.unsupported("the operator " + operator + " of a value that is not jsonb is"
+                    + " not supported yet", pos);
+        }
+        throw SqlTranslationException.invalid("operator does not exist: " + t.kind().name().toLowerCase(Locale.ROOT)
+                + " " + operator + " unknown", pos);
+    }
+
+    /** jsonb's order and equality are its own (an object after an array, a longer object after a shorter one, keys
+     *  by length): a Variant is ordered, grouped and compared by Pure's rules, so a jsonb value is no key here. */
+    private static void notJsonKey(Kind kind, String what, SqlAst.Pos pos) {
+        if (kind == Kind.JSON) {
+            throw SqlTranslationException.unsupported(what + " of a jsonb value is not supported yet (jsonb orders and"
+                    + " compares by its own rules)", pos);
+        }
+    }
+
+    /** {@code value -> key}: a constant key's member (an object's, else NULL), or an integer's element (an array's,
+     *  from 0; a negative one counts from the end; else NULL). */
+    private static Tx navigate(Tx value, SqlAst.Expr keyExpr, Tx key, String operator) {
+        if (key.kind() == Kind.INTEGER) {
+            Tx got = strict(Kind.JSON, List.of(key), k -> call("get", value.vs(), k.get(0)));
+            return Tx.value(got.vs(), Kind.JSON, true);
+        }
+        if (key.kind() == Kind.STRING && keyExpr instanceof SqlAst.StringLit k) {
+            return member(value, k.value(), k.pos());
+        }
+        if (key.kind() == Kind.STRING) {
+            // DuckDB's arrow reads a key that starts with $ or / as a path: only a constant one is known not to
+            throw SqlTranslationException.unsupported("a member key other than a constant is not supported yet",
+                    keyExpr.pos());
+        }
+        if (key.kind() == Kind.NULL || key.kind() == Kind.OTHER) {
+            throw SqlTranslationException.unsupported("a jsonb key of this type is not supported yet", keyExpr.pos());
+        }
+        throw SqlTranslationException.invalid("operator does not exist: jsonb " + operator + " "
+                + key.kind().name().toLowerCase(Locale.ROOT), keyExpr.pos());
+    }
+
+    private static Tx member(Tx value, String key, SqlAst.Pos pos) {
+        if (key.startsWith("$") || key.startsWith("/")) {
+            throw SqlTranslationException.unsupported("a member key that starts with $ or / is read as a path by"
+                    + " DuckDB; it is not supported yet", pos);
+        }
+        return Tx.value(call("get", value.vs(), new CString(key)), Kind.JSON, true);
+    }
+
+    /** {@code ->>}'s text: a string's own characters, a number's or a boolean's spelling; NULL for jsonb's null. */
+    private static Tx jsonText(Tx got) {
+        return Tx.value(call("to", got.vs(), typeArg("String")), Kind.STRING, true);
+    }
+
+    /** A text[] constant's elements, the keys of a jsonb path: {@code '{a,b,"c d"}'}. An element that is a number
+     *  reads an array's element or an object's member, by the value it meets: it is not supported yet. */
+    private static List<String> jsonPath(SqlAst.StringLit lit) {
+        String text = lit.value().strip();
+        if (!text.startsWith("{") || !text.endsWith("}")) {
+            throw SqlTranslationException.unsupported("a path other than a plain array constant ('{a,b}') is not"
+                    + " supported yet", lit.pos());
+        }
+        String body = text.substring(1, text.length() - 1);
+        List<String> keys = new ArrayList<>();
+        if (body.isBlank()) {
+            return keys;
+        }
+        int i = 0;
+        while (true) {
+            while (i < body.length() && Character.isWhitespace(body.charAt(i))) {
+                i++;
+            }
+            StringBuilder key = new StringBuilder();
+            if (i < body.length() && body.charAt(i) == '"') {
+                i++;
+                while (i < body.length() && body.charAt(i) != '"') {
+                    if (body.charAt(i) == '\\' && i + 1 < body.length()) {
+                        i++;
+                    }
+                    key.append(body.charAt(i++));
+                }
+                if (i >= body.length()) {
+                    throw SqlTranslationException.unsupported("a path with an unclosed quote is not supported", lit.pos());
+                }
+                i++;
+                while (i < body.length() && Character.isWhitespace(body.charAt(i))) {
+                    i++;
+                }
+            } else {
+                int start = i;
+                while (i < body.length() && body.charAt(i) != ',') {
+                    char c = body.charAt(i);
+                    if (c == '"' || c == '{' || c == '}' || c == '\\') {
+                        throw SqlTranslationException.unsupported("a path element with " + c + " is not supported yet",
+                                lit.pos());
+                    }
+                    i++;
+                }
+                String bare = body.substring(start, i).strip();
+                if (bare.isEmpty() || bare.equalsIgnoreCase("null")) {
+                    throw SqlTranslationException.unsupported("an empty or NULL path element is not supported yet",
+                            lit.pos());
+                }
+                if (bare.matches("[+-]?[0-9]+")) {
+                    throw SqlTranslationException.unsupported("a path element that is a number (" + bare + ") reads"
+                            + " an array's element or an object's member by the value it meets; it is not supported"
+                            + " yet", lit.pos());
+                }
+                key.append(bare);
+            }
+            keys.add(key.toString());
+            if (i >= body.length()) {
+                return keys;
+            }
+            if (body.charAt(i) != ',') {
+                throw SqlTranslationException.unsupported("a malformed path constant is not supported", lit.pos());
+            }
+            i++;
+        }
+    }
+
+    /** {@code json_extract_path(x, VARIADIC keys)}: {@code #>}'s path, its keys constants; the _text form
+     *  {@code #>>}'s. */
+    private static Tx extractPath(SqlAst.FunctionCall f, List<Tx> args, boolean text) {
+        if (args.size() < 2) {
+            throw SqlTranslationException.unsupported(functionName(f.name().get(0)) + " with no keys is not"
+                    + " supported yet", f.pos());
+        }
+        if (!text) {
+            constantNavigation(f.args().get(0), f.pos());
+        }
+        Tx got = jsonOperand(args.get(0), functionName(f.name().get(0)), f.pos());
+        for (int i = 1; i < args.size(); i++) {
+            if (!(f.args().get(i) instanceof SqlAst.StringLit key)) {
+                throw SqlTranslationException.unsupported("a path key other than a constant is not supported yet",
+                        f.args().get(i).pos());
+            }
+            if (key.value().matches("[+-]?[0-9]+")) {
+                throw SqlTranslationException.unsupported("a path key that is a number (" + key.value() + ") reads"
+                        + " an array's element or an object's member by the value it meets; it is not supported yet",
+                        key.pos());
+            }
+            got = member(got, key.value(), key.pos());
+        }
+        return text ? jsonText(got) : got;
+    }
+
+    /** {@code to_jsonb(x)}: a text, number or boolean as jsonb's string, number or boolean. */
+    private static Tx toJson(SqlAst.FunctionCall f, List<Tx> args) {
+        arity(f, args, 1);
+        Kind k = args.get(0).kind();
+        if (k == Kind.JSON) {
+            return args.get(0);
+        }
+        if (k != Kind.STRING && k != Kind.INTEGER && k != Kind.BOOLEAN && k != Kind.DECIMAL && k != Kind.FLOAT) {
+            throw SqlTranslationException.unsupported(functionName(f.name().get(0)) + "(...) of a "
+                    + k.name().toLowerCase(Locale.ROOT) + " is not supported yet", f.pos());
+        }
+        if (args.get(0).vs() instanceof CString text) {
+            // a text constant is a jsonb string constant (its JSON spelling, quoted and escaped): legend-lite's
+            // Postgres lowering spells toVariant of a string constant with no type, which Postgres cannot resolve
+            return Tx.value(call(FROM_JSON, new CString(com.legend.json.Json.toCompact(text.value()))), Kind.JSON,
+                    false);
+        }
+        return strict(Kind.JSON, args, v -> call("toVariant", v.get(0)));
+    }
+
+    /** {@code @Name}: a type as a value, as {@code to(@String)} takes it. */
+    private static ValueSpecification typeArg(String name) {
+        return new TypeAnnotation.Named(new TypeExpression.NameRef(name));
+    }
+
     // ------------------------------------------------------------------ canonical form
 
     /** An expression's structure, its column references resolved: two spellings of one expression ({@code name},
@@ -3217,6 +3522,7 @@ public final class SqlToPure {
             case SqlAst.InSubquery q -> "in@" + q.pos().line() + ":" + q.pos().column();
             case SqlAst.Quantified q -> "quantified@" + q.pos().line() + ":" + q.pos().column();
             case SqlAst.Window w -> "window@" + w.pos().line() + ":" + w.pos().column();
+            case SqlAst.Subscript sub -> "subscript(" + canon(sub.base(), in) + "," + canon(sub.index(), in) + ")";
         };
     }
 
@@ -3292,6 +3598,7 @@ public final class SqlToPure {
                 w.spec().orderBy().forEach(o -> all.add(o.expr()));
                 yield all;
             }
+            case SqlAst.Subscript sub -> List.of(sub.base(), sub.index());
         };
     }
 
