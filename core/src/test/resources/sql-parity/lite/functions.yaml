@@ -106,3 +106,17 @@ tests:
     sql: "SELECT id, numeric_val::numeric(10,2) AS n FROM numbers ORDER BY id"
   - id: cast_of_bad_text_is_an_error
     sql: "SELECT id, val::bigint AS i FROM strings ORDER BY id"
+  # CASE, COALESCE, GREATEST and LEAST resolve their values to one type as Postgres does: an untyped constant takes
+  # the others' type; numbers widen; text with a number is Postgres's error
+  - id: coalesce_untyped_constant_is_read_as_the_other_type
+    sql: "SELECT id, coalesce(age, '0') AS a, coalesce(salary, '1.5') AS s FROM persons ORDER BY id"
+  - id: case_of_integer_and_numeric_is_numeric
+    sql: "SELECT id, CASE WHEN id > 2 THEN 1 ELSE 2.5 END AS c, CASE WHEN id > 2 THEN age ELSE salary END AS d FROM persons ORDER BY id"
+  - id: coalesce_of_integer_and_text_is_an_error
+    sql: "SELECT coalesce(age, name) AS a FROM persons"
+  - id: case_of_integer_and_text_is_an_error
+    sql: "SELECT CASE WHEN id > 2 THEN age ELSE name END AS a FROM persons"
+  - id: greatest_with_an_untyped_constant
+    sql: "SELECT id, greatest(age, '30') AS g, least(salary, '60000') AS l FROM persons ORDER BY id"
+  - id: case_of_untyped_constants_is_text
+    sql: "SELECT id, CASE WHEN id > 2 THEN 'big' ELSE 'small' END AS c FROM persons ORDER BY id"

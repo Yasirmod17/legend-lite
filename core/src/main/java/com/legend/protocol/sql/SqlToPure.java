@@ -282,6 +282,16 @@ public final class SqlToPure {
     private interface Scope {
         Col column(SqlAst.ColumnRef ref);
 
+        /** The column {@code ref} names here or in an enclosing query, nearest first; null for none. */
+        @com.legend.base.Nullable Col columnOrNull(SqlAst.ColumnRef ref);
+
+        /** A one-value function's name read as its value, here or in an enclosing query, nearest first; null for
+         *  none (Postgres reads a name as a FROM item's only after no query in scope has a column of it). */
+        @com.legend.base.Nullable Col functionValue(SqlAst.ColumnRef ref);
+
+        /** Whether a FROM item here or in an enclosing query is named {@code name}. */
+        boolean hasTable(SqlAst.Ident name);
+
         /** The column an expression IS in a grouped scope (a group key or an aggregate); null otherwise. */
         @com.legend.base.Nullable Col grouped(SqlAst.Expr e);
 
@@ -373,17 +383,45 @@ public final class SqlToPure {
 
         @Override
         public Col column(SqlAst.ColumnRef ref) {
+            Col found = columnOrNull(ref);
+            if (found == null) {
+                found = functionValue(ref);
+            }
+            return found != null ? found : notFound(ref);
+        }
+
+        @Override
+        public @com.legend.base.Nullable Col columnOrNull(SqlAst.ColumnRef ref) {
             Col found = find(ref);
             if (found != null) {
                 return found;
             }
             Scope outer = env.outer();
-            if (outer != null) {
-                // the enclosing query's column, read from its row's lambda parameter
-                Col c = outer.column(ref);
-                return c.var() != null ? c : c.via(env.outerRow());
+            if (outer == null) {
+                return null;
             }
-            return notFound(ref);
+            // the enclosing query's column, read from its row's lambda parameter
+            Col c = outer.columnOrNull(ref);
+            return c == null || c.var() != null ? c : c.via(env.outerRow());
+        }
+
+        @Override
+        public @com.legend.base.Nullable Col functionValue(SqlAst.ColumnRef ref) {
+            if (ref.parts().size() != 1) {
+                return null;
+            }
+            Binding named = binding(ref.parts().get(0));
+            if (named != null) {
+                // a function returning one value: its name is that value (FROM jsonb_array_elements(a) e ...
+                // e ->> 'x'); a table's name is its whole row, refused by notFound
+                return named.scalar() && named.columns().size() == 1 ? named.columns().get(0).col() : null;
+            }
+            Scope outer = env.outer();
+            if (outer == null) {
+                return null;
+            }
+            Col c = outer.functionValue(ref);
+            return c == null || c.var() != null ? c : c.via(env.outerRow());
         }
 
         /** The column {@code ref} names here, or null for none (an enclosing query may have it). */
@@ -446,6 +484,11 @@ public final class SqlToPure {
             return found;
         }
 
+        @Override
+        public boolean hasTable(SqlAst.Ident name) {
+            return binding(name) != null || env.outer() != null && env.outer().hasTable(name);
+        }
+
         private Col notFound(SqlAst.ColumnRef ref) {
             List<SqlAst.Ident> parts = ref.parts();
             SqlAst.Ident name = parts.get(parts.size() - 1);
@@ -454,11 +497,7 @@ public final class SqlToPure {
                         + "\"", parts.get(0).pos());
             }
             Binding named = binding(name);
-            if (named != null && named.scalar() && named.columns().size() == 1) {
-                // a function returning one value: its name is that value (FROM jsonb_array_elements(a) e ... e ->> 'x')
-                return named.columns().get(0).col();
-            }
-            if (named != null) {
+            if (named != null || env.outer() != null && env.outer().hasTable(name)) {
                 // Postgres reads a FROM item's name as its whole row (row_to_json(persons))
                 throw SqlTranslationException.unsupported("whole-row references (\"" + name.text() + "\" as a value)"
                         + " are not supported yet", name.pos());
@@ -496,7 +535,27 @@ public final class SqlToPure {
 
         @Override
         public Col column(SqlAst.ColumnRef ref) {
-            Col source = input.column(ref);
+            return key(input.column(ref), ref);
+        }
+
+        @Override
+        public @com.legend.base.Nullable Col columnOrNull(SqlAst.ColumnRef ref) {
+            Col source = input.columnOrNull(ref);
+            return source == null ? null : key(source, ref);
+        }
+
+        @Override
+        public @com.legend.base.Nullable Col functionValue(SqlAst.ColumnRef ref) {
+            Col source = input.functionValue(ref);
+            return source == null ? null : key(source, ref);
+        }
+
+        @Override
+        public boolean hasTable(SqlAst.Ident name) {
+            return input.hasTable(name);
+        }
+
+        private Col key(Col source, SqlAst.ColumnRef ref) {
             if (source.var() != null) {
                 // the enclosing query's column: one value per group, as Postgres has it
                 return source;
@@ -535,7 +594,10 @@ public final class SqlToPure {
      * the query's FROM, and the item its column. One such function per select list (two run in lockstep in Postgres),
      * none with grouping, aggregates, windows or DISTINCT; one inside an expression is refused.
      */
-    private static SqlAst.Select selectListSetReturning(SqlAst.Select s) {
+    private record SelectListSet(SqlAst.Select select, SqlAst.@com.legend.base.Nullable TableFunction function) {
+    }
+
+    private static SelectListSet selectListSetReturning(SqlAst.Select s) {
         int found = -1;
         for (int i = 0; i < s.items().size(); i++) {
             if (s.items().get(i) instanceof SqlAst.SelectExpr x) {
@@ -554,7 +616,7 @@ public final class SqlToPure {
             }
         }
         if (found < 0) {
-            return s;
+            return new SelectListSet(s, null);
         }
         SqlAst.SelectExpr item = (SqlAst.SelectExpr) s.items().get(found);
         SqlAst.FunctionCall f = (SqlAst.FunctionCall) item.expr();
@@ -569,17 +631,17 @@ public final class SqlToPure {
         }
         String name = item.alias() != null ? item.alias().quoted() ? item.alias().text() : fold(item.alias().text())
                 : functionName(f.name().get(f.name().size() - 1));
+        // its column's name is no name the query can write: WHERE cannot read it, nor * list it
         SqlAst.Ident table = new SqlAst.Ident(SYNTHETIC + "set", true, f.pos());
-        SqlAst.Ident column = new SqlAst.Ident(name, true, f.pos());
+        SqlAst.Ident column = new SqlAst.Ident(SYNTHETIC + "value", true, f.pos());
         List<SqlAst.Arg> args = new ArrayList<>();
         f.args().forEach(a -> args.add(new SqlAst.Arg(null, a)));
-        List<SqlAst.FromItem> from = new ArrayList<>(s.from());
-        from.add(new SqlAst.TableFunction(f.name(), args, table, List.of(column), f.pos()));
         List<SqlAst.SelectItem> items = new ArrayList<>(s.items());
         items.set(found, new SqlAst.SelectExpr(new SqlAst.ColumnRef(List.of(table, column), f.pos()),
                 new SqlAst.Ident(name, true, f.pos()), item.pos()));
-        return new SqlAst.Select(false, items, from, s.where(), s.groupBy(), s.having(), s.windows(), s.orderBy(),
-                s.limit(), s.offset(), s.pos());
+        return new SelectListSet(new SqlAst.Select(false, items, s.from(), s.where(), s.groupBy(), s.having(),
+                s.windows(), s.orderBy(), s.limit(), s.offset(), s.pos()),
+                new SqlAst.TableFunction(f.name(), args, table, List.of(column), f.pos()));
     }
 
     private static boolean setReturning(SqlAst.FunctionCall f) {
@@ -604,7 +666,9 @@ public final class SqlToPure {
     }
 
     private Rel select(SqlAst.Select query) {
-        SqlAst.Select s = selectListSetReturning(query);
+        SelectListSet set = selectListSetReturning(query);
+        SqlAst.Select s = set.select();
+        SqlAst.TableFunction setFunction = set.function();
 
         if (s.items().isEmpty()) {
             throw SqlTranslationException.unsupported("a select list with no columns is not supported yet", s.pos());
@@ -618,8 +682,8 @@ public final class SqlToPure {
         }
         // no FROM: one row, of no columns the query can name
         String one = "\n" + SYNTHETIC + "row\n1\n";
-        Source src = s.from().isEmpty() ? new Source(com.legend.protocol.spec.TdsLiteral.of(one, "#TDS" + one + "#",
-                null), List.of(), List.of()) : null;
+        Source src = !s.from().isEmpty() ? null : setFunction != null ? from(setFunction)
+                : new Source(com.legend.protocol.spec.TdsLiteral.of(one, "#TDS" + one + "#", null), List.of(), List.of());
         for (SqlAst.FromItem item : s.from()) {
             // a comma is a cross join, binding looser than JOIN (the ON of a JOIN sees its own two sides only); a
             // function or a LATERAL subquery reads the items before it
@@ -639,6 +703,13 @@ public final class SqlToPure {
         SqlAst.Expr where = s.where();
         if (where != null) {
             relation = call("filter", relation, lambda(row, condition(where, input, "WHERE")));
+        }
+        if (setFunction != null && !s.from().isEmpty()) {
+            // a select list's set-returning function reads the rows WHERE keeps, as in Postgres; * lists FROM's
+            Source with = lateralJoin(new Source(relation, source.bindings(), source.star()), setFunction,
+                    SqlAst.JoinType.CROSS, null, setFunction.pos());
+            input = new Input(with.bindings(), source.star(), "WHERE");
+            relation = with.relation();
         }
         boolean aggregate = !s.groupBy().isEmpty() || hasAggregate(s);
         return aggregate ? grouped(s, input.in("GROUP BY"), relation) : plain(s, input.in("the select list"), relation);
@@ -932,7 +1003,7 @@ public final class SqlToPure {
                 Tx x = jsonOperand(tx(argExprs.get(0), scope, row), fn, f.pos());
                 // none for SQL's NULL; a value that is not an object is Postgres's error, and the Map read's
                 // (to reads a Variant[0..1]: the value itself is never toOne'd, whose Postgres guard is text's)
-                ValueSpecification keys = call("keys", call("toOne", call("to", x.vs(), new TypeAnnotation.Named(
+                ValueSpecification keys = call("keys", call("toOne", call("to", scalarNull(x), new TypeAnnotation.Named(
                         new TypeExpression.Generic(MAP, List.of(new TypeExpression.NameRef("String"),
                                 new TypeExpression.NameRef(VARIANT)))))));
                 if (x.nullable()) {
@@ -974,7 +1045,17 @@ public final class SqlToPure {
         }
         constantNavigation(args.get(0), f.pos());
         Tx x = jsonOperand(tx(args.get(0), scope, row), fn, f.pos());
-        return call("toMany", x.vs(), typeArg(VARIANT));
+        return call("toMany", scalarNull(x), typeArg(VARIANT));
+    }
+
+    /** A jsonb value with jsonb's null read as the scalar it is to Postgres: an array's elements and an object's keys
+     *  are Postgres's error for any scalar ("cannot extract elements from a scalar"), where Pure reads a Variant's
+     *  null as no value. The null becomes another scalar, so that Pure's toMany and to(@Map) raise their own errors
+     *  for a value that is not an array or an object; SQL's NULL stays no value. */
+    private static ValueSpecification scalarNull(Tx x) {
+        ValueSpecification isJsonNull = call("and", call("isNotEmpty", x.vs()), call("isEmpty", call("to", x.vs(),
+                typeArg("String"))));
+        return call("if", isJsonNull, thunk(call(FROM_JSON, new CString("0"))), thunk(x.vs()));
     }
 
     /** {@code generate_series(start, stop [, step])} of integers, Pure's {@code range} (whose stop is exclusive): no
@@ -996,6 +1077,11 @@ public final class SqlToPure {
             }
             if (k.signum() == 0) {
                 throw SqlTranslationException.invalid("step size cannot equal zero", s.pos());
+            }
+            if (k.bitLength() >= 64) {
+                // Postgres reads it as numeric
+                throw SqlTranslationException.unsupported("generate_series of values other than integers is not"
+                        + " supported yet", s.pos());
             }
             step = k.longValueExact();
         }
@@ -1112,6 +1198,8 @@ public final class SqlToPure {
                 Col l = sharedColumn(left.bindings(), u, "left");
                 Col r = sharedColumn(rights, u, "right");
                 List<Tx> pair = List.of(columnValue(row, l.via(leftRow)), columnValue(row, r.via(rightRow)));
+                notJsonKey(pair.get(0).kind(), "JOIN/USING", u.pos());
+                notJsonKey(pair.get(1).kind(), "JOIN/USING", u.pos());
                 if (pair.get(0).kind() != pair.get(1).kind() && !(pair.get(0).kind().numeric()
                         && pair.get(1).kind().numeric())) {
                     throw SqlTranslationException.invalid("JOIN/USING types " + l.kind().name().toLowerCase(Locale.ROOT)
@@ -1269,6 +1357,7 @@ public final class SqlToPure {
         List<ValueSpecification> sortInfos = new ArrayList<>();
         for (SqlAst.SortItem item : s.orderBy()) {
             String key = outputKey(item.expr(), names);
+            notJsonKey(columns.get(names.indexOf(key)).kind(), "ORDER BY", item.expr().pos());
             boolean nullsFirst = item.nullsFirst() != null ? java.util.Objects.requireNonNull(item.nullsFirst())
                     : item.descending();
             sortInfos.add(call(item.descending() ? "descending" : "ascending", colSpec(key),
@@ -1484,6 +1573,21 @@ public final class SqlToPure {
         @Override
         public Col column(SqlAst.ColumnRef ref) {
             return base.column(ref);
+        }
+
+        @Override
+        public @com.legend.base.Nullable Col columnOrNull(SqlAst.ColumnRef ref) {
+            return base.columnOrNull(ref);
+        }
+
+        @Override
+        public @com.legend.base.Nullable Col functionValue(SqlAst.ColumnRef ref) {
+            return base.functionValue(ref);
+        }
+
+        @Override
+        public boolean hasTable(SqlAst.Ident name) {
+            return base.hasTable(name);
         }
 
         @Override
@@ -1938,8 +2042,9 @@ public final class SqlToPure {
         Col g = scope.grouped(x.expr());
         Col col = g != null ? g : x.expr() instanceof SqlAst.ColumnRef ref ? scope.column(ref) : null;
         if (col != null && col.var() == null) {
-            String name = alias != null ? alias.text()
-                    : x.expr() instanceof SqlAst.ColumnRef ? col.label() : defaultName(x.expr());
+            // a function's name read as its value shows as that name (Postgres's FigureColname), a column as itself
+            String name = alias != null ? alias.text() : x.expr() instanceof SqlAst.ColumnRef ref
+                    && scope.columnOrNull(ref) != null ? col.label() : defaultName(x.expr());
             Output o = passthrough(col, name, passed, present, scope);
             return new Output(o.name(), o.internal(), o.value(), x.expr(), o.kind(), o.nullable());
         }
@@ -2664,6 +2769,76 @@ public final class SqlToPure {
         return k == Kind.DATE || k == Kind.DATETIME;
     }
 
+    /** Values resolved to one type, and that type's kind. */
+    private record Common(List<Tx> values, Kind kind) {
+    }
+
+    /** The results of a CASE, or the arguments of COALESCE, GREATEST or LEAST, as one type, by Postgres's resolution
+     *  ("UNION, CASE, and Related Constructs"): an untyped string constant takes the others' type, read by that
+     *  type's input rules (all untyped: text); the others must share a category, numbers widening to the widest;
+     *  else Postgres's error. */
+    private static Common common(String what, List<SqlAst.Expr> exprs, List<Tx> txs, SqlAst.Pos pos) {
+        Kind target = null;
+        boolean untyped = false;
+        for (int i = 0; i < txs.size(); i++) {
+            Kind k = txs.get(i).kind();
+            if (exprs.get(i) instanceof SqlAst.StringLit) {
+                untyped = true;
+                continue;
+            }
+            if (k == Kind.NULL) {
+                continue;
+            }
+            if (target == null || target == k) {
+                target = k;
+            } else if (target.numeric() && k.numeric()) {
+                target = arithmetic(target, k);
+            } else if (isDate(target) && isDate(k)) {
+                // Postgres reads a date as a timestamp at midnight here
+                throw SqlTranslationException.unsupported(what + " of date and timestamp values is not supported yet",
+                        pos);
+            } else {
+                throw SqlTranslationException.invalid(what + " types " + postgresName(target) + " and "
+                        + postgresName(k) + " cannot be matched", pos);
+            }
+        }
+        if (target == null) {
+            return new Common(txs, untyped ? Kind.STRING : Kind.NULL);
+        }
+        List<Tx> values = new ArrayList<>();
+        for (int i = 0; i < txs.size(); i++) {
+            if (exprs.get(i) instanceof SqlAst.StringLit s && target != Kind.STRING) {
+                if (target == Kind.JSON) {
+                    values.add(jsonConstant(s));
+                } else if (readsStrings(target)) {
+                    values.add(fromString(s, target));
+                } else {
+                    throw SqlTranslationException.unsupported(what + " of a string constant and a "
+                            + postgresName(target) + " value is not supported yet", s.pos());
+                }
+            } else {
+                values.add(txs.get(i));
+            }
+        }
+        return new Common(values, target);
+    }
+
+    /** A kind's Postgres type name, for Postgres's messages. */
+    private static String postgresName(Kind k) {
+        return switch (k) {
+            case INTEGER -> "integer";
+            case FLOAT -> "double precision";
+            case DECIMAL, NUMBER -> "numeric";
+            case STRING -> "text";
+            case BOOLEAN -> "boolean";
+            case DATE -> "date";
+            case DATETIME -> "timestamp without time zone";
+            case JSON -> "jsonb";
+            case NULL -> "unknown";
+            case OTHER -> "an enumeration";
+        };
+    }
+
     /** The kinds an untyped string constant compared with them is read as (Postgres: an "unknown" constant takes the
      *  other operand's type, read by that type's input rules). */
     private static boolean readsStrings(Kind k) {
@@ -2948,25 +3123,37 @@ public final class SqlToPure {
     private Tx caseExpr(SqlAst.Case c, Scope scope, String row) {
         SqlAst.Expr otherwise = c.otherwise();
         Tx last = otherwise == null ? Tx.value(empty(), Kind.NULL, true) : tx(otherwise, scope, row);
-        Kind kind = last.kind();
-        boolean nullable = last.nullable();
-        ValueSpecification vs = valueOf(last);
         List<SqlAst.When> whens = c.whens();
+        List<ValueSpecification> tests = new ArrayList<>();
+        List<Tx> thens = new ArrayList<>();
         for (int i = whens.size() - 1; i >= 0; i--) {
             SqlAst.When w = whens.get(i);
-            ValueSpecification test;
             SqlAst.Expr operand = c.operand();
             if (operand != null) {
                 List<Tx> sides = comparable(operand, w.condition(), scope, row, w.condition().pos());
-                test = strictTest(sides, v -> call("equal", v.get(0), v.get(1))).vs();
+                tests.add(0, strictTest(sides, v -> call("equal", v.get(0), v.get(1))).vs());
             } else {
-                test = condition(w.condition(), scope, "CASE/WHEN");
+                tests.add(0, condition(w.condition(), scope, "CASE/WHEN"));
             }
-            Tx then = tx(w.result(), scope, row);
-            kind = kind == Kind.NULL ? then.kind() : kind;
-            nullable |= then.nullable();
-            vs = call("if", test, thunk(valueOf(then)), thunk(vs));
+            thens.add(0, tx(w.result(), scope, row));
         }
+        // the results as one type, the ELSE's last
+        List<SqlAst.Expr> exprs = new ArrayList<>();
+        whens.forEach(w -> exprs.add(w.result()));
+        exprs.add(otherwise != null ? otherwise : new SqlAst.NullLit(c.pos()));
+        List<Tx> all = new ArrayList<>(thens);
+        all.add(last);
+        Common results = common("CASE", exprs, all, c.pos());
+        List<Tx> values = results.values();
+        Tx otherwiseValue = values.get(values.size() - 1);
+        boolean nullable = otherwiseValue.nullable();
+        ValueSpecification vs = valueOf(otherwiseValue);
+        for (int i = values.size() - 2; i >= 0; i--) {
+            Tx v = values.get(i);
+            nullable |= v.nullable();
+            vs = call("if", tests.get(i), thunk(valueOf(v)), thunk(vs));
+        }
+        Kind kind = results.kind();
         return kind == Kind.BOOLEAN ? booleanValue(vs, nullable) : Tx.value(vs, kind, nullable);
     }
 
@@ -3168,16 +3355,15 @@ public final class SqlToPure {
 
     /** {@code coalesce(a, b, ...)}: the first value that is not NULL. Pure's takes two to four values, so a longer
      *  list nests from the right. */
-    private static Tx coalesce(SqlAst.FunctionCall f, List<Tx> args) {
-        if (args.size() < 2) {
+    private static Tx coalesce(SqlAst.FunctionCall f, List<Tx> arguments) {
+        if (arguments.size() < 2) {
             throw SqlTranslationException.unsupported("coalesce takes two or more arguments here", f.pos());
         }
-        Kind kind = Kind.NULL;
+        Common common = common("COALESCE", f.args(), arguments, f.pos());
+        List<Tx> args = common.values();
+        Kind kind = common.kind();
         boolean nullable = true;
         for (Tx a : args) {
-            if (kind == Kind.NULL) {
-                kind = a.kind();
-            }
             nullable &= a.nullable();
         }
         ValueSpecification tail = valueOf(args.get(args.size() - 1));
@@ -3324,7 +3510,8 @@ public final class SqlToPure {
 
     /** {@code greatest(...)}, {@code least(...)}: the largest (smallest) of the values, NULLs ignored; NULL only when
      *  every value is. */
-    private static Tx extreme(SqlAst.FunctionCall f, List<Tx> args, boolean greatest) {
+    private static Tx extreme(SqlAst.FunctionCall f, List<Tx> arguments, boolean greatest) {
+        List<Tx> args = common(greatest ? "GREATEST" : "LEAST", f.args(), arguments, f.pos()).values();
         Tx best = null;
         for (int i = 0; i < args.size(); i++) {
             Tx a = args.get(i);
@@ -3596,8 +3783,53 @@ public final class SqlToPure {
 
     /** {@code '...'::jsonb}: the text parsed (text that is not JSON is Postgres's error, and fromJson's). */
     private static Tx jsonConstant(SqlAst.StringLit s) {
+        if (duplicateKey(s.value())) {
+            // jsonb keeps a duplicate key's last value, DuckDB's JSON reads its first
+            throw SqlTranslationException.unsupported("a jsonb constant with a duplicate key is not supported yet",
+                    s.pos());
+        }
         // jsonb's 'null' is a value, not SQL's NULL; a database may hold it either way
         return Tx.value(call(FROM_JSON, new CString(s.value())), Kind.JSON, s.value().strip().equals("null"));
+    }
+
+    /** Whether JSON text has an object with a key twice (text that is not JSON: no; reading it is the error). */
+    private static boolean duplicateKey(String json) {
+        java.util.ArrayDeque<Set<String>> objects = new java.util.ArrayDeque<>();
+        java.util.ArrayDeque<Boolean> isObject = new java.util.ArrayDeque<>();
+        int i = 0;
+        while (i < json.length()) {
+            char c = json.charAt(i);
+            if (c == '"') {
+                int start = ++i;
+                while (i < json.length() && json.charAt(i) != '"') {
+                    i += json.charAt(i) == '\\' ? 2 : 1;
+                }
+                if (i >= json.length()) {
+                    return false;
+                }
+                String raw = json.substring(start, i++);
+                int next = i;
+                while (next < json.length() && Character.isWhitespace(json.charAt(next))) {
+                    next++;
+                }
+                if (next < json.length() && json.charAt(next) == ':' && Boolean.TRUE.equals(isObject.peek())) {
+                    String key = com.legend.json.Json.unescape(raw);
+                    if (!java.util.Objects.requireNonNull(objects.peek()).add(key)) {
+                        return true;
+                    }
+                }
+                continue;
+            }
+            if (c == '{' || c == '[') {
+                isObject.push(c == '{');
+                objects.push(new HashSet<>());
+            } else if ((c == '}' || c == ']') && !isObject.isEmpty()) {
+                isObject.pop();
+                objects.pop();
+            }
+            i++;
+        }
+        return false;
     }
 
     private Tx jsonOperator(SqlAst.Operator o, Scope scope, String row) {
@@ -3612,8 +3844,10 @@ public final class SqlToPure {
                         + " ('{a,b}') is not supported yet", o.right().pos());
             }
             got = value;
+            boolean constant = isJsonConstant(java.util.Objects.requireNonNull(o.left()));
             for (String key : jsonPath(path)) {
-                got = member(got, key, path.pos());
+                constantIndex(constant, key, path.pos());
+                got = pathElement(got, key, path.pos());
             }
         } else {
             got = navigate(value, o.right(), tx(o.right(), scope, row), o.operator());
@@ -3621,7 +3855,9 @@ public final class SqlToPure {
         return o.operator().endsWith(">>") ? jsonText(got) : got;
     }
 
-    /** {@code base[index]}: jsonb's subscript, a member or an element as {@code ->} reads it. */
+    /** {@code base[index]}: jsonb's subscript, a PATH element (Postgres's jsonb_get_element), not {@code ->}: an
+     *  integer reads an array's element or an object's member named by its digits; a text reads an object's member or,
+     *  if it is an integer's spelling, an array's element. */
     private Tx subscript(SqlAst.Subscript sub, Scope scope, String row) {
         constantNavigation(sub.base(), sub.pos());
         Tx base = tx(sub.base(), scope, row);
@@ -3629,7 +3865,74 @@ public final class SqlToPure {
             throw SqlTranslationException.unsupported("subscripts of values other than jsonb (arrays) are not"
                     + " supported yet", sub.pos());
         }
-        return navigate(base, sub.index(), tx(sub.index(), scope, row), "[]");
+        SqlAst.Expr index = sub.index();
+        if (index instanceof SqlAst.StringLit k) {
+            return pathElement(base, k.value(), k.pos());
+        }
+        if (index instanceof SqlAst.IntegerLit n) {
+            if (n.value().bitLength() >= 32) {
+                throw SqlTranslationException.invalid("subscript type bigint is not supported", n.pos());
+            }
+            return pathElement(base, n.value().toString(), n.pos());
+        }
+        Tx key = tx(index, scope, row);
+        if (key.kind() == Kind.INTEGER) {
+            // an array's element, else an object's member named by the integer's digits
+            Tx got = strict(Kind.JSON, List.of(key), k -> call("coalesce", call("get", base.vs(), k.get(0)),
+                    call("get", base.vs(), call("toString", k.get(0)))));
+            return Tx.value(got.vs(), Kind.JSON, true);
+        }
+        if (key.kind() == Kind.STRING) {
+            throw SqlTranslationException.unsupported("a subscript text other than a constant is not supported yet",
+                    index.pos());
+        }
+        if (key.kind() == Kind.NULL || key.kind() == Kind.OTHER) {
+            throw SqlTranslationException.unsupported("a jsonb subscript of this type is not supported yet",
+                    index.pos());
+        }
+        throw SqlTranslationException.invalid("subscript type " + postgresName(key.kind()) + " is not supported",
+                index.pos());
+    }
+
+    /** One element of a jsonb path ({@code #>}, a subscript, {@code jsonb_extract_path}), as Postgres reads it:
+     *  an object's member named by the text; an array's element if the text is an integer's spelling (strtol's:
+     *  leading white space, a sign, digits, nothing after, within int4), else none; a scalar's, none. */
+    private static Tx pathElement(Tx value, String element, SqlAst.Pos pos) {
+        Integer index = pathIndex(element);
+        Tx member = member(value, element, pos);
+        if (index == null) {
+            return member;
+        }
+        // an object has no element and an array no member: whichever the value is, one of the two reads it
+        return Tx.value(call("coalesce", member.vs(), call("get", value.vs(), integer(java.math.BigInteger.valueOf(
+                index)))), Kind.JSON, true);
+    }
+
+    /** A path element that spells an integer, read out of a jsonb CONSTANT, is refused: whichever of an element or a
+     *  member it reads is chosen in the database, and legend-lite's Postgres lowering folds a literal Variant's
+     *  navigation (constantNavigation's reason). */
+    private static void constantIndex(boolean constant, String element, SqlAst.Pos pos) {
+        if (constant && pathIndex(element) != null) {
+            throw SqlTranslationException.unsupported("a path element that spells an integer, read out of a jsonb"
+                    + " constant, is not supported yet", pos);
+        }
+    }
+
+    /** The array index a path element's text spells, as Postgres's strtoint reads it, or null. */
+    private static @com.legend.base.Nullable Integer pathIndex(String text) {
+        int i = 0;
+        while (i < text.length() && " \t\n\u000b\f\r".indexOf(text.charAt(i)) >= 0) {
+            i++;
+        }
+        String number = text.substring(i);
+        if (!isIntegerText(number)) {
+            return null;
+        }
+        try {
+            return Integer.parseInt(number.startsWith("+") ? number.substring(1) : number);
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     /** A jsonb value read out of a jsonb CONSTANT is refused: legend-lite's Postgres lowering folds the navigation of a
@@ -3650,6 +3953,8 @@ public final class SqlToPure {
             case SqlAst.Operator o -> o.left() != null && (o.operator().equals("->") || o.operator().equals("#>"))
                     && isJsonConstant(java.util.Objects.requireNonNull(o.left()));
             case SqlAst.Subscript sub -> isJsonConstant(sub.base());
+            // an untyped constant where jsonb is read (a function's argument) is a jsonb constant
+            case SqlAst.StringLit l -> true;
             default -> false;
         };
     }
@@ -3680,6 +3985,10 @@ public final class SqlToPure {
     /** {@code value -> key}: a constant key's member (an object's, else NULL), or an integer's element (an array's,
      *  from 0; a negative one counts from the end; else NULL). */
     private static Tx navigate(Tx value, SqlAst.Expr keyExpr, Tx key, String operator) {
+        if (keyExpr instanceof SqlAst.IntegerLit n && n.value().bitLength() >= 32) {
+            throw SqlTranslationException.invalid("operator does not exist: jsonb " + operator + " bigint",
+                    keyExpr.pos());
+        }
         if (key.kind() == Kind.INTEGER) {
             Tx got = strict(Kind.JSON, List.of(key), k -> call("get", value.vs(), k.get(0)));
             return Tx.value(got.vs(), Kind.JSON, true);
@@ -3761,11 +4070,6 @@ public final class SqlToPure {
                     throw SqlTranslationException.unsupported("an empty or NULL path element is not supported yet",
                             lit.pos());
                 }
-                if (isIntegerText(bare)) {
-                    throw SqlTranslationException.unsupported("a path element that is a number (" + bare + ") reads"
-                            + " an array's element or an object's member by the value it meets; it is not supported"
-                            + " yet", lit.pos());
-                }
                 key.append(bare);
             }
             keys.add(key.toString());
@@ -3803,18 +4107,17 @@ public final class SqlToPure {
         if (!text) {
             constantNavigation(f.args().get(0), f.pos());
         }
-        Tx got = jsonOperand(args.get(0), functionName(f.name().get(0)), f.pos());
+        // an untyped constant is read as the function's json argument
+        Tx got = f.args().get(0) instanceof SqlAst.StringLit lit ? jsonConstant(lit)
+                : jsonOperand(args.get(0), functionName(f.name().get(0)), f.pos());
+        boolean constant = isJsonConstant(f.args().get(0));
         for (int i = 1; i < args.size(); i++) {
             if (!(f.args().get(i) instanceof SqlAst.StringLit key)) {
                 throw SqlTranslationException.unsupported("a path key other than a constant is not supported yet",
                         f.args().get(i).pos());
             }
-            if (isIntegerText(key.value())) {
-                throw SqlTranslationException.unsupported("a path key that is a number (" + key.value() + ") reads"
-                        + " an array's element or an object's member by the value it meets; it is not supported yet",
-                        key.pos());
-            }
-            got = member(got, key.value(), key.pos());
+            constantIndex(constant, key.value(), key.pos());
+            got = pathElement(got, key.value(), key.pos());
         }
         return text ? jsonText(got) : got;
     }
@@ -3822,6 +4125,10 @@ public final class SqlToPure {
     /** {@code to_jsonb(x)}: a text, number or boolean as jsonb's string, number or boolean. */
     private static Tx toJson(SqlAst.FunctionCall f, List<Tx> args) {
         arity(f, args, 1);
+        if (f.args().get(0) instanceof SqlAst.StringLit) {
+            throw SqlTranslationException.invalid("could not determine polymorphic type because input has type"
+                    + " unknown", f.pos());
+        }
         Kind k = args.get(0).kind();
         if (k == Kind.JSON) {
             return args.get(0);

@@ -338,16 +338,49 @@ class SqlToPureTest {
                 + " k:r|$r.j->get('k')])->select(~[p, t, k])", pure("select j #> '{a,\"b c\"}' as p, j #>> '{a}' as t, j['k'] as k from tb('s::DB.T')",
                 JSON_COLUMNS));
         assertEquals("#>{s::DB.T}#->extend(~[v:r|fromJson('{\"a\":1}')->get('a')"
-                + "->to(@String), s:r|fromJson('\"x\"')])->select(~[v, s])", pure("select '{\"a\":1}'::jsonb ->> 'a' as v, to_jsonb('x') as s from tb('s::DB.T')",
+                + "->to(@String), s:r|fromJson('\"x\"')])->select(~[v, s])", pure("select '{\"a\":1}'::jsonb ->> 'a' as v, to_jsonb('x'::text) as s from tb('s::DB.T')",
                 JSON_COLUMNS));
+    }
+
+    @Test
+    void subscriptsAndPathsReadAnElementOrAMemberByJsonbsPathRule() {
+        assertEquals("#>{s::DB.T}#->extend(~[e:r|$r.j->get('0')->coalesce($r.j->get(0)), f:r|$r.j->get('1')"
+                + "->coalesce($r.j->get(1)), k:r|$r.j->get('k'), p:r|$r.j->get('a')->get(' 2')->coalesce($r.j->get('a')"
+                + "->get(2)), x:r|$r.j->get('-1')->coalesce($r.j->get(-1))])->select(~[e, f, k, p, x])",
+                pure("select j[0] as e, j['1'] as f, j['k'] as k, j #> '{a,\" 2\"}' as p,"
+                + " jsonb_extract_path(j, '-1') as x from tb('s::DB.T')", JSON_COLUMNS));
+    }
+
+    @Test
+    void caseAndCoalesceResolveOneTypeAsPostgresDoes() {
+        assertEquals("#>{s::DB.T}#->extend(~[c:r|$r.ID->coalesce(5), d:r|if($r.ID > 1, |1, |2.5D),"
+                + " e:r|$r.j->coalesce(fromJson('[]'))])->select(~[c, d, e])", pure("select coalesce(ID, '5') as c, case when ID > 1 then 1 else 2.5 end as d,"
+                + " coalesce(j, '[]') as e from tb('s::DB.T')", JSON_COLUMNS));
+        assertEquals("the string 'x' read as integer is not supported yet", refusal("select coalesce(ID, 'x') from"
+                + " tb('s::DB.T')", JSON_COLUMNS).getMessage());
+        assertEquals("CASE types integer and text cannot be matched", refusal("select case when ID > 1 then ID else"
+                + " 'a'::text end from tb('s::DB.T')", JSON_COLUMNS).getMessage());
     }
 
     @Test
     void jsonbFormsWithoutAFaithfulPureSpellingAreRefusedByName() {
         assertEquals("ORDER BY of a jsonb value is not supported yet (jsonb orders and compares by its own rules)",
                 refusal("select ID from tb('s::DB.T') order by j", JSON_COLUMNS).getMessage());
-        assertEquals("a path element that is a number (0) reads an array's element or an object's member by the value"
-                + " it meets; it is not supported yet", refusal("select j #> '{0}' from tb('s::DB.T')", JSON_COLUMNS).getMessage());
+        assertEquals("a jsonb constant with a duplicate key is not supported yet",
+                refusal("select '{\"a\":1,\"a\":2}'::jsonb ->> 'a' from tb('s::DB.T')", JSON_COLUMNS).getMessage());
+        assertEquals("ORDER BY of a jsonb value is not supported yet (jsonb orders and compares by its own rules)",
+                refusal("select j from tb('s::DB.T') union all select j from tb('s::DB.T') order by 1", JSON_COLUMNS)
+                        .getMessage());
+        assertEquals("JOIN/USING of a jsonb value is not supported yet (jsonb orders and compares by its own rules)",
+                refusal("select ID from tb('s::DB.T') a join tb('s::DB.T') b using (j)", JSON_COLUMNS).getMessage());
+        assertEquals("operator does not exist: jsonb -> bigint",
+                refusal("select j -> 3000000000 from tb('s::DB.T')", JSON_COLUMNS).getMessage());
+        assertEquals("subscript type numeric is not supported",
+                refusal("select j[1.5] from tb('s::DB.T')", JSON_COLUMNS).getMessage());
+        assertEquals("COALESCE types jsonb and text cannot be matched",
+                refusal("select coalesce(j, 'x'::text) from tb('s::DB.T')", JSON_COLUMNS).getMessage());
+        assertEquals("could not determine polymorphic type because input has type unknown",
+                refusal("select to_jsonb('x') from tb('s::DB.T')", JSON_COLUMNS).getMessage());
         assertEquals("reading a jsonb value out of a jsonb constant is not supported yet (its text, with ->> or #>>,"
                 + " is)", refusal("select '{\"a\":1}'::jsonb -> 'a' from tb('s::DB.T')", JSON_COLUMNS).getMessage());
         assertEquals("jsonb_array_length(...) is not supported yet",
@@ -373,10 +406,15 @@ class SqlToPureTest {
 
     @Test
     void jsonbSetReturningFunctionsAreToManyAndKeysAndTheSelectListFormIsALateral() {
-        assertEquals("#>{s::DB.T}#->lateral(r|$r.j->toMany(@meta::pure::metamodel::variant::Variant)->flatten(~value))->extend(~[x:r|$r.value->get('x')->to(@String)])->select(~[ID, x])",
+        assertEquals("#>{s::DB.T}#->lateral(r|if($r.j->isNotEmpty() && $r.j->to(@String)->isEmpty(), |fromJson('0'),"
+                + " |$r.j)->toMany(@meta::pure::metamodel::variant::Variant)->flatten(~value))->extend(~[x:r|$r.value"
+                + "->get('x')->to(@String)])->select(~[ID, x])",
                 pure("select ID, e ->> 'x' as x from tb('s::DB.T') t, jsonb_array_elements(t.j) e",
                 JSON_COLUMNS));
-        assertEquals("#>{s::DB.T}#->lateral(r|if($r.j->isEmpty(), |[], |$r.j->to(@meta::pure::functions::collection::Map<String, meta::pure::metamodel::variant::Variant>)->toOne()->keys())->flatten(~_sql_set)->rename(~_sql_set, ~k))->select(~[ID, k])",
+        assertEquals("#>{s::DB.T}#->lateral(r|if($r.j->isEmpty(), |[], |if($r.j->isNotEmpty() && $r.j->to(@String)"
+                + "->isEmpty(), |fromJson('0'), |$r.j)->to(@meta::pure::functions::collection::Map<String,"
+                + " meta::pure::metamodel::variant::Variant>)->toOne()->keys())->flatten(~_sql_set)->rename(~_sql_set,"
+                + " ~_sql_value))->extend(~[k:r|$r._sql_value])->select(~[ID, k])",
                 pure("select ID, jsonb_object_keys(j) as k from tb('s::DB.T')", JSON_COLUMNS));
         assertEquals("a set-returning function inside an expression is not supported yet",
                 refusal("select jsonb_array_elements(j) ->> 'x' from tb('s::DB.T')", JSON_COLUMNS).getMessage());

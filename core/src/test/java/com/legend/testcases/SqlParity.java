@@ -613,7 +613,7 @@ public final class SqlParity {
     private static final double RELATIVE_EPSILON = 1e-6;
 
     /** {@code ResultComparator.cellEquals}, as upstream wrote it. */
-    private static boolean cellEquals(@com.legend.base.Nullable Object expected, @com.legend.base.Nullable Object actual) {
+    public static boolean cellEquals(@com.legend.base.Nullable Object expected, @com.legend.base.Nullable Object actual) {
         if (expected == null || actual == null) {
             return expected == actual;
         }
@@ -644,16 +644,35 @@ public final class SqlParity {
             return expected.equals(actual);
         }
         // the text of a JSON object or array (->> of one, register S49): the same JSON, in DuckDB's compact spelling or
-        // jsonb's (a space after each ',' and ':')
+        // jsonb's. Only where Postgres's text IS jsonb's spelling of its value (a space after each ',' and ':', keys in
+        // jsonb's order): any other text is compared as text
         if (expected instanceof String es && actual instanceof String as && jsonContainerText(es)
                 && jsonContainerText(as)) {
             try {
-                return JsonValue.of(es).equals(JsonValue.of(as));
+                return jsonbSpelling(Json.parse(es)).equals(es) ? JsonValue.of(es).equals(JsonValue.of(as))
+                        : es.equals(as);
             } catch (RuntimeException notJson) {
                 return es.equals(as);
             }
         }
         return expected.toString().equals(actual.toString());
+    }
+
+    /** jsonb's text of a JSON value: {@code ", "} and {@code ": "} between items, an object's keys shorter first, then
+     *  by their bytes (jsonb's order), numbers as spelled. */
+    static String jsonbSpelling(Json.Node n) {
+        return switch (n) {
+            case Json.Obj o -> {
+                List<String> keys = new ArrayList<>(o.fields().keySet());
+                keys.sort(java.util.Comparator.comparingInt((String k) -> k.getBytes(StandardCharsets.UTF_8).length)
+                        .thenComparing(k -> new String(k.getBytes(StandardCharsets.UTF_8), StandardCharsets.ISO_8859_1)));
+                yield "{" + String.join(", ", keys.stream().map(k -> Json.toCompact(k) + ": "
+                        + jsonbSpelling(o.fields().get(k))).toList()) + "}";
+            }
+            case Json.Arr a -> "[" + String.join(", ", a.items().stream().map(SqlParity::jsonbSpelling).toList()) + "]";
+            case Json.Num num -> num.token() != null ? num.token() : Json.toCompact(num);
+            default -> Json.toCompact(n);
+        };
     }
 
     /** {@code ResultMatrix.sorted}: rows ordered by every column, nulls first, numbers by value, the rest as text. */

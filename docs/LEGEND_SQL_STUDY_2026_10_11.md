@@ -991,9 +991,13 @@ Variant column cannot be both. `jsonb` is the one whose meaning is Pure's: keys 
 operators and functions read a Variant as `jsonb`'s do.
 
 **What reads now:**
-- **Navigation:** `->` and subscripts are `get` (a constant key's member; an integer's element from 0, negative from the
-  end; past either end NULL); `->>` is its text (`to(@String)`: a string's own characters, NULL for jsonb's null);
-  `#>` and `#>>` walk a constant `text[]` path; `json(b)_extract_path(_text)` the same.
+- **Navigation:** `->` is `get` (a constant key's member; an integer's element from 0, negative from the end; past
+  either end NULL); `->>` is its text (`to(@String)`: a string's own characters, NULL for jsonb's null).
+- **Paths and subscripts** read by jsonb's PATH rule (Postgres's `jsonb_get_element`), not `->`'s: a text names an
+  object's member, or, where it spells an integer (strtol's way: leading white space, a sign), an array's element; an
+  integer subscript reads an array's element or an object's member named by its digits. `#>`, `#>>`,
+  `json(b)_extract_path(_text)` and `x[...]` read each element as `coalesce(member, element)`: an object has no
+  element and an array no member, so whichever the value is, one of the two reads it.
 - **Constants and casts:** `'...'::jsonb`, `jsonb '...'` and `text::jsonb` parse with `fromJson`; `to_jsonb` of text,
   numbers and booleans is `toVariant`.
 - **Set-returning functions,** in FROM, after a LATERAL, or as a whole select-list item:
@@ -1006,14 +1010,16 @@ operators and functions read a Variant as `jsonb`'s do.
 
 **The judge.** A `json` or `jsonb` cell is its JSON value: keys unordered, numbers by value. A JSON value equals only a
 JSON value (a `jsonb` 42 is not the integer 42). The text of an object or array (`->>` of one) compares as JSON: the
-same JSON, written compactly on DuckDB and with `jsonb`'s spaces on Postgres (register S49).
+same JSON, written compactly on DuckDB and with `jsonb`'s spaces on Postgres (register S49). Only where Postgres's
+text is exactly jsonb's spelling of its value (`", "`, `": "`, keys shorter first): any other text compares as text.
 
 **Refused by name, each where lite would answer otherwise than Postgres:**
 - `jsonb`'s own order and equality: a `jsonb` value as a sort, group, DISTINCT, set-operation or window key, or
   compared.
-- A `jsonb` value read out of a `jsonb` constant (`->`, `#>`, subscripts, `jsonb_array_elements`): see finding 1.
-- A path element that is a number (an array's index or an object's key, by the value it meets); a key starting with
-  `$` or `/` (finding 3); a member key that is not a constant.
+- A `jsonb` value read out of a `jsonb` constant (`->`, `#>`, subscripts, `jsonb_array_elements`), and a path element
+  that spells an integer read out of one even as text: see finding 3.
+- A key starting with `$` or `/` (finding 4); a member key or a subscript text that is not a constant; a `jsonb`
+  constant with a duplicate key (jsonb keeps the last, DuckDB reads the first).
 - `json(b)_array_length`, `json_each`, `jsonb`'s `-`, `||`, `@>`, `?` and the rest of its operators; `LEFT JOIN
   LATERAL`; `WITH ORDINALITY`; an array element that may be NULL (a Pure collection holds none); a subquery without
   FROM (finding 6).
@@ -1037,11 +1043,35 @@ same JSON, written compactly on DuckDB and with `jsonb`'s spaces on Postgres (re
 6. **Open: `toVariant` of a string constant on Postgres** is `to_jsonb('...')`, whose type Postgres cannot resolve.
 7. **Open: a lateral over a correlated one-row relation** (a subquery without FROM reading the enclosing row) does not
    lower.
+8. **Open: a JSON number on DuckDB is a double.** Every DuckDB extraction re-serializes it (yyjson reads a number as a
+   double): `->>` of `1.50` is `1.5`, of `1e2` is `100.0`, of `12345678901234567.89` is `12345678901234568.0`, where
+   Postgres's jsonb keeps numeric's spelling and digits (`1.50`, `100`). The text of a non-integer JSON number, and a
+   number beyond a double's 17 digits, differ on DuckDB. Neither the corpus nor its data holds one; no Pure spelling
+   recovers the token. For the user to decide: register it, or refuse `->>` where it may meet such a number.
+9. **Residue, not refused:** a `bigint` column as an index (`j -> big_col`) is Postgres's error ("operator does not
+   exist: jsonb -> bigint") and lite's answer (a model column's SQL width is not known to the translator); a duplicate
+   key in a column's JSON text (jsonb keeps the last, DuckDB reads the first).
 
-**The ledger after this step,** identical in both lanes:
+**The independent review (2026-10-12)** of the step found these, each fixed and pinned by a case in `lite/json.yaml`,
+`lite/lateral.yaml` or `lite/functions.yaml`:
+- subscripts and quoted path elements read as `->` (Postgres reads them by the path rule above);
+- jsonb's null given to `jsonb_array_elements(_text)` or `jsonb_object_keys` gave no rows: Postgres's error ("cannot
+  extract elements from a scalar"). It is now read as another scalar, so that Pure's `toMany` and `to(@Map)` raise;
+- a set operation's ORDER BY and `JOIN ... USING` took a jsonb key;
+- CASE and COALESCE (and GREATEST, LEAST) never resolved one type: an untyped constant now takes the others' type, read
+  by its input rules (`coalesce(j -> 'tags', '[]')` is jsonb; `coalesce(age, '0')` an integer), numbers widen, and
+  text with a number is Postgres's error ("COALESCE types integer and text cannot be matched");
+- a function's alias was no value inside a subquery: a name is now a column at any level first, then a FROM item's
+  (Postgres's order);
+- a select list's set-returning function ran before WHERE, its alias was a column WHERE could read, and `*` listed it:
+  it is now a lateral step after WHERE, its column one no query can name;
+- `to_jsonb('x')` (an untyped constant: Postgres's error), a bigint index (`j -> 3000000000`), a `generate_series` step
+  beyond bigint (crashed the translator).
+
+**The ledger after this step and its review,** identical in both lanes:
 - upstream's 1,703 cases: PASS 1,016 (951 before), REFUSED 558, BOTH_ERROR 61, SKIP 68. Upstream legend-engine passes
   1,026 of them, with 36 wrong answers and 61 accepted invalid queries;
-- legend-lite's own 244 (177 before; `lite/json.yaml` 41, `lite/lateral.yaml` 26): PASS 192, REFUSED 30, BOTH_ERROR 22;
+- legend-lite's own 269 (177 before; `lite/json.yaml` 56, `lite/lateral.yaml` 30): PASS 205, REFUSED 34, BOTH_ERROR 30;
 - 0 FAIL, 0 BUG, 0 ERROR.
 
 ## 10. Sources

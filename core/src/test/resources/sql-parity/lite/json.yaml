@@ -41,7 +41,7 @@ tests:
     sql: "SELECT '{\"a b\":{\"c,d\":1}}'::jsonb #>> '{\"a b\",\"c,d\"}' AS v FROM departments WHERE id = 1"
   - id: empty_path_is_the_value
     sql: "SELECT id, jsonb_arr #> '{}' AS whole FROM json_data WHERE id = 1"
-  - id: path_with_an_index_is_refused
+  - id: path_with_an_index_reads_the_element
     sql: "SELECT id, jsonb_arr #> '{0}' AS v FROM json_data WHERE id = 1"
   # subscripts
   - id: subscripts
@@ -93,3 +93,38 @@ tests:
     sql: "SELECT k FROM json_data d, jsonb_object_keys(d.jsonb_arr) AS k WHERE d.id = 1"
   - id: elements_inside_an_expression_is_refused
     sql: "SELECT jsonb_array_elements(jsonb_arr) ->> 'x' AS x FROM json_data"
+  # a subscript and a #> path read by jsonb's PATH rule (jsonb_get_element), not ->'s: a text that spells an integer
+  # reads an array's element, an integer an object's member named by its digits (the independent review, 2026-10-12)
+  - id: subscript_text_that_spells_an_integer_reads_an_element
+    sql: "SELECT id, jsonb_arr['1'] AS a, jsonb_arr[' 1'] AS b, jsonb_arr['+1'] AS c, jsonb_arr['1 '] AS d, jsonb_arr['x'] AS e FROM json_data ORDER BY id"
+  - id: subscript_integer_on_an_object_reads_the_member_of_its_digits
+    sql: "SELECT id, jsonb_val[0] AS a, jsonb_arr[-1] AS b FROM json_data ORDER BY id"
+  - id: path_elements_that_spell_integers_read_elements
+    sql: "SELECT id, jsonb_arr #> '{\"1\"}' AS a, jsonb_arr #>> '{-1}' AS b, jsonb_extract_path(jsonb_arr, ' 1') AS c, jsonb_val #> '{a,b}' AS d FROM json_data ORDER BY id"
+  - id: path_integer_element_out_of_a_constant_is_refused
+    sql: "SELECT '{\"0\":\"zero\",\"1\":[5,6]}'::jsonb #>> '{1,0}' AS a FROM departments WHERE id = 1"
+  - id: duplicate_key_constant_is_refused
+    sql: "SELECT '{\"a\":1,\"a\":2}'::jsonb ->> 'a' AS a FROM departments WHERE id = 1"
+  # jsonb's null is a scalar to the set-returning functions: Postgres's error; SQL's NULL is no rows
+  - id: elements_of_jsonb_null_is_an_error
+    sql: "SELECT e FROM json_data d, jsonb_array_elements(d.jsonb_val -> 'c') e WHERE d.id = 1"
+  - id: elements_text_of_jsonb_null_is_an_error
+    sql: "SELECT e FROM json_data d, jsonb_array_elements_text(d.jsonb_val -> 'c') e WHERE d.id = 1"
+  - id: object_keys_of_jsonb_null_is_an_error
+    sql: "SELECT k FROM json_data d, jsonb_object_keys(d.jsonb_val -> 'c') k WHERE d.id = 1"
+  - id: elements_of_sql_null_is_no_rows
+    sql: "SELECT d.id, e FROM json_data d, jsonb_array_elements(d.jsonb_arr) e WHERE d.id = 5"
+  # a function's alias is its value inside a subquery too
+  - id: function_alias_inside_exists
+    sql: "SELECT id FROM json_data d WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(d.jsonb_arr) e WHERE e ->> 'x' = '2') ORDER BY id"
+  # COALESCE and CASE resolve jsonb with an untyped constant (read as jsonb) and refuse it with text
+  - id: coalesce_of_jsonb_and_an_untyped_constant
+    sql: "SELECT id, coalesce(jsonb_val -> 'a', '[]') AS a FROM json_data ORDER BY id"
+  - id: coalesce_of_jsonb_and_text_is_an_error
+    sql: "SELECT coalesce(jsonb_val, 'x'::text) AS a FROM json_data"
+  - id: union_ordered_by_jsonb_is_refused
+    sql: "SELECT jsonb_val -> 'a' AS a FROM json_data UNION ALL SELECT jsonb_val -> 'a' FROM json_data ORDER BY 1"
+  - id: join_using_jsonb_is_refused
+    sql: "SELECT a.id FROM json_data a JOIN json_data b USING (jsonb_val) ORDER BY 1"
+  - id: to_jsonb_of_an_untyped_constant_is_an_error
+    sql: "SELECT to_jsonb('x') AS a FROM departments WHERE id = 1"
