@@ -41,6 +41,30 @@ session that runs as root (a cloud container) runs a Postgres test as an unprivi
 (any existing non-root user). The wrapper hands the test's own directories to the user and drops root with `setpriv`.
 Measured: all five Postgres suites green as `ubuntu`. CI runs as a non-root user and needs none of this.
 
+**`//gates:local` in a root container behind a TLS-intercepting proxy** (2026-10-12, measured at 5b05af7 in a
+Claude Code cloud container). Three things differ from CI, and each has its own remedy:
+
+1. *Postgres refuses root*: the recipe above, over the whole gate (every test then runs as `ubuntu`). With it alone,
+   334 of 347 tests passed; the 13 that failed were all DataCube, Query and site tests over DuckDB-WASM or the pinned
+   Chromium, not one of them a Postgres test.
+2. *The proxy re-signs TLS, and a Bazel test inherits none of the variables that trust it.* DuckDB-WASM downloads its
+   `json` and `parquet` extensions from `extensions.duckdb.org` when a test first reads JSON or Parquet. In Node it
+   fetches them on a worker thread and waits on an `Atomics` flag that only a successful fetch sets. Without
+   `NODE_EXTRA_CA_CERTS`, Node 22 refuses the proxy's certificate (`SELF_SIGNED_CERT_IN_CHAIN`, measured with the
+   toolchain's node). The flag is never set, so the test hangs until its TIMEOUT. Chromium reads its trust store from
+   `$HOME/.pki/nssdb`, and a test's `HOME` is its `TEST_TMPDIR`, which has none. Pass the bundle and a home whose NSS
+   store trusts the proxy's CA (made once with `certutil -A -t "C,," ...` as that user):
+   `--test_env=NODE_EXTRA_CA_CERTS=/root/.ccr/ca-bundle.crt --test_env=HOME=/home/ubuntu`. With these, 11 of the 13
+   passed.
+3. *Two tests write into their working directory*, the runfiles tree, which root owns: `//datacube:upload_test` and
+   `//engine-client:model_data_test` (DuckDB-WASM's `COPY ... TO 'nested.json'`, `'tmp_made.parquet'`). As `ubuntu`
+   they fail with `EACCES`. Run those two as root, without `--run_under`, with item 2's
+   `NODE_EXTRA_CA_CERTS`: both passed.
+
+So all 347 tests passed in this container. The two hazards are the tests' own: an extension fetched from the
+network at run time, and a scratch file written outside `TEST_TMPDIR`. CI doesn't see them because it has direct
+internet and owns its runfiles tree.
+
 Beside the gates, in `bazel test //...`:
 
 - **Generated files** — `//:generated` (CI's checks lane), that is `//core:update_generated_*_test`,
