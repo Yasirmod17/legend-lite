@@ -41,10 +41,10 @@ class PostgresDialectTest {
     @Test
     void identifiersAreQuotedAndSortsSpellTheirNulls() {
         assertEquals("""
-                SELECT "t0".id AS "id", "t0".sym AS "sym", "t0".px AS "px"
-                FROM trades AS "t0"
-                WHERE ("t0".qty IS NOT NULL AND "t0".qty > 10)
-                ORDER BY "t0".id DESC NULLS FIRST
+                SELECT "t0"."id" AS "id", "t0"."sym" AS "sym", "t0"."px" AS "px"
+                FROM "trades" AS "t0"
+                WHERE ("t0"."qty" IS NOT NULL AND "t0"."qty" > 10)
+                ORDER BY "t0"."id" DESC NULLS FIRST
                 LIMIT 5""", plan("->filter(r|$r.qty > 10)->select(~[id, sym, px])"
                 + "->sort(~id->descending())->limit(5)"));
     }
@@ -54,10 +54,10 @@ class PostgresDialectTest {
         // avg(int) is numeric on Postgres: cast to the platform's DOUBLE; median and
         // mode are ordered-set aggregates
         assertEquals("""
-                SELECT "t0".sym AS "sym", COUNT("t0".id) AS "n", CAST(AVG(1.0 * "t0".qty) AS DOUBLE PRECISION) AS "a", \
-                percentile_cont(0.5) WITHIN GROUP (ORDER BY "t0".f8) AS "med", mode() WITHIN GROUP (ORDER BY "t0".qty) AS "md"
-                FROM trades AS "t0"
-                GROUP BY "t0".sym\
+                SELECT "t0"."sym" AS "sym", COUNT("t0"."id") AS "n", CAST(AVG(1.0 * "t0"."qty") AS DOUBLE PRECISION) AS "a", \
+                percentile_cont(0.5) WITHIN GROUP (ORDER BY "t0"."f8") AS "med", mode() WITHIN GROUP (ORDER BY "t0"."qty") AS "md"
+                FROM "trades" AS "t0"
+                GROUP BY "t0"."sym"\
                 """, plan("->groupBy(~[sym], ~[n: r|$r.id : y|$y->count(),"
                 + " a: r|$r.qty : y|$y->average(), med: r|$r.f8 : y|$y->median(),"
                 + " md: r|$r.qty : y|$y->mode()])"));
@@ -68,8 +68,8 @@ class PostgresDialectTest {
         // DataCube's "the group's one value" over a boolean column: Postgres has no
         // max(boolean) (found driving DataCube against Postgres, 2026-10-02)
         String sql = plan("->groupBy(~[sym], ~[u: r|$r.ok : y|$y->uniqueValueOnly()])");
-        assertTrue(sql.contains("bool_or(\"t0\".ok)"), sql);
-        assertFalse(sql.contains("MAX(\"t0\".ok)"), sql);
+        assertTrue(sql.contains("bool_or(\"t0\".\"ok\")"), sql);
+        assertFalse(sql.contains("MAX(\"t0\".\"ok\")"), sql);
     }
 
     @Test
@@ -78,7 +78,7 @@ class PostgresDialectTest {
         // max(jsonb), though jsonb is ordered (found driving DataCube Live on Postgres, 2026-10-02)
         String model = MODEL.replace("f8 DOUBLE)", "f8 DOUBLE, doc SEMISTRUCTURED)");
         String sql = Compiler.query(Compiler.compileModel(model), "#>{pg::DB.trades}#->groupBy(~[sym], ~[u: r|$r.doc : y|$y->uniqueValueOnly()])").plan("pg::RT").sql();
-        assertTrue(sql.contains("(array_agg(CAST(\"t0\".doc AS JSONB) ORDER BY CAST(\"t0\".doc AS JSONB) DESC NULLS LAST))[1]"), sql);
+        assertTrue(sql.contains("(array_agg(CAST(\"t0\".\"doc\" AS JSONB) ORDER BY CAST(\"t0\".\"doc\" AS JSONB) DESC NULLS LAST))[1]"), sql);
         assertFalse(sql.contains("MAX(CAST("), sql);
     }
 
@@ -88,13 +88,13 @@ class PostgresDialectTest {
         // non-integer constant in GROUP BY and reads an integer as a position (found driving
         // DataCube Live on Postgres, 2026-10-02)
         assertEquals("""
-                SELECT '[ROOT]' AS "root", COUNT("t0".id) AS "n"
-                FROM trades AS "t0"
+                SELECT '[ROOT]' AS "root", COUNT("t0"."id") AS "n"
+                FROM "trades" AS "t0"
                 GROUP BY CAST('[ROOT]' AS VARCHAR)""", plan("->extend(~root: r|'[ROOT]')->groupBy(~[root], ~[n: r|$r.id : y|$y->count()])"));
         // a bare 7 would be "the seventh output"
         assertEquals("""
-                SELECT 7 AS "k", COUNT("t0".id) AS "n"
-                FROM trades AS "t0"
+                SELECT 7 AS "k", COUNT("t0"."id") AS "n"
+                FROM "trades" AS "t0"
                 GROUP BY CAST(7 AS BIGINT)""", plan("->extend(~k: r|7)->groupBy(~[k], ~[n: r|$r.id : y|$y->count()])"));
         // ORDER BY reads a constant the same way (no Pure query of today sorts on one, so
         // the plan is built by hand)
@@ -117,8 +117,8 @@ class PostgresDialectTest {
         assertEquals("""
                 SELECT "qualify_src"."sym" AS "sym", "qualify_src"."id" AS "id"
                 FROM (
-                  SELECT "t0".sym AS "sym", "t0".id AS "id", ROW_NUMBER() OVER (PARTITION BY "t0".sym ORDER BY "t0".id DESC NULLS FIRST) AS "__qualify0"
-                  FROM trades AS "t0"
+                  SELECT "t0"."sym" AS "sym", "t0"."id" AS "id", ROW_NUMBER() OVER (PARTITION BY "t0"."sym" ORDER BY "t0"."id" DESC NULLS FIRST) AS "__qualify0"
+                  FROM "trades" AS "t0"
                 ) AS "qualify_src"
                 WHERE "qualify_src"."__qualify0" = 1
                 ORDER BY "qualify_src"."sym" NULLS LAST
@@ -127,8 +127,8 @@ class PostgresDialectTest {
         assertEquals("""
                 SELECT *
                 FROM (
-                  SELECT "t0".id AS "id", "t0".sym AS "sym", ROW_NUMBER() OVER (PARTITION BY "t0".sym ORDER BY "t0".id NULLS LAST) AS "rn"
-                  FROM trades AS "t0"
+                  SELECT "t0"."id" AS "id", "t0"."sym" AS "sym", ROW_NUMBER() OVER (PARTITION BY "t0"."sym" ORDER BY "t0"."id" NULLS LAST) AS "rn"
+                  FROM "trades" AS "t0"
                 ) AS "qualify_src"
                 WHERE "qualify_src"."rn" <= 2
                 ORDER BY "qualify_src"."id" NULLS LAST
@@ -149,12 +149,12 @@ class PostgresDialectTest {
         // argument would otherwise resolve to timestamptz); date arithmetic is amount
         // times a one-unit interval; date_diff counts boundaries, never age()
         assertEquals("""
-                SELECT CAST(date_trunc('month', CAST("t0".d AS TIMESTAMP)) AS DATE) AS "fm", \
-                "t0".ts + -90 * INTERVAL '1 minute' AS "plus", \
-                CAST((extract(year FROM DATE '2026-03-01') - extract(year FROM "t0".d)) * 12 \
-                + (extract(month FROM DATE '2026-03-01') - extract(month FROM "t0".d)) AS BIGINT) AS "mm", \
-                to_char(CAST("t0".d AS TIMESTAMP), 'FMDay') AS "wd"
-                FROM trades AS "t0"\
+                SELECT CAST(date_trunc('month', CAST("t0"."d" AS TIMESTAMP)) AS DATE) AS "fm", \
+                "t0"."ts" + -90 * INTERVAL '1 minute' AS "plus", \
+                CAST((extract(year FROM DATE '2026-03-01') - extract(year FROM "t0"."d")) * 12 \
+                + (extract(month FROM DATE '2026-03-01') - extract(month FROM "t0"."d")) AS BIGINT) AS "mm", \
+                to_char(CAST("t0"."d" AS TIMESTAMP), 'FMDay') AS "wd"
+                FROM "trades" AS "t0"\
                 """, plan("->extend(~[fm: r|$r.d->toOne()->firstDayOfMonth(),"
                 + " plus: r|$r.ts->toOne()->adjust(-90, DurationUnit.MINUTES),"
                 + " mm: r|dateDiff($r.d->toOne(), %2026-03-01, DurationUnit.MONTHS),"
@@ -168,12 +168,12 @@ class PostgresDialectTest {
         // shift is masked to 32 bits); sub-microsecond literal digits truncate (Postgres
         // would ROUND 9999-12-31 23:59:59.999999999 into year 10000)
         assertEquals("""
-                SELECT ("t0".sym ~ '(?p)^(?:S1.*)$') AS "m", (right("t0".sym, length('1')) = '1') AS "ew", \
-                CASE WHEN "t0".qty - 1 = 0 THEN CAST(CAST(CAST(chr(31) || ('Division by zero') || chr(31) AS TIMESTAMPTZ) \
-                AS VARCHAR) AS DOUBLE PRECISION) ELSE (CAST("t0".qty AS DOUBLE PRECISION) / CAST("t0".qty - 1 AS DOUBLE PRECISION)) \
-                END AS "dv", (CAST(CAST("t0".id AS BIGINT) AS BIGINT) << CAST(40 AS INTEGER)) AS "sh"
-                FROM trades AS "t0"
-                WHERE "t0".ts < TIMESTAMP '9999-12-31T23:59:59.999999'""",
+                SELECT ("t0"."sym" ~ '(?p)^(?:S1.*)$') AS "m", (right("t0"."sym", length('1')) = '1') AS "ew", \
+                CASE WHEN "t0"."qty" - 1 = 0 THEN CAST(CAST(CAST(chr(31) || ('Division by zero') || chr(31) AS TIMESTAMPTZ) \
+                AS VARCHAR) AS DOUBLE PRECISION) ELSE (CAST("t0"."qty" AS DOUBLE PRECISION) / CAST("t0"."qty" - 1 AS DOUBLE PRECISION)) \
+                END AS "dv", (CAST(CAST("t0"."id" AS BIGINT) AS BIGINT) << CAST(40 AS INTEGER)) AS "sh"
+                FROM "trades" AS "t0"
+                WHERE "t0"."ts" < TIMESTAMP '9999-12-31T23:59:59.999999'""",
                 plan("->filter(r|$r.ts->toOne() < %9999-12-31T23:59:59.999999999)"
                         + "->extend(~[m: r|$r.sym->toOne()->matches('S1.*'), ew: r|$r.sym->toOne()->endsWith('1'),"
                         + " dv: r|$r.qty->toOne() / ($r.qty->toOne() - 1),"
@@ -195,7 +195,7 @@ class PostgresDialectTest {
         // round(double precision, int) does not exist: a Float to a scale is scaled, rounded half-even
         // (round(double precision) is rint) and scaled back, as DuckDB's ROUND_EVEN(x, s)
         assertTrue(plan("->extend(~[r: r|$r.f8->toOne()->round(2)])->select(~[id, r])").contains(
-                "(round(CAST(\"t0\".f8 AS DOUBLE PRECISION) * power(CAST(10 AS DOUBLE PRECISION), CAST(2 AS INTEGER)))"
+                "(round(CAST(\"t0\".\"f8\" AS DOUBLE PRECISION) * power(CAST(10 AS DOUBLE PRECISION), CAST(2 AS INTEGER)))"
                         + " / power(CAST(10 AS DOUBLE PRECISION), CAST(2 AS INTEGER)))"));
         // a dynamic pivot needs a key-discovery round trip a planner cannot make
         assertThrows(DialectCapability.class, () -> plan("->pivot(~[ok], ~[t: r|$r.qty : y|$y->sum()])"));
@@ -212,8 +212,8 @@ class PostgresDialectTest {
                 SELECT t0.id, CAST(ROUND_EVEN(t0.f8, 0) AS BIGINT) AS r
                 FROM trades AS t0""", duck);
         assertEquals("""
-                SELECT "t0".id AS "id", CAST(round(CAST("t0".f8 AS DOUBLE PRECISION)) AS BIGINT) AS "r"
-                FROM trades AS "t0"\
+                SELECT "t0"."id" AS "id", CAST(round(CAST("t0"."f8" AS DOUBLE PRECISION)) AS BIGINT) AS "r"
+                FROM "trades" AS "t0"\
                 """, plan("->extend(~[r: r|$r.f8->toOne()->round()])->select(~[id, r])"));
     }
 }

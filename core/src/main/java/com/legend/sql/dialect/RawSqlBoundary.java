@@ -192,7 +192,7 @@ public final class RawSqlBoundary {
                 cols.append(", ");
             }
             String name = c.strip();
-            cols.append(name.startsWith("\"") ? name : "\"" + folded(name, target) + "\"");
+            cols.append(name.startsWith("\"") ? name : "\"" + name + "\"");
         }
         return m.group(1) + cols + m.group(3) + out.substring(m.end(3));
     }
@@ -256,7 +256,7 @@ public final class RawSqlBoundary {
             } else {
                 // H2 semantics on the TYPE PART only: FLOAT is an 8-byte
                 // double; BIT is a boolean (DuckDB's BIT is a bitstring)
-                out.append('\"').append(folded(head, target)).append('\"')
+                out.append('\"').append(head).append('\"')
                         .append(mapColumnTypes(col.substring(sp), target));
             }
         }
@@ -278,15 +278,6 @@ public final class RawSqlBoundary {
             // Postgres names the 8-byte double DOUBLE PRECISION, and has no TINYINT (SMALLINT is its smallest)
             case POSTGRES -> TINYINT_KIND.matcher(DOUBLE_KIND.matcher(t).replaceAll("DOUBLE PRECISION"))
                     .replaceAll("SMALLINT");
-        };
-    }
-
-    /** A bare H2 name, quoted for the target: as written where names fold case-insensitively (DuckDB), in lower case
-     *  for Postgres (which folds a bare name so, and spells a store's bare names so: Postgres.physicalName). */
-    private static String folded(String bare, Target target) {
-        return switch (target) {
-            case DUCKDB -> bare;
-            case POSTGRES -> bare.toLowerCase(java.util.Locale.ROOT);
         };
     }
 

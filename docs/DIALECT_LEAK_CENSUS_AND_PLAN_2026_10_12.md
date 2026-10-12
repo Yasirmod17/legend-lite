@@ -369,6 +369,7 @@ work (tasks #29 and #30), rather than only delaying it.
 | **D5** | TypeScript apps: must every SQL go through the planner? | No for tab-only DuckDB setup. Yes for anything that can reach a server engine. |
 | **D6** | Delete the dead trees? | Yes. The evidence they produced (results files, notes) stays in `docs/`. |
 | **D7** | Land phase by phase on the branch, each green, then pause for review after P1 (the most visible restructuring)? | Yes. |
+| **D8** | Which case does a store's bare name have on Postgres? The engine emits it unquoted, so Postgres folds it to lower case; the corpus's setup text assumes that. Main's `#SQL{...}#` Postgres fixture and DataCube's `infer.test.ts` assume the opposite: the name is kept as declared and quoted. Folding was tried and reverted on 2026-10-12 (neema2/legend-lite#30's CI). | Decide it once, as the dialect's own rule (P1). The two kinds of test then follow whichever rule is chosen. Folding matches the engine and the corpus; keeping case matches `#SQL{...}#`. |
 
 ## 7. The misses (leaks the patterns could not see; each slice's reviewers found them by reading)
 

@@ -20,14 +20,12 @@ class SeedSpellingTest {
     private static final String[] COLS = {"ID", "order"};
     private static final List<String[]> ROWS = List.<String[]>of(new String[] {"1", "a"});
 
-    /** Postgres folds a store's bare names to lower case, bare where they may be (2026-10-12, Postgres.physicalName:
-     *  the engine's unquoted convention; until then every name was quoted as declared). */
     @Test
-    void postgresFoldsEveryStoredName() {
+    void postgresQuotesEveryStoredName() {
         RowLoad load = CsvSeed.rowLoad(new com.legend.sql.dialect.Postgres(), "S", "T", COLS, ROWS);
-        assertEquals("s", load.schema());
-        assertEquals("t", load.table());
-        assertEquals(List.of("id", "\"order\""), load.columns());
+        assertEquals("\"S\"", load.schema());
+        assertEquals("\"T\"", load.table());
+        assertEquals(List.of("\"ID\"", "\"order\""), load.columns());
     }
 
     @Test

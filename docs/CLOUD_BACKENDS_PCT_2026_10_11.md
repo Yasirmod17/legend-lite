@@ -912,11 +912,12 @@ slices burn down. Two things it took first:
 
 - **The corpus's raw H2 text, for Postgres** (`RawSqlBoundary.Target`, chosen by `SqlDialect.rawTarget()`, the one
   call site unchanged): DuckDB's flavor with Postgres's type names (`DOUBLE PRECISION`, no `TINYINT`), its bare
-  column names folded to lower case.
-- **A store's bare names fold to lower case on Postgres** (`Postgres.physicalName`, for tables, columns, schemas and
-  DDL alike): a name a store declares bare is case-insensitive -- the engine's convention, H2's -- and Postgres
-  folds a bare name to lower case, so the dialect spells it `addresstable.id`, bare where it may be. Until now it
-  was delimited as declared (`"addressTable"."ID"`), which reaches only a table made with that exact case: not the
-  corpus's bare setup text, nor a table a bare `CREATE TABLE` made (the engine's own unquoted SQL). A name a store
-  declares quoted keeps its case; a result column keeps its declared label. The Postgres PCT lanes (both channels),
-  `//core:postgres_arm_test` and core's tests stay green; the goldens that pinned the quoted spelling moved with it.
+  names quoted as written.
+- **Folding a store's bare names on Postgres -- tried, then reverted the same day.**
+  - *What was tried, for the 52 above.* A store's bare names were spelled in lower case (`addresstable.id`), the
+    engine's unquoted convention.
+  - *Why it was reverted.* The PR's CI (neema2/legend-lite#30) showed two tests that rely on Postgres keeping a
+    store's names as declared and quoted (`"EMP"."firstName"`): `#SQL{...}#`'s Postgres fixture, which creates its
+    table with quoted mixed-case names, and DataCube's `infer.test.ts`.
+  - *Where it stands.* Postgres spells a store's names as before, and the 77 are to be re-measured. Which case a bare
+    store name has on Postgres is an open decision. It is listed in docs/DIALECT_LEAK_CENSUS_AND_PLAN_2026_10_12.md.
