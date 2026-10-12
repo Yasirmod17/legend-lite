@@ -935,7 +935,22 @@ public final class SqlParser {
                 expect(Kind.RBRACKET);
                 return new SqlAst.ArrayConstructor(elements, t.pos());
             }
-            case "interval" -> throw unsupported("INTERVAL constants are");
+            case "interval" -> {
+                // INTERVAL 'text' [unit]: a typed constant; the SQL standard's trailing unit (INTERVAL '3' DAY) is
+                // the text's unit
+                if (peekAt(1).kind() != Kind.STRING) {
+                    throw unsupported("INTERVAL other than a constant is");
+                }
+                at++;
+                String value = next().text();
+                if (peek().kind() == Kind.IDENT && INTERVAL_UNITS.contains(peek().text().toLowerCase(Locale.ROOT))) {
+                    value = value + " " + next().text().toLowerCase(Locale.ROOT);
+                    if (peek().is("to")) {
+                        throw unsupported("INTERVAL ... TO ... is");
+                    }
+                }
+                return new SqlAst.TypedLit(new SqlAst.TypeName("interval", List.of(), t.pos()), value, t.pos());
+            }
             case "row" -> throw unsupported("ROW constructors are");
             default -> {
             }
@@ -1369,6 +1384,10 @@ public final class SqlParser {
         }
         return new SqlSyntaxException("syntax error at or near \"" + t.text() + "\"", t.pos());
     }
+
+    /** The units an INTERVAL constant may name after its text (INTERVAL '3' DAY). */
+    private static final java.util.Set<String> INTERVAL_UNITS = java.util.Set.of("year", "month", "day", "hour",
+            "minute", "second");
 
     private SqlSyntaxException unsupported(String what) {
         return SqlSyntaxException.unsupported(what + " not supported yet", peek().pos());

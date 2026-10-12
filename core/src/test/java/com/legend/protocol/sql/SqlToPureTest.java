@@ -321,6 +321,22 @@ class SqlToPureTest {
     }
 
     @Test
+    void dateArithmeticIsPostgresDaysIntervalsAndTruncation() {
+        List<Col> dated = List.of(new Col("d", "StrictDate", false), new Col("ts", "DateTime", false));
+        // months, then days, then seconds, as Postgres adds an interval; a date is a timestamp at midnight first
+        String unit = "meta::pure::functions::date::DurationUnit.";
+        assertEquals("#>{s::DB.T}#->extend(~[a:r|$r.d->adjust(1, " + unit + "DAYS), b:r|%2000-01-01->dateDiff($r.d, "
+                + unit + "DAYS), c:r|$r.ts->adjust(1, " + unit + "MONTHS)->adjust(2, " + unit + "DAYS), e:r|$r.d"
+                + "->adjust(0, " + unit + "HOURS)->adjust(-10800, " + unit + "SECONDS), f:r|$r.ts->firstDayOfMonth()"
+                + "->adjust(0, " + unit + "HOURS)])->select(~[a, b, c, e, f])",
+                pure("select d + 1 as a, d - date '2000-01-01' as b, ts + interval '1 month 2 days' as c,"
+                + " d - interval '3' hour as e, date_trunc('month', ts) as f from tb('s::DB.T')", dated));
+        assertEquals("the interval '1.5 days' is not supported yet: whole years, months, weeks, days, hours, minutes"
+                + " and seconds are", refusal("select ts + interval '1.5 days' from tb('s::DB.T')", dated)
+                .getMessage());
+    }
+
+    @Test
     void aQuotientOfNumericsIsInexactSoNothingRoundsOrSpellsIt() {
         // Postgres's numeric quotient is exact, Pure's divide a Float: floor(0.3 / 0.1) is 3 there, 2 here
         assertEquals("floor of a quotient, average or root of numerics (exact in Postgres, a double here) is not"
