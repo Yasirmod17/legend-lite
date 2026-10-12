@@ -10,7 +10,7 @@ import { openDatabase } from '#test-host';
 
 import { DuckDbEngine } from '../../engine-client/src/duckdb.ts';
 import { sampleById, sampleFileName } from '../src/samples.ts';
-import { forgetUpload, ingestFile, type DuckDbFiles } from '../src/upload.ts';
+import { fileBytes, forgetUpload, ingestFile, type DuckDbFiles } from '../src/upload.ts';
 import type { QueryEngine } from '../../engine-client/src/engine.ts';
 import { plannerFor } from './catalog-builder.ts';
 
@@ -130,6 +130,7 @@ describe('ingestFile with JSON', () => {
     const bytes = await copyOut('zoned.parquet');
     const r = await ingestFile(engine, files, {
       name: 'zoned.parquet',
+      text: async () => '',
       arrayBuffer: async () => bytes.slice().buffer,
     }, writer);
     for (const [column, sql] of [['stamp', 'TIMESTAMP'], ['big', 'DECIMAL\\(20,0\\)'],
@@ -183,6 +184,40 @@ describe('ingestFile with JSON', () => {
     assert.deepEqual(col('first_event'), docs.map((d) => d.shipments[0]!.events[0]!.status));
     assert.deepEqual(col('billing_city'), docs.map((d) => d.customer.addresses[0]!.city));
     assert.deepEqual(col('first_sizes').map(Number), docs.map((d) => d.items[0]!.attributes.sizes.length));
+  });
+});
+
+describe('a text file reads as the tab has always read it (fileBytes), on every host', () => {
+  /** A picked file of these bytes, its text decoded as a browser's File decodes it (UTF-8, its BOM off, bad bytes U+FFFD). */
+  function pickedBytes(name: string, bytes: Uint8Array) {
+    return {
+      name,
+      text: async () => new TextDecoder().decode(bytes),
+      arrayBuffer: async () => bytes.slice().buffer,
+    };
+  }
+
+  it('a Latin-1 CSV opens, its letters as the decoding replaced them, as it always has', async () => {
+    // "name,city\nJosé,München\n" in Latin-1: é and ü are single bytes no UTF-8 reader takes
+    const latin1 = Uint8Array.from([...'name,city\nJos'].map((c) => c.charCodeAt(0)).concat(
+      [0xe9], [...',M'].map((c) => c.charCodeAt(0)), [0xfc], [...'nchen\n'].map((c) => c.charCodeAt(0))));
+    const r = await ingestFile(engine, files, pickedBytes('latin1.csv', latin1), writer);
+    assert.equal(r.rowCount, 1);
+    const row = await engine.run(`SELECT name, city FROM "${r.table}"`, 0);
+    assert.deepEqual(row.columns.map((c) => c.values[0]), ['Jos\uFFFD', 'M\uFFFDnchen']);
+  });
+
+  it('a JSON array with a byte-order mark reads as its records\' columns', async () => {
+    const bom = new Uint8Array([0xef, 0xbb, 0xbf, ...new TextEncoder().encode('[{"a": 1}, {"a": 2}]')]);
+    const r = await ingestFile(engine, files, pickedBytes('bom.json', bom), writer);
+    assert.equal(r.rowCount, 2);
+    assert.match(r.model, /\ba INTEGER|\ba BIGINT/);
+  });
+
+  it('gives a Parquet file\'s bytes as they are, and a text file\'s as UTF-8 without its mark', async () => {
+    const raw = new Uint8Array([0xef, 0xbb, 0xbf, 0x61, 0x0a]);
+    assert.deepEqual([...await fileBytes(pickedBytes('x.parquet', raw))], [...raw]);
+    assert.deepEqual([...await fileBytes(pickedBytes('x.csv', raw))], [0x61, 0x0a]);
   });
 });
 

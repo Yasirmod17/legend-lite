@@ -490,10 +490,13 @@ Python's in-process services.
      the process's working directory first. `Frames` keeps each such table and its model beside the frames'
      (`reading_file`, `keep_file`, `file_table`, `forget_file`): the models `serving()` gives are still the only ones a
      query may be over (R4).
-   - **The same bytes on both hosts**: the tab now registers a file's own bytes with DuckDB-WASM whatever its format,
-     where it used to register a CSV or JSON file as text decoded in the page (a byte-order mark taken off, a byte that
-     is not UTF-8 replaced). Both DuckDBs read exactly the file's bytes. `verify_smoke_test`, which opens every example
-     (a byte-order mark with CRLF, hostile values, awkward headers among them), and `verify_upload_test` pass on it.
+   - **The same bytes on both hosts, as the tab always read them** (the user, 2026-10-12: "everything to work as it
+     does today"): `upload.ts`'s `fileBytes` is the one place a file's bytes are made for DuckDB -- Parquet as it is, a
+     text file (CSV, JSON, JSON Lines) decoded as UTF-8 in the page (a byte-order mark taken off, a byte that is not
+     UTF-8 replaced) and written out again, as the tab has always registered it. The tab registers those bytes, and
+     Python is sent those bytes, so both DuckDBs read what the tab's always did: a Latin-1 CSV opens (its letters as the
+     decoding replaced them), a JSON array with a byte-order mark reads as its records' columns (`upload_test`). Reading
+     UTF-16, a gzipped file, or Latin-1 without the replacement would change today's behaviour: follow-ups, if wanted.
    - **Whose name**: Python chooses the table. It takes the name the page asked for when it is free, else the next free
      one (`<name>_2`, ...), and the answer says which; the page adopts it. Free means no frame's, no other file's (two
      tabs or widgets on one Python each get a table of their own), no table or view in any schema of the database, and

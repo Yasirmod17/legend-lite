@@ -83,11 +83,23 @@ export async function forgetUpload(engine: QueryEngine, db: DuckDbFiles, fileNam
   await db.dropFile?.(uploadFileName(table, fileName));
 }
 
+/**
+ * A FILE'S BYTES AS DUCKDB IS GIVEN THEM, on every host (the tab's DuckDB-WASM, Python's): Parquet as it is, and a text
+ * file -- CSV, JSON, JSON Lines -- as the tab has always read it, decoded as UTF-8 in the page (a byte-order mark taken
+ * off, a byte that is not UTF-8 replaced) and written out again, so every host's DuckDB reads the same text the tab's
+ * always did. The one place it is done: the tab registers these bytes, and a host's are sent these (Python's file.json).
+ */
+export async function fileBytes(file: { name: string; text(): Promise<string>; arrayBuffer(): Promise<ArrayBuffer> }): Promise<Uint8Array> {
+  return formatOf(file.name) === 'parquet'
+    ? new Uint8Array(await file.arrayBuffer())
+    : new TextEncoder().encode(await file.text());
+}
+
 export async function ingestFile(
   // the tab's own DuckDB: what it reads the file into, and the database type its model declares
   engine: DuckDbEngine,
   db: DuckDbFiles,
-  file: { name: string; arrayBuffer(): Promise<ArrayBuffer> },
+  file: { name: string; text(): Promise<string>; arrayBuffer(): Promise<ArrayBuffer> },
   // legend-lite's model writer (infer.ts): it reads the catalog and writes the model
   models: TableModels,
   options: {
@@ -102,9 +114,8 @@ export async function ingestFile(
   // A fixed virtual filename per table: re-picking a file replaces
   // the registration rather than accumulating them.
   const virtualName = uploadFileName(table, file.name);
-  // the file's own bytes, whatever its format: DuckDB reads them as they are, here and where another host's DuckDB
-  // reads a file (Python's: headless/data-in.ts), so both read a CSV's bytes the same way -- never text decoded here
-  await db.registerFileBuffer(virtualName, new Uint8Array(await file.arrayBuffer()));
+  // its bytes as every host's DuckDB is given them (fileBytes): a text file as the tab has always read it
+  await db.registerFileBuffer(virtualName, await fileBytes(file));
   try {
     return await readFileInto(engine, { at: virtualName, fileName: file.name, table }, models);
   } catch (e) {

@@ -27,7 +27,7 @@ import { pageToJson, readPage, type PageDocument } from '../page-document.ts';
 import { RemoteRun } from '../runner.ts';
 import type { InferredModel } from '../infer.ts';
 import type { S3Credentials } from '../remote.ts';
-import type { UploadResult } from '../upload.ts';
+import { fileBytes, type UploadResult } from '../upload.ts';
 import type {
   BrowserService, DatabaseService, FrameModel, LivePage, PageService, Plane, PlaneService, PlaneWord, Services, Versions,
 } from '../app/services.ts';
@@ -167,7 +167,8 @@ function pythonDatabase(link: PythonLink, offers: PythonOffers): DatabaseService
     frame: (name) => frameOf(link, name),
     ...(offers.files ? {
       ingestFile: async (file: File, options: { readonly table: string }) => JSON.parse(await posted(link, 'file.json', {
-        name: file.name, bytes: base64(new Uint8Array(await file.arrayBuffer())), table: options.table,
+        // the bytes the tab's DuckDB is given (upload.ts fileBytes): a text file decoded as the tab always has
+        name: file.name, bytes: base64(await fileBytes(file)), table: options.table,
       })) as UploadResult,
       forgetFile: async (fileName: string, table: string) => { await posted(link, 'forget.json', { name: fileName, table }); },
     } : {}),
