@@ -55,8 +55,12 @@ public final class Databases {
             case MariaDB -> new com.legend.sql.dialect.MariaDb();
             // docs/CLOUD_BACKENDS_PCT_2026_10_11.md §14: MariaDB's dialect where the two agree
             case MySQL -> new com.legend.sql.dialect.MySql();
-            case DB2, MemSQL, Sybase, SybaseIQ, Composite, SqlServer, Hive, Presto, Trino,
-                 Redshift, Spanner, Athena, Oracle, ClickHouse, Aurora ->
+            // docs/CLOUD_BACKENDS_PCT_2026_10_11.md §18
+            case Trino -> new com.legend.sql.dialect.Trino();
+            // docs/CLOUD_BACKENDS_PCT_2026_10_11.md §19
+            case ClickHouse -> new com.legend.sql.dialect.ClickHouse();
+            case DB2, MemSQL, Sybase, SybaseIQ, Composite, SqlServer, Hive, Presto,
+                 Redshift, Spanner, Athena, Oracle, Aurora ->
                     throw new com.legend.error.NotImplementedException(
                             "SQL dialect for database type '" + type + "' is not implemented yet");
         };
@@ -68,10 +72,10 @@ public final class Databases {
     public static com.legend.executionplan.ExecutionPlan.Servers servers(DatabaseType type) {
         return switch (type) {
             case H2 -> new com.legend.executionplan.ExecutionPlan.Servers.Versions(com.legend.sql.dialect.H2.SERVERS);
-            case DuckDB, Postgres, SQLite, Databricks, Snowflake, BigQuery, MariaDB, MySQL ->
+            case DuckDB, Postgres, SQLite, Databricks, Snowflake, BigQuery, MariaDB, MySQL, Trino, ClickHouse ->
                     new com.legend.executionplan.ExecutionPlan.Servers.Every();
-            case DB2, MemSQL, Sybase, SybaseIQ, Composite, SqlServer, Hive, Presto, Trino,
-                 Redshift, Spanner, Athena, Oracle, ClickHouse, Aurora ->
+            case DB2, MemSQL, Sybase, SybaseIQ, Composite, SqlServer, Hive, Presto,
+                 Redshift, Spanner, Athena, Oracle, Aurora ->
                     throw new com.legend.error.NotImplementedException(
                             "SQL dialect for database type '" + type + "' is not implemented yet");
         };
@@ -83,9 +87,9 @@ public final class Databases {
     public static boolean loadsRowsInBulk(DatabaseType type) {
         return switch (type) {
             case DuckDB -> true;
-            case H2, Postgres, SQLite, Databricks, Snowflake, BigQuery, MariaDB, MySQL -> false;
-            case DB2, MemSQL, Sybase, SybaseIQ, Composite, SqlServer, Hive, Presto, Trino,
-                 Redshift, Spanner, Athena, Oracle, ClickHouse, Aurora ->
+            case H2, Postgres, SQLite, Databricks, Snowflake, BigQuery, MariaDB, MySQL, Trino, ClickHouse -> false;
+            case DB2, MemSQL, Sybase, SybaseIQ, Composite, SqlServer, Hive, Presto,
+                 Redshift, Spanner, Athena, Oracle, Aurora ->
                     throw new com.legend.error.NotImplementedException(
                             "loading rows into database type '" + type + "' is not implemented yet");
         };

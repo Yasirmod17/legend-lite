@@ -167,6 +167,28 @@ public record Lexicon(char quoteChar, Set<String> reservedWords) {
             "set", "some", "struct", "tablesample", "then", "to", "treat", "true", "unbounded", "union", "unnest",
             "using", "when", "where", "window", "with", "within"));
 
+    /** Trino (2026-10-12, docs/CLOUD_BACKENDS_PCT_2026_10_11.md §18): double quotes; Trino's documented reserved
+     *  keywords. The {@code Trino} dialect quotes every identifier, so the list decides no spelling there. */
+    public static final Lexicon TRINO = new Lexicon('"', Set.of(
+            "alter", "and", "as", "auto", "between", "by", "case", "cast", "constraint", "create", "cross", "cube",
+            "current_catalog", "current_date", "current_path", "current_role", "current_schema", "current_time",
+            "current_timestamp", "current_user", "deallocate", "delete", "describe", "distinct", "drop", "else", "end",
+            "escape", "except", "execute", "exists", "extract", "false", "for", "from", "full", "group", "grouping",
+            "having", "in", "inner", "insert", "intersect", "into", "is", "join", "json_array", "json_exists",
+            "json_object", "json_query", "json_table", "json_value", "left", "like", "listagg", "localtime",
+            "localtimestamp", "natural", "normalize", "not", "null", "on", "or", "order", "outer", "prepare",
+            "recursive", "right", "rollup", "select", "skip", "table", "then", "trim", "true", "uescape", "union",
+            "unnest", "using", "values", "when", "where", "with"));
+
+    /** ClickHouse (2026-10-12, docs/CLOUD_BACKENDS_PCT_2026_10_11.md §19): double quotes (case-sensitive names). The
+     *  {@code ClickHouse} dialect quotes every identifier, so this list decides no spelling there. */
+    public static final Lexicon CLICKHOUSE = new Lexicon('"', Set.of(
+            "all", "and", "any", "array", "as", "asc", "asof", "between", "by", "case", "cast", "cross", "desc",
+            "distinct", "else", "end", "except", "exists", "false", "final", "format", "from", "full", "global",
+            "group", "having", "in", "inner", "interval", "into", "is", "join", "left", "like", "limit", "not", "null",
+            "offset", "on", "or", "order", "outer", "prewhere", "qualify", "right", "sample", "select", "settings",
+            "then", "true", "union", "using", "when", "where", "window", "with"));
+
     /** PostgreSQL 16+ (2026-10-01 W5.5/P1 Postgres dialect). The {@code Postgres} dialect
      * QUOTES EVERY identifier (Postgres folds an unquoted name to lowercase, so a bare
      * {@code NAME} reads {@code name}), so this list never decides a spelling there; it

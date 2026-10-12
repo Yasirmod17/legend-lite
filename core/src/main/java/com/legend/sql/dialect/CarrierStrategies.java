@@ -78,6 +78,12 @@ public final class CarrierStrategies extends SqlRewriter {
         /** MariaDB (2026-10-11): the portable strategies over its JSON lists (a JSON_TABLE argument correlates,
          *  measured); no FULL OUTER JOIN (measured: a syntax error), so it is emulated, as on H2. */
         public static final Caps MARIADB = new Caps(false, true, true, false);
+        /** Trino (2026-10-12): typed native arrays with lambdas -- the strategies stand aside, as on Databricks; its
+         *  dialect writes the static pivot and the as-of join itself (Trino has neither); FULL OUTER is native. */
+        public static final Caps TRINO = new Caps(true, true, true, true);
+        /** ClickHouse (2026-10-12): typed native arrays with lambdas -- the strategies stand aside; FULL OUTER, the
+         *  as-of join and QUALIFY are native. */
+        public static final Caps CLICKHOUSE = new Caps(true, true, true, true);
     }
 
     private final Caps caps;

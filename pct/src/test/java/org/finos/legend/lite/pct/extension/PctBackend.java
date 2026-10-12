@@ -4,9 +4,11 @@
 package org.finos.legend.lite.pct.extension;
 
 import com.legend.model.ConnectionDefinition.DatabaseType;
+import com.legend.testing.EmbeddedClickHouse;
 import com.legend.testing.EmbeddedMariaDb;
 import com.legend.testing.EmbeddedMySql;
 import com.legend.testing.EmbeddedPostgres;
+import com.legend.testing.EmbeddedTrino;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
@@ -23,6 +25,8 @@ import java.sql.SQLException;
  *   <li>{@code sqlite}: a fresh in-memory SQLite (the driver's own build, in-process);</li>
  *   <li>{@code mariadb}: this JVM's embedded MariaDB 11.4, a new session on its database {@code pct};</li>
  *   <li>{@code mysql}: this JVM's embedded MySQL 8.4, a new session on its database {@code pct};</li>
+ *   <li>{@code trino}: this JVM's embedded Trino 483, a new session on its memory catalog's {@code default} schema;</li>
+ *   <li>{@code clickhouse}: this JVM's embedded ClickHouse 25.8, a new session (its driver's HTTP) on {@code default};</li>
  *   <li>{@code databricks}, {@code snowflake}, {@code bigquery}: a real account's warehouse, one session held for the
  *       suite ({@link CloudLane}: its coordinates and credentials from {@code LEGENDLITE_PCT_CLOUD_PROPERTIES}).</li>
  * </ul>
@@ -84,6 +88,28 @@ public final class PctBackend {
             @Override
             Connection openSystem() throws SQLException {
                 return DriverManager.getConnection(EmbeddedMySql.shared().jdbcUrl("pct"));
+            }
+        },
+        TRINO(DatabaseType.Trino) {
+            @Override
+            Connection open() throws SQLException {
+                return DriverManager.getConnection(EmbeddedTrino.shared().jdbcUrl("default"));
+            }
+
+            @Override
+            Connection openSystem() throws SQLException {
+                return DriverManager.getConnection(EmbeddedTrino.shared().jdbcUrl("default"));
+            }
+        },
+        CLICKHOUSE(DatabaseType.ClickHouse) {
+            @Override
+            Connection open() throws SQLException {
+                return DriverManager.getConnection(EmbeddedClickHouse.shared().jdbcUrl("default"));
+            }
+
+            @Override
+            Connection openSystem() throws SQLException {
+                return DriverManager.getConnection(EmbeddedClickHouse.shared().jdbcUrl("default"));
             }
         },
         POSTGRES(DatabaseType.Postgres) {
@@ -162,11 +188,14 @@ public final class PctBackend {
             case "sqlite" -> Lane.SQLITE;
             case "mariadb" -> Lane.MARIADB;
             case "mysql" -> Lane.MYSQL;
+            case "trino" -> Lane.TRINO;
+            case "clickhouse" -> Lane.CLICKHOUSE;
             case "databricks" -> Lane.DATABRICKS;
             case "snowflake" -> Lane.SNOWFLAKE;
             case "bigquery" -> Lane.BIGQUERY;
             default -> throw new IllegalStateException("LEGENDLITE_PCT_BACKEND=" + backend + ": a PCT lane runs on"
-                    + " DuckDB (unset), h2, postgres, sqlite, mariadb, mysql, databricks, snowflake or bigquery");
+                    + " DuckDB (unset), h2, postgres, sqlite, mariadb, mysql, trino, clickhouse, databricks, snowflake or"
+                    + " bigquery");
         };
     }
 
@@ -196,6 +225,12 @@ public final class PctBackend {
                     EmbeddedMariaDb.shared().port(), "pct");
             case MYSQL -> com.legend.test.StorelessRuntime.onServer(model, lane.type, "127.0.0.1",
                     EmbeddedMySql.shared().port(), "pct");
+            // the coordinates of the session connect() opens, declared as Trino's own specification
+            case TRINO -> com.legend.test.StorelessRuntime.declaring(model, lane.type, "specification: Trino { host:"
+                    + " '127.0.0.1'; port: " + EmbeddedTrino.shared().port() + "; catalog: 'memory'; schema: 'default';"
+                    + " };\n  auth: Test");
+            case CLICKHOUSE -> com.legend.test.StorelessRuntime.onServer(model, lane.type, "127.0.0.1",
+                    EmbeddedClickHouse.shared().port(), "default");
             case DATABRICKS -> CloudLane.withStorelessRuntime(model, CloudLane.Cloud.DATABRICKS);
             case SNOWFLAKE -> CloudLane.withStorelessRuntime(model, CloudLane.Cloud.SNOWFLAKE);
             case BIGQUERY -> CloudLane.withStorelessRuntime(model, CloudLane.Cloud.BIGQUERY);

@@ -746,3 +746,56 @@ unordered), 9 regular expressions with a non-literal pattern (the `chunk` family
 
 The lanes run from a desk with `bazel test //pct:pct_mysql` (`--local_test_jobs` low: each suite starts its own server).
 Linux x86_64 only, as MariaDB's.
+
+## 18. Trino, measured (2026-10-12)
+
+The fourth of the open ones (§2, item 4): Trino 483, the server tarball Bazel unpacks (`@embedded_trino`,
+`tools/trino/`: its `lib` and the memory connector's plugin, nothing else), started per test JVM on the JVM's own Java
+25 as Trino's launcher would start it (`testing/.../EmbeddedTrino.java`: the node's environment, id, data directory
+and address as system properties, the Vector API module, a 2 GB heap), with the memory connector as its one catalog;
+the driver is Trino's own JDBC driver (test-only). The dialect, `Trino`, is a sibling over `AnsiSqlRenderer`, much of
+it Databricks' shapes in Trino's spelling; one dialect covers Presto, Starburst and Athena.
+
+**Result:** all five suites pass on Trino, each failure pinned by its message: 1,251 tests, 40 pinned (Essential 25
+of 346, Grammar 14 of 138, Relation 1 of 469, Standard 0 of 205, Unclassified 0 of 93), the census divergence 0 in
+every suite (no ceiling raised). 34 are the platform's own, pinned on the DuckDB lane by the same cause (7 of them
+instance identity); 6 are Trino's own limits, each measured:
+
+- a ROW's fields are typed, and an unset property is a NULL of no type (5): where a sibling row types the field it
+  is typed so, but alone it has no type, and were it typed, a ROW holding a NULL compares NULL and `contains`
+  refuses one, where Pure's equality of two such instances is true;
+- no temporary table (1): no table only one session sees, so the system database (§14) has nowhere to live.
+
+First measured at 1,154 of 1,249 passing (97 failing), burned down the same day. **What Trino does differently, and
+the dialect's answer** (every row measured on 483):
+
+| Measured | Consequence |
+|---|---|
+| a bare integer literal is a 32-bit INTEGER, whose arithmetic raises at 2^31; past a BIGINT one is refused | `BIGINT 'n'`; a HUGEINT literal `DECIMAL 'n'`; a decimal literal past 38 digits `DOUBLE '...'` (DuckDB reads one as a DOUBLE) |
+| a double's text is always scientific (`1.5E0`) | a double's text is its JSON's, `json_format(CAST(x AS JSON))` (Java's shortest, `1.5`, `2.0`, `1.3421E-8`; NULL stays NULL, where `format('%s', x)` writes `null`), its exponent marked `e` as DuckDB's, which every Float spelling unfolds |
+| UNNEST spreads a ROW element over one column per field | each element wrapped in a row of one field; an untyped list (Pure's `[]`) cast to the explosion's declared type |
+| lambdas take no index; `nullif` inside a lambda fails in the planner (`Bind cannot be cast to Lambda`) | `zip_with` over the positions; CASE for nullif; a zero divisor `CASE WHEN d = 0 THEN NULL ...` (DuckDB's NULL), which also stops the planner folding `MOD(5, 0)` into its own error in a branch not taken |
+| no microsecond unit in `date_add` or `date_diff` | microseconds from the epoch's seconds and the text's fraction, back through `from_unixtime_nanos` |
+| `corr` and `covar_*` answer a REAL over anything but DOUBLE; `corr([1, 2], [10, 20])` is 0.9999999999999999 | their arguments DOUBLE; the correlation DuckDB's: `covar_pop / (stddev_pop * stddev_pop)`, windowed too |
+| no exact percentile or mode; any aggregate is a window function | the sorted `array_agg` read with interpolation, and `histogram`'s most counted value, grouped or over the frame |
+| `listagg` needs a WITHIN GROUP order | a windowed one of no order of its own takes the window's |
+| no Jaro-Winkler function | Databricks' exact construction (`reduce`, `sequence`, typed ROWs), DuckDB's bits |
+| the driver hands a ROW as its own class (`io.trino.jdbc.Row`), which production code may not reflect on | a statement's ROW column is its JSON text (cast to its named ROW first: an anonymous row's keys are empty), decoded in `normalize`; the census registers STRUCT <- JSON as Trino's carrier |
+| a statement that fails before its columns are known opens a ResultSet with none (a date 12,345,678,912 days on) | the census makes no claim on it (adjudicated; a statement that succeeds always reports its columns) |
+| `with_timezone` takes only a naive timestamp; a cast refuses ISO 8601's `T`, `Z` and `-0500`; `EST` is no zone | a zoned value is its own instant; text through `from_iso8601_timestamp` (milliseconds); EST, MST and HST their fixed offsets |
+| `codepoint('')` refuses the empty string; `repeat` of NULL joins to `''`; `xxhash64` of NULL is NULL and no VARCHAR cast takes an array | Pure's 0; NULL; a list's or row's text its JSON, no value the empty text |
+| OFFSET before LIMIT; no QUALIFY, star exclusion, PIVOT or as-of join; a correlated subquery in a join's ON is refused | the order swapped; `QualifyToSubselect`, `StarExceptToColumns`, `PivotAsGroupBy` and `AsOfAsPick` (a LEFT JOIN with the extreme key picked by a window), the last two shared passes |
+
+**Channel B on Trino** (§16, judged against the engine's own Trino manifest): 331 / 1 / 0, 131 / 0 / 0, 463 / 6 / 5,
+205 / 0 / 0, 93 / 0 / 0. Essential's 1 wire bug is the engine's frontier; Relation's 5 are two sorts (Trino
+discards a subquery's ORDER BY, which SQL allows: no order is promised without one at the top), a pivot's column
+order, a struct field of no type, and Trino's own planner refusing an arithmetic chain
+("SignatureBinder.iterativeSolve does not converge").
+
+The lanes run from a desk with `bazel test //pct:pct_trino --local_test_jobs=1`: each suite starts its own server
+with a 2 GB heap beside a test JVM, and two at once overran this 15 GB container (the kernel's OOM killer took a test
+JVM, and its log simply stopped). The coordinator forgets a finished query at once (`query.min-expire-age`,
+`query.max-history`): by default it keeps each one's info, its plan included, for 15 minutes, and a suite's
+statements filled its heap until it stopped (measured: the server restarted mid-suite, the statement running then
+failed). Measured on Linux x86_64; the server is Java's jars, so the one repository serves
+every platform (unmeasured elsewhere). The lanes are `manual`, in `//gates:heavy`.

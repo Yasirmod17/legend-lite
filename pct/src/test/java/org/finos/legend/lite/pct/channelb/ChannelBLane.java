@@ -98,7 +98,17 @@ final class ChannelBLane {
                     "Grammar", new Pins(135, 0, 0),
                     "Relation", new Pins(455, 13, 13),
                     "Standard", new Pins(205, 0, 0),
-                    "Unclassified", new Pins(91, 0, 0)));
+                    "Unclassified", new Pins(91, 0, 0)),
+            // Trino 483 (2026-10-12, §18), judged against the engine's Trino manifest: Essential's 1 wire bug is the
+            // engine's frontier; Relation's 5 are two sorts (Trino discards a subquery's ORDER BY: SQL promises no
+            // order without one at the top), a pivot's column order, a struct field of no type, and Trino's own
+            // planner refusing an arithmetic chain ("SignatureBinder.iterativeSolve does not converge")
+            "trino", Map.of(
+                    "Essential", new Pins(331, 1, 0),
+                    "Grammar", new Pins(131, 0, 0),
+                    "Relation", new Pins(463, 6, 5),
+                    "Standard", new Pins(205, 0, 0),
+                    "Unclassified", new Pins(93, 0, 0)));
 
     /** Whether this JVM runs the reference lane, DuckDB, whose pins are each suite's own. */
     static boolean isReference() {

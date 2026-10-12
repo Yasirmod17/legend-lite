@@ -817,7 +817,21 @@ errors, its census ceilings 12 -> 13 (Essential) and 4 -> 5 (Grammar), each one 
 class (`PctCensusGate`, dated); `exec/Executor.java` (a map cell carried as its entries, through the array and struct
 arms: no new JDBC accessor); `exec/SqlTypeCensus.java` (BigQuery's ARRAY delivers MAP); `ParkedWorkLedgerTest` and
 `docs/PARKED_WORK_LEDGER.md` (PARK-2's construction anchor re-pointed, dated: `SqlWith.with` keeps the flag).
-**Next** (the user's order): MySQL, Trino, ClickHouse, MongoDB, Elasticsearch, SingleStore (the plan's §2).
+**2026-10-12, Trino landed on the branch** (all five suites green on a real Trino 483 coordinator, 40 pinned of
+1,251; channel B pinned; the plan's §18): new `sql/dialect/Trino.java`, and two passes shared from it,
+`sql/dialect/PivotAsGroupBy.java` (a static pivot as a grouped CASE aggregation) and `sql/dialect/AsOfAsPick.java` (an
+as-of join as a LEFT JOIN with a window pick); rows in `Lexicon`, `TypeNames`, `Spellings`, `CarrierStrategies.Caps`;
+arms in `database/Databases.java` and `exec/Sessions.java`; `exec/SqlTypeCensus.java` (Trino's `ROW(` is a STRUCT; its
+carrier STRUCT <- JSON; a ResultSet of no columns before a failing statement's columns is no claim, adjudicated, dated);
+new `testing/.../EmbeddedTrino.java` and `tools/trino/` (the server, as a Bazel repository); `MODULE.bazel` and
+`tools/deps/jars_table.bzl` (the driver, test-only); `pct/BUILD.bazel` (the lanes, `manual`), `PctBackend`
+(`Lane.TRINO`), five suite classes and `ChannelBLane`'s pins; `gates/BUILD.bazel` puts the Trino lanes in `heavy`.
+**Announced 2026-10-12, in progress:** ClickHouse 25.8 by the same recipe (`sql/dialect/ClickHouse.java`, its rows in
+the same tables and arms in the same switches, `testing/.../EmbeddedClickHouse.java`, `tools/clickhouse/`, its lanes
+and suite classes); its lanes are wired, unpinned, not yet green.
+**Next** (the user's order): ClickHouse, then the coverage map of the primitives the corpus uses that PCT never
+exercises, the relational corpus on Snowflake, Databricks and BigQuery, MongoDB, Elasticsearch, SingleStore (the
+plan's §2).
 
 ## Rules between sessions
 

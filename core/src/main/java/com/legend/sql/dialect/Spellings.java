@@ -97,6 +97,54 @@ public record Spellings(Map<SqlFn, String> fnNames) {
         return m;
     }
 
+    /** Trino EXECUTION spellings (2026-10-12, docs/CLOUD_BACKENDS_PCT_2026_10_11.md §18), each measured on Trino 483:
+     *  ONLY a name that exists there with DuckDB's arguments and meaning. Never inherited: {@code concat}
+     *  (NULL-propagating there), {@code left} and {@code right} and {@code cot} (absent), the hashes (they take and
+     *  answer binary), {@code split_part} (NULL past the end) and the DuckDB-only names. Everything absent here is a
+     *  coded arm or a wall in the {@code Trino} dialect. */
+    public static final Spellings TRINO = new Spellings(trino());
+
+    private static Map<SqlFn, String> trino() {
+        Map<SqlFn, String> m = new EnumMap<>(SqlFn.class);
+        for (SqlFn f : new SqlFn[] {SqlFn.ABS, SqlFn.ACOS, SqlFn.ASIN, SqlFn.ATAN, SqlFn.ATAN2, SqlFn.CBRT, SqlFn.CHR,
+                SqlFn.COALESCE, SqlFn.COS, SqlFn.COSH, SqlFn.DEGREES, SqlFn.EXP, SqlFn.GREATEST, SqlFn.LEAST,
+                SqlFn.LENGTH, SqlFn.LIST_FLATTEN, SqlFn.LN, SqlFn.LOG10, SqlFn.LOWER, SqlFn.MAP_KEYS, SqlFn.MAP_VALUES,
+                SqlFn.POW, SqlFn.RADIANS, SqlFn.REPLACE, SqlFn.REVERSE_STRING, SqlFn.SIN, SqlFn.SINH, SqlFn.SQRT,
+                SqlFn.SUBSTRING, SqlFn.TAN, SqlFn.TANH, SqlFn.UPPER, SqlFn.STARTS_WITH, SqlFn.STRPOS,
+                SqlFn.MAP_FROM_ENTRIES}) {
+            m.put(f, DUCKDB.fnNames().get(f));
+        }
+        m.put(SqlFn.LEVENSHTEIN, "levenshtein_distance");
+        m.put(SqlFn.LIST_REVERSE, "reverse");
+        return m;
+    }
+
+    /** ClickHouse EXECUTION spellings (2026-10-12, docs/CLOUD_BACKENDS_PCT_2026_10_11.md §19), each measured on
+     *  ClickHouse 25.8: ONLY a name that exists there with DuckDB's arguments and meaning. Never inherited: the string
+     *  functions that count bytes (length, lower, substring and the rest: their UTF-8 forms are coded arms), concat
+     *  (NULL-propagating there) and the DuckDB-only names. */
+    public static final Spellings CLICKHOUSE = new Spellings(clickhouse());
+
+    private static Map<SqlFn, String> clickhouse() {
+        Map<SqlFn, String> m = new EnumMap<>(SqlFn.class);
+        for (SqlFn f : new SqlFn[] {SqlFn.ABS, SqlFn.ACOS, SqlFn.ASIN, SqlFn.ATAN, SqlFn.ATAN2, SqlFn.CBRT,
+                SqlFn.COALESCE, SqlFn.COS, SqlFn.COSH, SqlFn.DEGREES, SqlFn.EXP, SqlFn.GREATEST, SqlFn.LEAST, SqlFn.LN,
+                SqlFn.LOG10, SqlFn.RADIANS, SqlFn.SIN, SqlFn.SINH, SqlFn.SQRT, SqlFn.TAN, SqlFn.TANH}) {
+            m.put(f, DUCKDB.fnNames().get(f));
+        }
+        m.put(SqlFn.POW, "pow");
+        m.put(SqlFn.LEVENSHTEIN, "editDistanceUTF8");
+        m.put(SqlFn.LIST_FLATTEN, "arrayFlatten");
+        m.put(SqlFn.MAP_KEYS, "mapKeys");
+        m.put(SqlFn.MAP_VALUES, "mapValues");
+        m.put(SqlFn.STARTS_WITH, "startsWith");
+        m.put(SqlFn.ENDS_WITH, "endsWith");
+        m.put(SqlFn.LIST_REVERSE, "arrayReverse");
+        m.put(SqlFn.JARO_WINKLER, "jaroWinklerSimilarity");
+        m.put(SqlFn.CHR, "char");
+        return m;
+    }
+
     /** BigQuery EXECUTION spellings (GoogleSQL; 2026-10-11): ONLY a name that exists on BigQuery with DuckDB's
      *  arguments and meaning, each measured on the account. */
     public static final Spellings BIGQUERY = new Spellings(bigquery());

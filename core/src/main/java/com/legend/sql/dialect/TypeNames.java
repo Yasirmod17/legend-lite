@@ -103,6 +103,44 @@ public record TypeNames(Map<SqlType.Scalar, String> scalarNames,
         return m;
     }
 
+    /** Trino (2026-10-12, docs/CLOUD_BACKENDS_PCT_2026_10_11.md §18): DOUBLE; HUGEINT as DECIMAL(38,0); a timestamp
+     *  is TIMESTAMP(6) (a bare TIMESTAMP is TIMESTAMP(3), measured) and a zoned one TIMESTAMP(6) WITH TIME ZONE; JSON;
+     *  STRUCT natively ({@code ROW(a T)}, the dialect's spelling). */
+    public static final TypeNames TRINO = new TypeNames(trino(), true);
+
+    private static Map<SqlType.Scalar, String> trino() {
+        Map<SqlType.Scalar, String> m = base();
+        m.put(SqlType.Scalar.HUGEINT, "DECIMAL(38,0)");
+        m.put(SqlType.Scalar.DOUBLE, "DOUBLE");
+        m.put(SqlType.Scalar.TIMESTAMP, "TIMESTAMP(6)");
+        m.put(SqlType.Scalar.TIMESTAMPTZ, "TIMESTAMP(6) WITH TIME ZONE");
+        m.put(SqlType.Scalar.JSON, "JSON");
+        return m;
+    }
+
+    /** ClickHouse (2026-10-12, docs/CLOUD_BACKENDS_PCT_2026_10_11.md §19): every scalar NULLABLE (a ClickHouse value
+     *  is NOT NULL unless its type says {@code Nullable(T)}, and {@code CAST(NULL AS Int64)} is refused); a timestamp
+     *  is a DateTime64 of six digits in UTC, a date a Date32; HUGEINT as Int128; a Variant its JSON text; STRUCT as a
+     *  named Tuple (the dialect's spelling). */
+    public static final TypeNames CLICKHOUSE = new TypeNames(clickhouse(), true);
+
+    private static Map<SqlType.Scalar, String> clickhouse() {
+        Map<SqlType.Scalar, String> m = new EnumMap<>(SqlType.Scalar.class);
+        m.put(SqlType.Scalar.BOOLEAN, "Nullable(Bool)");
+        m.put(SqlType.Scalar.INTEGER, "Nullable(Int32)");
+        m.put(SqlType.Scalar.BIGINT, "Nullable(Int64)");
+        m.put(SqlType.Scalar.HUGEINT, "Nullable(Int128)");
+        m.put(SqlType.Scalar.DOUBLE, "Nullable(Float64)");
+        m.put(SqlType.Scalar.VARCHAR, "Nullable(String)");
+        m.put(SqlType.Scalar.LITERAL, "Nullable(String)");
+        m.put(SqlType.Scalar.TEMPORAL_TEXT, "Nullable(String)");
+        m.put(SqlType.Scalar.DATE, "Nullable(Date32)");
+        m.put(SqlType.Scalar.TIMESTAMP, "Nullable(DateTime64(6, 'UTC'))");
+        m.put(SqlType.Scalar.TIMESTAMPTZ, "Nullable(DateTime64(6, 'UTC'))");
+        m.put(SqlType.Scalar.JSON, "Nullable(String)");
+        return m;
+    }
+
     /** SQLite (2026-10-11): a CAST target names an AFFINITY only (INTEGER, REAL, TEXT): every scalar's storage class.
      *  The dialect decides each cast itself (a DATE name is NUMERIC affinity there, measured); no STRUCT. */
     public static final TypeNames SQLITE = new TypeNames(sqlite(), false);

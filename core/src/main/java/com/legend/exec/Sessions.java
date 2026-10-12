@@ -100,8 +100,12 @@ public final class Sessions {
             case MariaDB -> "MariaDB";
             // ... and so does it on MySQL (measured, 3.5.10 on MySQL 8.4)
             case MySQL -> "MySQL";
-            case DB2, MemSQL, Sybase, SybaseIQ, Composite, SqlServer, Hive, Presto, Trino,
-                 Redshift, Spanner, Athena, Oracle, ClickHouse, Aurora ->
+            // the Trino JDBC driver (measured, trino-jdbc 483)
+            case Trino -> "Trino";
+            // the ClickHouse JDBC driver (measured, clickhouse-jdbc 0.10.0 on 25.8)
+            case ClickHouse -> "ClickHouse";
+            case DB2, MemSQL, Sybase, SybaseIQ, Composite, SqlServer, Hive, Presto,
+                 Redshift, Spanner, Athena, Oracle, Aurora ->
                     throw new com.legend.error.NotImplementedException(
                             "sessions on database type '" + type + "' are not implemented");
         };

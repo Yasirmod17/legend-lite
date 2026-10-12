@@ -7,6 +7,7 @@ load("//tools/junit:defs.bzl", "junit_test")
 load("//tools/java:defs.bzl", "legend_java_library")
 load("//tools/mariadb:defs.bzl", "EMBEDDED_MARIADB_COMPATIBLE")
 load("//tools/mysql:defs.bzl", "EMBEDDED_MYSQL_COMPATIBLE")
+load("//tools/clickhouse:defs.bzl", "EMBEDDED_CLICKHOUSE_COMPATIBLE")
 load("//tools/postgres:defs.bzl", "EMBEDDED_POSTGRES_COMPATIBLE")
 load("@bazel_lib//lib:write_source_files.bzl", "write_source_files")
 load("//tools/generators:defs.bzl", "UPSTREAM_ROOTS", "UPSTREAM_TREES", "program_jvm_flags")
@@ -298,6 +299,64 @@ test_suite(
     tests = [":pct_mysql_" + s.lower() for s in _SUITES],
 )
 
+# THE TRINO LANES — the five suites on Trino 483 (LEGENDLITE_PCT_BACKEND=trino), on a real coordinator this JVM starts
+# from the pinned server Bazel unpacked (@embedded_trino, //testing EmbeddedTrino), its memory connector the catalog: no
+# Docker. Each suite carries Trino's OWN expected failures (Test_LegendLite_Trino_*Functions_PCT). Manual, in
+# //gates:heavy (docs/CLOUD_BACKENDS_PCT_2026_10_11.md §18). The test JVM's heap is its own; the coordinator's 2 GB is a
+# child process's.
+[junit_test(
+    name = "pct_trino_" + s.lower(),
+    memory_mb = 4096,
+    data = [
+        "@embedded_trino//:trino",
+        "@embedded_trino//:trino/TRINO_ROOT",
+    ],
+    env = {"LEGENDLITE_PCT_BACKEND": "trino"},
+    jvm_flags = ["-Dembedded.trino.root=$(rlocationpath @embedded_trino//:trino/TRINO_ROOT)"],
+    select = ["--select-class=org.finos.legend.lite.pct.Test_LegendLite_Trino_%sFunctions_PCT" % s],
+    tags = ["manual"],
+    runtime_deps = [
+        ":pct_tests_lib",
+        "//core:drivers",
+        "@trino_jdbc//jar",
+    ],
+) for s in _SUITES]
+
+test_suite(
+    name = "pct_trino",
+    tags = ["manual"],
+    tests = [":pct_trino_" + s.lower() for s in _SUITES],
+)
+
+# THE CLICKHOUSE LANES — the five suites on ClickHouse 25.8 (LEGENDLITE_PCT_BACKEND=clickhouse), on a real server this
+# JVM starts from the pinned static build Bazel unpacked (@embedded_clickhouse, //testing EmbeddedClickHouse): no Docker.
+# Each suite carries ClickHouse's OWN expected failures (Test_LegendLite_ClickHouse_*Functions_PCT). Manual, in
+# //gates:heavy (docs/CLOUD_BACKENDS_PCT_2026_10_11.md §19).
+[junit_test(
+    name = "pct_clickhouse_" + s.lower(),
+    memory_mb = 4096,
+    data = [
+        "@embedded_clickhouse//:clickhouse",
+        "@embedded_clickhouse//:clickhouse/CLICKHOUSE_ROOT",
+    ],
+    env = {"LEGENDLITE_PCT_BACKEND": "clickhouse"},
+    jvm_flags = ["-Dembedded.clickhouse.root=$(rlocationpath @embedded_clickhouse//:clickhouse/CLICKHOUSE_ROOT)"],
+    select = ["--select-class=org.finos.legend.lite.pct.Test_LegendLite_ClickHouse_%sFunctions_PCT" % s],
+    tags = ["manual"],
+    target_compatible_with = EMBEDDED_CLICKHOUSE_COMPATIBLE,
+    runtime_deps = [
+        ":pct_tests_lib",
+        "//core:drivers",
+        "@clickhouse_jdbc//jar",
+    ],
+) for s in _SUITES]
+
+test_suite(
+    name = "pct_clickhouse",
+    tags = ["manual"],
+    tests = [":pct_clickhouse_" + s.lower() for s in _SUITES],
+)
+
 # THE CLOUD LANES — the five suites on a real Databricks, Snowflake and BigQuery account
 # (docs/CLOUD_BACKENDS_PCT_2026_10_11.md; LEGENDLITE_PCT_BACKEND selects the cloud). Each suite carries the cloud's
 # OWN expected failures (Test_LegendLite_<Cloud>_*Functions_PCT), as gate 7P's. The account's coordinates and
@@ -433,6 +492,40 @@ _CHANNEL_B_LANES = {
         ["manual"],
         [],
         EMBEDDED_MYSQL_COMPATIBLE,
+    ),
+    "trino": (
+        "Trino",
+        _SUITES,
+        "trino",
+        [
+            "@embedded_trino//:trino",
+            "@embedded_trino//:trino/TRINO_ROOT",
+        ],
+        ["-Dembedded.trino.root=$(rlocationpath @embedded_trino//:trino/TRINO_ROOT)"],
+        [
+            "//core:drivers",
+            "@trino_jdbc//jar",
+        ],
+        ["manual"],
+        [],
+        [],
+    ),
+    "clickhouse": (
+        "ClickHouse",
+        _SUITES,
+        "clickhouse",
+        [
+            "@embedded_clickhouse//:clickhouse",
+            "@embedded_clickhouse//:clickhouse/CLICKHOUSE_ROOT",
+        ],
+        ["-Dembedded.clickhouse.root=$(rlocationpath @embedded_clickhouse//:clickhouse/CLICKHOUSE_ROOT)"],
+        [
+            "//core:drivers",
+            "@clickhouse_jdbc//jar",
+        ],
+        ["manual"],
+        [],
+        EMBEDDED_CLICKHOUSE_COMPATIBLE,
     ),
     "databricks": ("Databricks", _SUITES, "databricks", [], ["--add-opens=java.base/java.nio=ALL-UNNAMED"], ["//core:drivers", _CLOUD_DRIVERS["databricks"]], _CLOUD_TAGS, ["LEGENDLITE_PCT_CLOUD_PROPERTIES"], []),
     "snowflake": ("Snowflake", _SUITES, "snowflake", [], ["--add-opens=java.base/java.nio=ALL-UNNAMED"], ["//core:drivers", _CLOUD_DRIVERS["snowflake"]], _CLOUD_TAGS, ["LEGENDLITE_PCT_CLOUD_PROPERTIES"], []),
