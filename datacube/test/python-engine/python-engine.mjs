@@ -124,6 +124,8 @@ try {
   // answered it, which Python's planner wrote and Python ran (R4: the page sends Pure, never SQL)
   const onApp = await cube.waitForFunction(() => document.querySelector('.dc-page') !== null
     && window.__dataPage?.grids.length === 1
+    // where it plans, as Python said it (services.json: R3), in the status bar's one word
+    && document.querySelector('.dc-app-status')?.textContent === 'local'
     && /#>\{/.test(document.getElementById('pure')?.textContent ?? '')
     && /\bSELECT\b/i.test(document.getElementById('sql')?.textContent ?? ''), undefined, { timeout: 30_000 }).then(() => true, () => false);
   console.log(`${onApp ? 'ok  ' : 'FAIL'} the frame is a page of one grid on DataCube's app, its Pure & SQL window the query sent and the SQL Python ran`);

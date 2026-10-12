@@ -21,7 +21,7 @@ import pyarrow as pa
 import pyarrow.ipc
 
 import legend_lite as ll
-from legend_lite.engine import Engine, WebServer
+from legend_lite.engine import Engine, NativePlanner, WebServer
 
 GROUP = "->filter(x|$x.qty > 5)->groupBy(~[desk], ~[q: x|$x.qty : y|$y->sum()])->sort(~desk->ascending())"
 
@@ -193,12 +193,40 @@ class Refusals(Served):
         self.assertEqual((status, body['message']), (404, 'no such legend-engine API in legend-lite: /api/pure/v1/nope'))
 
 
+class Planes(Served):
+    """Where the engine plans (R3): one planner, chosen once, which every call the compiler answers goes through, and
+    which services.json names for the page."""
+
+    def test_it_plans_on_pythons_own_planner_and_says_so(self):
+        said = json.loads(self.server.engine.answer('GET', '/services.json', '', None).body)
+        local = {'word': 'local', 'label': 'Plan local (in Python: the native library)'}
+        self.assertEqual((said['plane'], said['planes']), (local, [local]))
+
+    def test_every_call_goes_through_the_planner_it_was_made_with(self):
+        asked = []
+
+        class Counting(NativePlanner):
+            def answer(self, path, query, body):
+                asked.append(path)
+                return super().answer(path, query, body)
+
+            def execute_plan(self, body, models):
+                asked.append('execute')
+                return super().execute_plan(body, models)
+
+        self.server.close()
+        self.server = WebServer(Engine(self.frames, planner=Counting()))
+        self.arrow(GROUP)
+        self.post('/api/pure/v1/grammar/grammarToJson/lambda', '|1')
+        self.assertEqual(asked, ['execute', '/api/pure/v1/grammar/grammarToJson/lambda'])
+
+
 class NoFiles(Served):
     """An engine given no DataCube code to read a page's file with (no headless): it says so, and takes none."""
 
     def test_it_says_it_takes_no_file_and_refuses_one(self):
         answer = self.server.engine.answer('GET', '/services.json', '', None)
-        self.assertEqual(json.loads(answer.body), {'files': False})
+        self.assertFalse(json.loads(answer.body)['files'])
         status, _, body = self.post('/file.json', json.dumps({'name': 'a.csv', 'bytes': 'YQoxCg==', 'table': 'a'}))
         self.assertEqual(status, 404)
         self.assertIn(b'datacube extra', body)

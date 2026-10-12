@@ -66,10 +66,12 @@ async function start(): Promise<void> {
   const shows: PythonShows = page !== null ? { page } : { frame: params.get('table') ?? '' };
   const link: PythonLink = { baseUrl: location.origin, fetch: (input, init) => fetch(input, init), authorization: `Bearer ${token}` };
   const status = document.createElement('span');
-  status.textContent = 'Python';
+  status.textContent = 'asking Python…';
   const settled = { show: (_reason: string): void => {} };
   try {
     const offers = await askedOffers(link);
+    // where it plans, in its one word (the status bar's readout)
+    status.textContent = offers.plane.word;
     await openDataCube({
       services: pythonServices({ link, shows, offers, watch: polled(link, shows), browser: { ...browserBasics, title: tabTitle() } }),
       host,

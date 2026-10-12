@@ -177,7 +177,7 @@ class Files(unittest.TestCase):
 
     def test_the_engine_says_it_takes_files(self):
         answer = self.engine.answer('GET', '/services.json', '', None)
-        self.assertEqual(json.loads(answer.body), {'files': True})
+        self.assertTrue(json.loads(answer.body)['files'])
 
     def test_a_csv_is_read_into_its_table_its_model_served_then_let_go_of(self):
         answer = self.file('books.csv', 'title,pages\nDune,412\nEmma,474\n', 'files_books')
@@ -267,7 +267,7 @@ class Files(unittest.TestCase):
         import os
         from unittest import mock
         with mock.patch.dict(os.environ, {'LEGEND_LITE_DATACUBE': os.path.join(os.sep, 'no', 'such', 'bundle.js')}):
-            self.assertEqual(json.loads(self.engine.answer('GET', '/services.json', '', None).body), {'files': False})
+            self.assertFalse(json.loads(self.engine.answer('GET', '/services.json', '', None).body)['files'])
             self.assertEqual(self.file('a.csv', 'a\n1\n', 'files_none').status, 404)
 
 

@@ -58,20 +58,24 @@ export function render(model: WidgetModel, el: HTMLElement, fetch: typeof global
   let gone = false;
   let app: DataCubeApp | undefined;
   const status = document.createElement('span');
-  status.textContent = 'Python';
+  status.textContent = 'asking Python…';
   const settled = { show: (_reason: string): void => {} };
   const link: PythonLink = { baseUrl: BASE, fetch };
   // what Python's host offers beside its frames, asked once (services.json), then the app over its services
-  askedOffers(link).then((offers) => openDataCube({
-    // a notebook's cell is no tab of its own: no title to set, and no address another person could open
-    services: pythonServices({ link, shows, offers, watch: watched(model, shows), browser: browserBasics }),
-    host,
-    status,
-    windows: el,
-    start: 'page' in shows ? { kind: 'live' } : { kind: 'frame', name: shows.frame },
-    taken: [],
-    settled,
-  })).then((opened) => {
+  askedOffers(link).then((offers) => {
+    // where it plans, in its one word (the status bar's readout)
+    status.textContent = offers.plane.word;
+    return openDataCube({
+      // a notebook's cell is no tab of its own: no title to set, and no address another person could open
+      services: pythonServices({ link, shows, offers, watch: watched(model, shows), browser: browserBasics }),
+      host,
+      status,
+      windows: el,
+      start: 'page' in shows ? { kind: 'live' } : { kind: 'frame', name: shows.frame },
+      taken: [],
+      settled,
+    });
+  }).then((opened) => {
     // a view taken down while it opened
     if (gone) opened.dispose();
     else app = opened;

@@ -42,7 +42,7 @@ import queue
 from concurrent.futures import Future
 from collections.abc import Callable, Mapping
 from types import MappingProxyType
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, Protocol
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
@@ -166,6 +166,47 @@ def _arrow_ipc(rows: pa.Table, metadata: dict[str, str]) -> bytes:
     return sink.getvalue().to_pybytes()
 
 
+class Planner(Protocol):
+    """WHERE THE ENGINE PLANS (docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md §4.1, R3): every call of the page's that the
+    compiler answers -- a query's types, a parse, a print, and an execute's plan, whose SQL Python then runs on its own
+    DuckDB (R4) -- is answered by the one planner the engine was made with, chosen once and shown on the page. Its
+    ``plane`` is the word the page's status bar says (``local``, ``remote``, ``engine``) and its ``label`` the menu's.
+    Today the one planner is Python's own (``NativePlanner``); one on a server (legend-lite's, legend-engine's: step 2c)
+    is another of these."""
+
+    plane: str
+    label: str
+
+    def answer(self, path: str, query: str, body: str) -> compiler.Answer:
+        """A ``pure/v1`` call other than execute, answered as upstream answers it."""
+        ...
+
+    def execute_plan(self, body: str, models: list[str]) -> compiler.Answer:
+        """An ``ExecuteInput`` over one of ``models`` (the only models this host runs) planned: ``{"sql", "metadata"}``,
+        or a refusal to send as it is."""
+        ...
+
+    def refusal(self, message: str) -> compiler.Answer:
+        """A failure said in this planner's own answer shape (legend-engine's)."""
+        ...
+
+
+class NativePlanner:
+    """The ``local`` plane on a Python host: legend-lite's compiler in this process, the native library."""
+
+    plane = 'local'
+    label = 'Plan local (in Python: the native library)'
+
+    def answer(self, path: str, query: str, body: str) -> compiler.Answer:
+        return compiler.pure_v1(path, query, body)
+
+    def execute_plan(self, body: str, models: list[str]) -> compiler.Answer:
+        return compiler.execute_plan(body, models)
+
+    def refusal(self, message: str) -> compiler.Answer:
+        return compiler.refusal(message)
+
+
 class Engine:
     """legend-engine's ``pure/v1`` API over the frames' tables, with no transport: ``answer(method, path, query,
     body)`` is one call, answered as HTTP would carry it. ``site``: a directory whose files are answered too
@@ -173,12 +214,13 @@ class Engine:
     messages."""
 
     def __init__(self, frames: Frames, site: str | Path | None = None,
-                 headless: Callable[[], Any] | None = None) -> None:
+                 headless: Callable[[], Any] | None = None, planner: Planner | None = None) -> None:
         """``headless``: DataCube's own non-screen code over the frames' database (legend_lite._headless), made when
         first asked for -- what reads a page's file into it (file.json). Absent, the engine takes no file, and says so
-        (services.json)."""
+        (services.json). ``planner``: where every query is planned, chosen once (R3): Python's own when not given."""
         self.frames = frames
         self._headless = headless
+        self.planner = planner if planner is not None else NativePlanner()
         self.site = Path(site).resolve() if site is not None else None
         if self.site is not None and not self.site.is_dir():
             raise ValueError(f'the site {site} is not a directory')
@@ -222,8 +264,15 @@ class Engine:
         if path == '/page.json':
             return self._page(query)
         if path == _SERVICES:
-            return Answer(200, 'application/json', json.dumps({'files': self.takes_files()}).encode('utf-8'))
+            return Answer(200, 'application/json', json.dumps(self.services()).encode('utf-8'))
         return self._file(path)
+
+    def services(self) -> dict[str, Any]:
+        """What this engine offers the page beside its frames (services.json, asked once as the page starts): whether
+        it reads a page's file, and where it plans -- the plane it plans on, and every plane it offers (today only its
+        own: choosing another is step 2c's)."""
+        plane = {'word': self.planner.plane, 'label': self.planner.label}
+        return {'files': self.takes_files(), 'plane': plane, 'planes': [plane]}
 
     def takes_files(self) -> bool:
         """Whether a page's file can be read into the frames' database here: DataCube's own code runs headless (its
@@ -310,7 +359,7 @@ class Engine:
         try:
             if path == _EXECUTE and _arrow_requested(query):
                 return self._execute(body)
-            answer = compiler.pure_v1(path, query, body)
+            answer = self.planner.answer(path, query, body)
         except Exception as failure:
             # never a dropped call: the database refusing is an answer; anything else is a bug, logged whole, and
             # answered the same way (as legend-lite's server answers both)
@@ -318,7 +367,7 @@ class Engine:
                 traceback.print_exc()
             message = f'{type(failure).__name__}: {failure}'
             try:
-                answer = compiler.refusal(message)
+                answer = self.planner.refusal(message)
             except Exception:
                 # the compiler itself failing: still an answer, its own words
                 traceback.print_exc()
@@ -331,7 +380,7 @@ class Engine:
         runs); the answer is compressed outside."""
         with self.frames.serving() as models:
             self._noted(models)
-            answer = compiler.execute_plan(body, list(models.values()))
+            answer = self.planner.execute_plan(body, list(models.values()))
             if answer.status != 200:
                 return Answer(answer.status, answer.content_type, answer.body.encode('utf-8'))
             planned = json.loads(answer.body)

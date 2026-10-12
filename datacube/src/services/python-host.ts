@@ -25,7 +25,7 @@ import { base64 } from '../headless/web.ts';
 import { pageToJson, readPage, type PageDocument } from '../page-document.ts';
 import { RemoteRun } from '../runner.ts';
 import type { UploadResult } from '../upload.ts';
-import type { BrowserService, DatabaseService, FrameModel, LivePage, PlaneService, Services, Versions } from '../app/services.ts';
+import type { BrowserService, DatabaseService, FrameModel, LivePage, Plane, PlaneService, PlaneWord, Services, Versions } from '../app/services.ts';
 
 /** How the page reaches Python's engine. */
 export interface PythonLink {
@@ -40,9 +40,18 @@ export interface PythonLink {
 /** What Python shows: a page of its own (`ll.Page`, by its key), or one frame (`ll.show(df)`: a page of one grid). */
 export type PythonShows = { readonly page: string } | { readonly frame: string };
 
-/** What Python's host offers beside its frames (`services.json`): whether it reads a page's file. */
+/** A plane as Python names it: its word, and what the planner menu says of it. */
+export interface PythonPlane {
+  readonly word: PlaneWord;
+  readonly label: string;
+}
+
+/** What Python's host offers beside its frames (`services.json`): whether it reads a page's file, the plane it plans on
+ *  (chosen once, in Python: R3), and every plane it offers (today only that one: another is step 2c's). */
 export interface PythonOffers {
   readonly files: boolean;
+  readonly plane: PythonPlane;
+  readonly planes: readonly PythonPlane[];
 }
 
 export interface PythonServicesOptions {
@@ -60,8 +69,32 @@ export interface PythonServicesOptions {
   readonly browser: BrowserService;
 }
 
-/** Where the page plans: Python's planner, the one plane it offers until the planes come to Python (step 2c). */
-const PYTHON_PLANE: PlaneService = { word: 'local', planes: [], choose: () => undefined };
+const WORDS: readonly PlaneWord[] = ['local', 'remote', 'engine'];
+
+/** A plane Python said, read: its word one of the three every host says (§4.1), or refused. */
+function planeOf(said: unknown): PythonPlane {
+  const p = said as { word?: unknown; label?: unknown } | null;
+  if (p === null || typeof p !== 'object' || !WORDS.includes(p.word as PlaneWord) || typeof p.label !== 'string') {
+    throw new Error(`the engine named a plane this page does not know: ${JSON.stringify(said)}`);
+  }
+  return { word: p.word as PlaneWord, label: p.label };
+}
+
+/**
+ * WHERE THE PAGE PLANS, as Python says (§4.1, R3): the plane Python plans on, chosen once in Python, and the planes it
+ * offers, which the planner menu lists (the one the page is on disabled). Another plane is chosen in Python
+ * (`ll.show(..., planner=...)`, step 2c), so a page asks for none: Python offers only its own until then.
+ */
+function pythonPlanes(offers: PythonOffers): PlaneService {
+  const asPlane = (p: PythonPlane): Plane => ({ id: `host.plane.${p.word}`, word: p.word, label: p.label });
+  return {
+    word: offers.plane.word,
+    planes: offers.planes.map(asPlane),
+    choose: (plane) => {
+      throw new Error(`${plane.label}: Python plans on ${offers.plane.word}, chosen in Python, not on this page`);
+    },
+  };
+}
 
 const headers = (link: PythonLink): Record<string, string> =>
   (link.authorization === undefined ? {} : { Authorization: link.authorization });
@@ -84,9 +117,10 @@ async function frameOf(link: PythonLink, name: string): Promise<FrameModel> {
 
 /** What Python's host offers the page (`services.json`), or why it did not say. */
 export async function askedOffers(link: PythonLink): Promise<PythonOffers> {
-  const said = JSON.parse(await asked(link, 'services.json')) as { files?: unknown };
+  const said = JSON.parse(await asked(link, 'services.json')) as { files?: unknown; plane?: unknown; planes?: unknown };
   if (typeof said.files !== 'boolean') throw new Error(`the engine did not say whether it reads a page's file: ${JSON.stringify(said)}`);
-  return { files: said.files };
+  if (!Array.isArray(said.planes)) throw new Error(`the engine did not say which planes it offers: ${JSON.stringify(said)}`);
+  return { files: said.files, plane: planeOf(said.plane), planes: said.planes.map(planeOf) };
 }
 
 /** A call carrying JSON to Python: its answer's text, or -- refused -- Python's reason. */
@@ -157,8 +191,8 @@ export function pythonServices(o: PythonServicesOptions): Services {
   const { link } = o;
   return {
     engine: {
-      plane: PYTHON_PLANE,
-      label: 'Python',
+      plane: pythonPlanes(o.offers),
+      label: o.offers.plane.word,
       // planned and run by Python: the page sends Pure, and the rows come back (R4). A mapping or enumerations would
       // change the plan, and Python plans over the model it wrote: refused rather than dropped. Bit columns are a
       // reading of legend-engine's types (relation-type.ts, S23), not of legend-lite's, which Python plans with
