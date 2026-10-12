@@ -267,12 +267,21 @@ public final class SqlAst {
     public record When(Expr condition, Expr result) {
     }
 
-    /** {@code name([DISTINCT] args)} or {@code name(*)}. */
-    public record FunctionCall(List<Ident> name, List<Expr> args, boolean distinct, boolean star, Pos pos)
+    /** {@code name([DISTINCT] args [ORDER BY ...]) [WITHIN GROUP (ORDER BY ...)] [FILTER (WHERE ...)]} or
+     *  {@code name(*)}: the last three an aggregate's only. */
+    public record FunctionCall(List<Ident> name, List<Expr> args, boolean distinct, boolean star,
+            List<SortItem> orderBy, List<SortItem> withinGroup, @com.legend.base.Nullable Expr filter, Pos pos)
             implements Expr {
         public FunctionCall {
             name = List.copyOf(name);
             args = List.copyOf(args);
+            orderBy = List.copyOf(orderBy);
+            withinGroup = List.copyOf(withinGroup);
+        }
+
+        /** A call with none of an aggregate's clauses. */
+        public FunctionCall(List<Ident> name, List<Expr> args, boolean distinct, boolean star, Pos pos) {
+            this(name, args, distinct, star, List.of(), List.of(), null, pos);
         }
     }
 

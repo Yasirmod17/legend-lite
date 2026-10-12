@@ -1152,18 +1152,35 @@ public final class SqlParser {
                 }
                 args.add(expr());
             } while (accept(Kind.COMMA));
-            if (peek().is("order")) {
-                throw unsupported("ORDER BY inside an aggregate is");
-            }
+        }
+        List<SqlAst.SortItem> orderBy = new ArrayList<>();
+        if (!star && acceptWord("order")) {
+            expectWord("by");
+            do {
+                orderBy.add(sortItem());
+            } while (accept(Kind.COMMA));
         }
         expect(Kind.RPAREN);
-        if (peek().is("within")) {
-            throw unsupported("WITHIN GROUP is");
+        List<SqlAst.SortItem> withinGroup = new ArrayList<>();
+        if (acceptWord("within")) {
+            expectWord("group");
+            expect(Kind.LPAREN);
+            expectWord("order");
+            expectWord("by");
+            do {
+                withinGroup.add(sortItem());
+            } while (accept(Kind.COMMA));
+            expect(Kind.RPAREN);
         }
-        if (peek().is("filter")) {
-            throw unsupported("FILTER (WHERE ...) is");
+        SqlAst.Expr filter = null;
+        if (acceptWord("filter")) {
+            expect(Kind.LPAREN);
+            expectWord("where");
+            filter = expr();
+            expect(Kind.RPAREN);
         }
-        SqlAst.FunctionCall call = new SqlAst.FunctionCall(name, args, distinct, star, first.pos());
+        SqlAst.FunctionCall call = new SqlAst.FunctionCall(name, args, distinct, star, orderBy, withinGroup, filter,
+                first.pos());
         if (acceptWord("over")) {
             Token over = tokens.get(at - 1);
             if (accept(Kind.LPAREN)) {

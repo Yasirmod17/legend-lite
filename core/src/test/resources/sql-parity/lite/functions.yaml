@@ -120,3 +120,42 @@ tests:
     sql: "SELECT id, greatest(age, '30') AS g, least(salary, '60000') AS l FROM persons ORDER BY id"
   - id: case_of_untyped_constants_is_text
     sql: "SELECT id, CASE WHEN id > 2 THEN 'big' ELSE 'small' END AS c FROM persons ORDER BY id"
+  # integer division truncates toward zero, exact for every bigint
+  - id: integer_division_truncates_toward_zero
+    sql: "SELECT id, int_val / 7 AS q, int_val / -7 AS r, small_val / 3 AS s, abs(int_val / 7) + 1 AS t FROM numbers ORDER BY id"
+  - id: integer_division_of_a_bigint_beyond_two_to_the_53_is_exact
+    sql: "SELECT id, big_val / 2 AS q, big_val / -3 AS r, big_val / big_val AS s, big_val / 7 AS t FROM numbers WHERE big_val <> 0 ORDER BY id"
+  - id: integer_division_by_zero_is_an_error
+    sql: "SELECT int_val / 0 AS q FROM numbers WHERE id = 1"
+  # an aggregate's FILTER (WHERE ...) and DISTINCT
+  - id: aggregate_filter
+    sql: "SELECT dept_id, count(*) FILTER (WHERE age > 30) AS n, sum(salary) FILTER (WHERE active) AS s, avg(age) FILTER (WHERE name LIKE '%a%') AS a FROM persons GROUP BY dept_id ORDER BY 1"
+  - id: aggregate_filter_without_group_by
+    sql: "SELECT count(*) FILTER (WHERE salary IS NULL) AS n, max(name) FILTER (WHERE age < 30) AS m FROM persons"
+  - id: aggregate_distinct
+    sql: "SELECT sum(DISTINCT dept_id) AS s, avg(DISTINCT dept_id) AS a, count(DISTINCT dept_id) AS c, min(DISTINCT age) AS m FROM persons"
+  - id: filter_on_a_scalar_function_is_an_error
+    sql: "SELECT upper(name) FILTER (WHERE age > 1) AS u FROM persons"
+  # found by the randomized check (2026-10-12): GREATEST of a nullable value inside another function; a DISTINCT
+  # select ordered by a computed decimal (Postgres casts the column; the ORDER BY must name the same expression)
+  - id: greatest_of_a_nullable_value_inside_abs
+    sql: "SELECT o.id, abs(greatest(5, p.age)) AS g, least(p.age, 40) AS l FROM orders o LEFT JOIN persons p ON o.person_id = p.id ORDER BY 1"
+  - id: distinct_ordered_by_a_computed_decimal
+    sql: "SELECT DISTINCT (budget - id) AS c1, id AS c3 FROM departments ORDER BY 1, 2"
+  - id: coalesce_with_a_value_before_the_last_is_never_null
+    sql: "SELECT id, coalesce(100, int_val) % 7 AS a, coalesce(int_val, 3, small_val) - 1 AS b, coalesce(NULL, small_val, 0) * 2 AS c FROM numbers ORDER BY id"
+  # ceil, floor, sign and round(x) are numeric for a numeric and double precision otherwise (an integer too);
+  # extract is numeric, date_part double precision: a division of them is exact, never an integer division
+  - id: whole_number_functions_keep_postgres_types
+    sql: "SELECT id, ceil(salary) / 4 AS a, floor(salary) / 3 AS b, ceil(age) / 2 AS c, sign(age) / 2 AS d, round(salary) / 7 AS e, round(age) / 2 AS f FROM persons ORDER BY id"
+  - id: extract_and_date_part_divide_exactly
+    sql: "SELECT id, extract(year FROM hire_date) / 4 AS a, date_part('month', hire_date) / 5 AS b FROM persons ORDER BY id"
+  - id: case_of_a_decimal_and_a_whole_number_keeps_the_decimals
+    sql: "SELECT o.id, CASE WHEN o.id > 3 THEN o.amount ELSE ceil(o.amount) END AS a, CASE WHEN o.id > 3 THEN o.amount ELSE extract(month FROM o.order_date) END AS b FROM orders o ORDER BY 1"
+  # string_agg: Pure's joinStrings over the group; ordered by a column (the group-lambda form), NULLs skipped
+  - id: string_agg_ordered
+    sql: "SELECT dept_id, string_agg(name, ', ' ORDER BY name) AS a, string_agg(name, '|' ORDER BY age DESC, id) AS b FROM persons GROUP BY dept_id ORDER BY 1"
+  - id: string_agg_ordered_with_filter_and_nulls
+    sql: "SELECT string_agg(name, ',' ORDER BY id) FILTER (WHERE active) AS a, string_agg(CASE WHEN age > 30 THEN name END, ',' ORDER BY id) AS b FROM persons"
+  - id: string_agg_of_an_integer_is_an_error
+    sql: "SELECT string_agg(age, ',') AS a FROM persons"

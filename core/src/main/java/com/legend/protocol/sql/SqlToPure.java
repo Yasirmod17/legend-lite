@@ -167,6 +167,22 @@ public final class SqlToPure {
         };
     }
 
+    /** Postgres's integer division, truncating toward zero, exact for every bigint. With the remainder taken off
+     *  ({@code rem} keeps the dividend's sign, as Postgres's {@code %} does) the quotient is a whole number. Pure's
+     *  divide computes it in double precision, within 2^-52 of it; shrunk by 2^-50 and truncated, the estimate is never
+     *  beyond the quotient, so {@code A - q0 * b} (exact integer arithmetic, never beyond A) is a small multiple of the
+     *  divisor, divided once more and added. A divisor of zero is Postgres's error and rem's. */
+    private static ValueSpecification integerQuotient(ValueSpecification a, ValueSpecification b) {
+        ValueSpecification whole = AppliedFunction.infixRun("minus", List.of(a, call("rem", a, b)));
+        ValueSpecification shrunk = AppliedFunction.infixRun("times", List.of(call("divide", whole, b),
+                new com.legend.protocol.spec.CFloat(1.0 - Math.pow(2, -50))));
+        ValueSpecification estimate = call("if", call("greaterThanEqual", shrunk, new CInteger(0L)),
+                thunk(call("floor", shrunk)), thunk(call("ceiling", shrunk)));
+        ValueSpecification error = AppliedFunction.infixRun("minus", List.of(whole,
+                AppliedFunction.infixRun("times", List.of(estimate, b))));
+        return AppliedFunction.infixRun("plus", List.of(estimate, call("round", call("divide", error, b))));
+    }
+
     /** Postgres's numeric promotion for {@code + - *}: integer with integer stays integer; a float wins; else exact. */
     private static Kind arithmetic(Kind a, Kind b) {
         if (a == Kind.INTEGER && b == Kind.INTEGER) {
@@ -1775,6 +1791,10 @@ public final class SqlToPure {
         if (f.distinct()) {
             throw SqlTranslationException.unsupported("DISTINCT is not implemented for window functions", f.pos());
         }
+        if (f.filter() != null || !f.orderBy().isEmpty() || !f.withinGroup().isEmpty()) {
+            throw SqlTranslationException.unsupported("FILTER, ORDER BY or WITHIN GROUP in a window call is not"
+                    + " supported yet", f.pos());
+        }
         if (f.star() && !fn.equals("count")) {
             throw SqlTranslationException.invalid(fn + "(*) is not a function; only count(*) is", f.pos());
         }
@@ -2237,7 +2257,7 @@ public final class SqlToPure {
     // ------------------------------------------------------------------ aggregates
 
     private static final Set<String> AGGREGATES = Set.of("count", "sum", "avg", "min", "max", "stddev", "stddev_samp",
-            "stddev_pop", "variance", "var_samp", "var_pop");
+            "stddev_pop", "variance", "var_samp", "var_pop", "string_agg");
 
     /** Postgres's statistical aggregates and Pure's: sample (n - 1) unless named population. */
     private static final Map<String, String> STATISTICS = Map.of("stddev", "stdDevSample", "stddev_samp",
@@ -2305,6 +2325,16 @@ public final class SqlToPure {
                 return;
             }
             String fn = functionName(f.name().get(0));
+            if (fn.equals("string_agg")) {
+                String want = preferred.get(canon);
+                String name = want != null && !names.contains(want) && !want.startsWith(SYNTHETIC) ? want
+                        : fresh(names);
+                names.add(name);
+                Col col = Col.of(name, Kind.STRING, true);
+                byCanon.put(canon, col);
+                aggregates.add(stringAgg(f, in, name));
+                return;
+            }
             Tx arg;
             if (f.star()) {
                 if (!fn.equals("count")) {
@@ -2317,11 +2347,27 @@ public final class SqlToPure {
                 }
                 arg = tx(f.args().get(0), in, row);
             }
-            if (f.distinct() && !fn.equals("count")) {
-                throw SqlTranslationException.unsupported(fn + "(DISTINCT ...) is not supported yet", f.pos());
+            if (!f.withinGroup().isEmpty()) {
+                throw SqlTranslationException.invalid("WITHIN GROUP is required for ordered-set aggregates only; "
+                        + fn + " is not one", f.pos());
+            }
+            if (!f.orderBy().isEmpty()) {
+                throw SqlTranslationException.unsupported("ORDER BY inside an aggregate is not supported yet", f.pos());
             }
             if (f.distinct()) {
-                notJsonKey(arg.kind(), "count(DISTINCT ...)", f.pos());
+                // the distinct values of the group, each once (Postgres's DISTINCT inside an aggregate)
+                notJsonKey(arg.kind(), fn + "(DISTINCT ...)", f.pos());
+            }
+            SqlAst.Expr filter = f.filter();
+            if (filter != null) {
+                if (containsAggregate(filter)) {
+                    throw SqlTranslationException.invalid("aggregate functions are not allowed in FILTER",
+                            filter.pos());
+                }
+                // the rows the condition holds for only: another row gives no value, as Postgres skips it
+                Tx value = arg;
+                ValueSpecification test = condition(filter, in, "FILTER");
+                arg = Tx.value(call("if", test, thunk(valueOf(value)), thunk(empty())), value.kind(), true);
             }
             ValueSpecification values = new Variable(group);
             if (f.distinct()) {
@@ -2373,6 +2419,67 @@ public final class SqlToPure {
         for (SqlAst.Expr child : children(e)) {
             collectAggregates(child, in, byCanon, aggregates, names, preferred);
         }
+    }
+
+    /** {@code string_agg(text, 'sep' [ORDER BY col [DESC], ...]) [FILTER (WHERE ...)]}: Pure's joinStrings over the
+     *  group, NULLs skipped as Postgres skips them; ordered, the group-lambda form
+     *  ({@code g | $g->joinStrings(r | value, sep, ~k->ascending())}: string_agg(x, sep ORDER BY k)). A key is a
+     *  column, in Postgres's default NULL placement (last ascending, first descending). */
+    private ColSpec stringAgg(SqlAst.FunctionCall f, Input in, String name) {
+        if (f.star() || f.args().size() != 2) {
+            throw SqlTranslationException.invalid("function string_agg takes two arguments", f.pos());
+        }
+        if (f.distinct()) {
+            throw SqlTranslationException.unsupported("string_agg(DISTINCT ...) is not supported yet", f.pos());
+        }
+        if (!f.withinGroup().isEmpty()) {
+            throw SqlTranslationException.invalid("WITHIN GROUP is required for ordered-set aggregates only;"
+                    + " string_agg is not one", f.pos());
+        }
+        for (SqlAst.Expr a : f.args()) {
+            if (containsAggregate(a)) {
+                throw SqlTranslationException.invalid("aggregate function calls cannot be nested", a.pos());
+            }
+        }
+        Tx value = tx(f.args().get(0), in, row);
+        if (value.kind() != Kind.STRING) {
+            throw value.kind() == Kind.OTHER || value.kind() == Kind.NULL
+                    ? SqlTranslationException.unsupported("string_agg of this type is not supported yet", f.pos())
+                    : SqlTranslationException.invalid("function string_agg(" + postgresName(value.kind())
+                            + ", unknown) does not exist", f.pos());
+        }
+        if (!(f.args().get(1) instanceof SqlAst.StringLit sep)) {
+            throw SqlTranslationException.unsupported("a string_agg delimiter other than a constant is not supported"
+                    + " yet", f.args().get(1).pos());
+        }
+        ValueSpecification each = valueOf(value);
+        SqlAst.Expr filter = f.filter();
+        if (filter != null) {
+            if (containsAggregate(filter)) {
+                throw SqlTranslationException.invalid("aggregate functions are not allowed in FILTER", filter.pos());
+            }
+            each = call("if", condition(filter, in, "FILTER"), thunk(each), thunk(empty()));
+        }
+        if (f.orderBy().isEmpty()) {
+            return new ColSpec(name, lambda(row, each), lambda(group, call("joinStrings", new Variable(group),
+                    new CString(sep.value()))), null);
+        }
+        List<ValueSpecification> keys = new ArrayList<>();
+        for (SqlAst.SortItem o : f.orderBy()) {
+            Col c = o.expr() instanceof SqlAst.ColumnRef ref ? in.columnOrNull(ref) : null;
+            if (c == null || c.var() != null) {
+                throw SqlTranslationException.unsupported("a string_agg ORDER BY key other than a column is not"
+                        + " supported yet", o.expr().pos());
+            }
+            Boolean nullsFirst = o.nullsFirst();
+            if (nullsFirst != null && nullsFirst != o.descending()) {
+                throw SqlTranslationException.unsupported("a string_agg ORDER BY key with its NULLs placed otherwise"
+                        + " than Postgres's default is not supported yet", o.pos());
+            }
+            keys.add(call(o.descending() ? "descending" : "ascending", colSpec(c.name())));
+        }
+        return new ColSpec(name, lambda(group, call("joinStrings", new Variable(group), lambda(row, each),
+                new CString(sep.value()), keys.size() == 1 ? keys.get(0) : new PureCollection(keys))), null, null);
     }
 
     /** Refuses an aggregate of only an enclosing query's columns, in any clause: Postgres makes it an aggregate of
@@ -2637,8 +2744,7 @@ public final class SqlToPure {
                 numericOperand(l, b.left());
                 numericOperand(r, b.right());
                 if (l.kind() == Kind.INTEGER && r.kind() == Kind.INTEGER) {
-                    throw SqlTranslationException.unsupported("integer division (which truncates in Postgres) is not"
-                            + " supported yet; divide by a numeric (2.0) for an exact quotient", b.pos());
+                    return strict(Kind.INTEGER, List.of(l, r), v -> integerQuotient(v.get(0), v.get(1)));
                 }
                 return strict(Kind.FLOAT, List.of(l, r), v -> call("divide", v.get(0), v.get(1)));
             }
@@ -3174,6 +3280,13 @@ public final class SqlToPure {
         if (f.distinct() || f.star()) {
             throw SqlTranslationException.invalid(fn + " is not an aggregate", f.pos());
         }
+        if (!f.withinGroup().isEmpty()) {
+            throw SqlTranslationException.unsupported("WITHIN GROUP is not supported yet", f.pos());
+        }
+        if ((f.filter() != null || !f.orderBy().isEmpty()) && FUNCTIONS.containsKey(fn)) {
+            throw SqlTranslationException.invalid((f.filter() != null ? "FILTER" : "ORDER BY") + " specified, but "
+                    + fn + " is not an aggregate function", f.pos());
+        }
         List<Tx> args = new ArrayList<>();
         for (SqlAst.Expr a : f.args()) {
             args.add(tx(a, scope, row));
@@ -3248,7 +3361,8 @@ public final class SqlToPure {
         m.put("sign", (t, f, a, s, r) -> {
             arity(f, a, 1);
             numericOperand(a.get(0), f.args().get(0));
-            return strict(Kind.INTEGER, a, v -> call("sign", v.get(0)));
+            return a.get(0).kind() == Kind.INTEGER ? strict(Kind.FLOAT, a, v -> call("toFloat", call("sign", v.get(0))))
+                    : wholeNumber(a.get(0), v -> call("sign", v));
         });
         m.put("mod", (t, f, a, s, r) -> {
             arity(f, a, 2);
@@ -3344,8 +3458,24 @@ public final class SqlToPure {
     private static Tx numeric1(SqlAst.FunctionCall f, List<Tx> args, String pure) {
         arity(f, args, 1);
         numericOperand(args.get(0), f.args().get(0));
-        Kind result = pure.equals("abs") ? args.get(0).kind() : Kind.INTEGER;
-        return strict(result, args, v -> call(pure, v.get(0)));
+        if (pure.equals("abs")) {
+            return strict(args.get(0).kind(), args, v -> call(pure, v.get(0)));
+        }
+        return wholeNumber(args.get(0), v -> call(pure, v));
+    }
+
+    /** A whole number Postgres computes in its argument's type, as ceil, floor, sign and round(x) do: numeric for a
+     *  numeric, double precision for a double -- and for an integer, which Postgres reads as a double (the preferred
+     *  numeric type). Its kind is that type, so that what reads it next (a division above all) reads what Postgres
+     *  does: {@code ceil(x) / 4} divides exactly. A double is converted (toFloat); a numeric's whole number stays
+     *  Pure's Integer, an exact number either way (a toDecimal of it is a 38-digit decimal of scale 0, which DuckDB's
+     *  CASE then imposes on a branch's decimals). */
+    private static Tx wholeNumber(Tx x, java.util.function.UnaryOperator<ValueSpecification> pure) {
+        if (x.kind() == Kind.INTEGER || x.kind() == Kind.FLOAT) {
+            return strict(Kind.FLOAT, List.of(x), v -> call("toFloat", x.kind() == Kind.INTEGER ? v.get(0)
+                    : pure.apply(v.get(0))));
+        }
+        return strict(Kind.DECIMAL, List.of(x), v -> pure.apply(v.get(0)));
     }
 
     private static Tx nullary(SqlAst.FunctionCall f, List<Tx> args, String pure, Kind result) {
@@ -3362,6 +3492,18 @@ public final class SqlToPure {
         Common common = common("COALESCE", f.args(), arguments, f.pos());
         List<Tx> args = common.values();
         Kind kind = common.kind();
+        // the arguments after the first that is never NULL are never read (Postgres evaluates none of them): it is
+        // the last, so the result is one value where Pure types it (by its last argument)
+        for (int i = 0; i < args.size() - 1; i++) {
+            if (!args.get(i).nullable()) {
+                args = args.subList(0, i + 1);
+                break;
+            }
+        }
+        if (args.size() == 1) {
+            Tx only = args.get(0);
+            return kind == Kind.BOOLEAN || only.kind() == kind ? only : Tx.value(valueOf(only), kind, only.nullable());
+        }
         boolean nullable = true;
         for (Tx a : args) {
             nullable &= a.nullable();
@@ -3460,7 +3602,12 @@ public final class SqlToPure {
             throw SqlTranslationException.unsupported("round(...) of a double precision value (half to even in"
                     + " Postgres) is not supported yet", f.pos());
         }
-        return x.kind() == Kind.INTEGER ? x : strict(Kind.INTEGER, List.of(x), v -> halfAwayFromZero(v.get(0)));
+        if (x.kind() == Kind.INTEGER) {
+            // round(int) is round(double precision) in Postgres; round(int, n) round(numeric, n): the value itself
+            return args.size() == 2 ? Tx.value(x.vs(), Kind.DECIMAL, x.nullable())
+                    : strict(Kind.FLOAT, List.of(x), v -> call("toFloat", v.get(0)));
+        }
+        return wholeNumber(x, SqlToPure::halfAwayFromZero);
     }
 
     /** The nearest integer, a tie away from zero (Postgres's numeric rounding; Pure's round breaks ties to even). */
@@ -3539,8 +3686,11 @@ public final class SqlToPure {
     private static Tx better(Tx l, Tx r, boolean greatest) {
         ValueSpecification lv = valueOf(l);
         ValueSpecification rv = valueOf(r);
-        ValueSpecification v = call("if", call(greatest ? "greaterThanEqual" : "lessThanEqual",
-                l.nullable() ? call("toOne", lv) : lv, r.nullable() ? call("toOne", rv) : rv), thunk(lv), thunk(rv));
+        // where both hold a value, each is one value: the pick is never empty (its type says so)
+        ValueSpecification lOne = l.nullable() ? call("toOne", lv) : lv;
+        ValueSpecification rOne = r.nullable() ? call("toOne", rv) : rv;
+        ValueSpecification v = call("if", call(greatest ? "greaterThanEqual" : "lessThanEqual", lOne, rOne),
+                thunk(lOne), thunk(rOne));
         if (r.nullable()) {
             v = call("if", call("isEmpty", rv), thunk(lv), thunk(v));
         }
@@ -3594,7 +3744,9 @@ public final class SqlToPure {
             throw SqlTranslationException.unsupported(fn + "(" + name + " ...) of a " + x.kind().name().toLowerCase(
                     Locale.ROOT) + " value is not supported yet", f.args().get(1).pos());
         }
-        return strict(Kind.INTEGER, List.of(x), v -> call(pure, v.get(0)));
+        // extract is numeric in Postgres (14 on), date_part double precision: a field's whole number as either
+        return fn.equals("extract") ? strict(Kind.DECIMAL, List.of(x), v -> call(pure, v.get(0)))
+                : strict(Kind.FLOAT, List.of(x), v -> call("toFloat", call(pure, v.get(0))));
     }
 
     /** Refuses another number of arguments as not supported: Postgres may have that overload (btrim(x, chars)). */
@@ -4155,6 +4307,15 @@ public final class SqlToPure {
 
     /** An expression's structure, its column references resolved: two spellings of one expression ({@code name},
      *  {@code t.NAME}) have one canonical form. Postgres matches GROUP BY and select-list expressions this way. */
+    private static String sorts(List<SqlAst.SortItem> items, Input in) {
+        StringBuilder b = new StringBuilder("[");
+        for (SqlAst.SortItem i : items) {
+            b.append(canon(i.expr(), in)).append(i.descending() ? " desc" : "").append(" nulls ")
+                    .append(i.nullsFirst()).append(';');
+        }
+        return b.append(']').toString();
+    }
+
     private static String canon(SqlAst.Expr e, Input in) {
         return switch (e) {
             case SqlAst.ColumnRef ref -> {
@@ -4197,9 +4358,13 @@ public final class SqlToPure {
                 b.append(",else(").append(otherwise == null ? "" : canon(otherwise, in)).append("))");
                 yield b.toString();
             }
-            case SqlAst.FunctionCall f -> "fn(" + String.join(".", f.name().stream()
-                    .map(SqlToPure::functionName).toList()) + "," + f.distinct() + "," + f.star()
-                    + list(f.args(), in) + ")";
+            case SqlAst.FunctionCall f -> {
+                SqlAst.Expr filter = f.filter();
+                yield "fn(" + String.join(".", f.name().stream().map(SqlToPure::functionName).toList()) + ","
+                        + f.distinct() + "," + f.star() + list(f.args(), in) + sorts(f.orderBy(), in) + "within"
+                        + sorts(f.withinGroup(), in) + (filter == null ? "" : "filter(" + canon(filter, in) + ")")
+                        + ")";
+            }
             case SqlAst.Cast c -> "cast(" + c.type().name() + c.type().modifiers() + "," + canon(c.operand(), in)
                     + ")";
             // a subquery or a window call is the one it is: matched only to itself, by where it was written
@@ -4271,7 +4436,16 @@ public final class SqlToPure {
                 }
                 yield all;
             }
-            case SqlAst.FunctionCall f -> f.args();
+            case SqlAst.FunctionCall f -> {
+                List<SqlAst.Expr> all = new ArrayList<>(f.args());
+                f.orderBy().forEach(o -> all.add(o.expr()));
+                f.withinGroup().forEach(o -> all.add(o.expr()));
+                SqlAst.Expr filter = f.filter();
+                if (filter != null) {
+                    all.add(filter);
+                }
+                yield all;
+            }
             case SqlAst.Cast c -> List.of(c.operand());
             // a subquery's insides are its own query's: its aggregates are not this one's
             case SqlAst.ScalarSubquery q -> List.of();

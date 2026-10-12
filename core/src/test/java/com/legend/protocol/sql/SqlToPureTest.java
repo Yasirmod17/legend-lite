@@ -261,7 +261,7 @@ class SqlToPureTest {
     void nullifAndGreatestSpellPostgresNullsOut() {
         // greatest ignores a NULL: age's NULL gives ID
         assertEquals("#>{s::DB.T}#->extend(~[d:r|if($r.dept == 'eng', |[], |$r.dept), g:r|if($r.age->isEmpty(), |$r.ID,"
-                        + " |if($r.ID >= $r.age->toOne(), |$r.ID, |$r.age))])->select(~[d, g])",
+                        + " |if($r.ID >= $r.age->toOne(), |$r.ID, |$r.age->toOne()))])->select(~[d, g])",
                 pure("select nullif(dept, 'eng') as d, greatest(ID, age) as g from tb('s::DB.T')"));
     }
 
@@ -353,7 +353,7 @@ class SqlToPureTest {
 
     @Test
     void caseAndCoalesceResolveOneTypeAsPostgresDoes() {
-        assertEquals("#>{s::DB.T}#->extend(~[c:r|$r.ID->coalesce(5), d:r|if($r.ID > 1, |1, |2.5D),"
+        assertEquals("#>{s::DB.T}#->extend(~[c:r|$r.ID, d:r|if($r.ID > 1, |1, |2.5D),"
                 + " e:r|$r.j->coalesce(fromJson('[]'))])->select(~[c, d, e])", pure("select coalesce(ID, '5') as c, case when ID > 1 then 1 else 2.5 end as d,"
                 + " coalesce(j, '[]') as e from tb('s::DB.T')", JSON_COLUMNS));
         assertEquals("the string 'x' read as integer is not supported yet", refusal("select coalesce(ID, 'x') from"
@@ -486,6 +486,23 @@ class SqlToPureTest {
     // ------------------------------------------------------------------ refusals
 
     @Test
+    void aggregateFilterDistinctAndIntegerDivision() {
+        assertEquals("#>{s::DB.T}#->groupBy(~[dept], ~[n:r|if($r.age->isNotEmpty() && ($r.age->toOne() > 30), |1, |[])"
+                + ":y|$y->count(), s:r|$r.age:y|$y->distinct()->sum()])->select(~[dept, n, s])", pure("select dept, count(*) filter (where age > 30) as n, sum(distinct age) as s"
+                + " from tb('s::DB.T') group by dept"));
+        assertEquals("#>{s::DB.T}#->extend(~[q:r|if($r.age->isEmpty(), |[], |if((($r.age->toOne() - $r.age->toOne()->rem(7"
+                + ")) / 7) * 0.9999999999999991 >= 0, |floor((($r.age->toOne() - $r.age->toOne()->rem(7)) / 7) * 0.9999"
+                + "999999999991), |ceiling((($r.age->toOne() - $r.age->toOne()->rem(7)) / 7) * 0.9999999999999991)) + r"
+                + "ound((($r.age->toOne() - $r.age->toOne()->rem(7)) - (if((($r.age->toOne() - $r.age->toOne()->rem(7))"
+                + " / 7) * 0.9999999999999991 >= 0, |floor((($r.age->toOne() - $r.age->toOne()->rem(7)) / 7) * 0.999999"
+                + "9999999991), |ceiling((($r.age->toOne() - $r.age->toOne()->rem(7)) / 7) * 0.9999999999999991)) * 7))"
+                + " / 7))])->select(~[q])",
+                pure("select age / 7 as q from tb('s::DB.T')"));
+        assertEquals("FILTER specified, but upper is not an aggregate function",
+                refusal("select upper(name) filter (where age > 1) from tb('s::DB.T')").getMessage());
+    }
+
+    @Test
     void refusalsSayTheirKindAndWhere() {
         SqlTranslationException syntax = refusal("select ID from tb('s::DB.T') where");
         assertEquals(SqlTranslationException.Kind.SYNTAX, syntax.kind());
@@ -493,7 +510,8 @@ class SqlToPureTest {
         assertEquals(35, syntax.column());
         assertEquals(SqlTranslationException.Kind.UNSUPPORTED,
                 refusal("select ID from tb('s::DB.T') a, lateral (select 1) b").kind());
-        assertEquals(SqlTranslationException.Kind.UNSUPPORTED, refusal("select age / 2 from tb('s::DB.T')").kind());
+        assertEquals(SqlTranslationException.Kind.UNSUPPORTED,
+                refusal("select percentile_cont(0.5) within group (order by age) from tb('s::DB.T')").kind());
         SqlTranslationException grouped = refusal("select dept, age from tb('s::DB.T') group by dept");
         assertEquals(SqlTranslationException.Kind.INVALID, grouped.kind());
         assertEquals("column \"age\" must appear in the GROUP BY clause or be used in an aggregate function",
