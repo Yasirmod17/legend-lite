@@ -526,9 +526,19 @@ Python's in-process services.
      finds it installed and loads it, and an extension not there is refused, never fetched. The macOS arm64 wheel is
      25.0 MB, 5.6 MB of it httpfs. Tests are given the folder as `LEGEND_LITE_DUCKDB_EXTENSIONS`; `wheel_test` proves an
      installed wheel reads a remote file with its own.
-   - **Remote schemes only**: Python reads a page's remote file from `http(s)`, `s3`, `gs`, `r2`, `az`, `abfss` or `hf`
-     URLs, and refuses a path, `file://`, a Windows path or any other scheme before any SQL runs: Python's DuckDB can
-     read this machine's files, and the page must not make it (R4's reason). A file of this machine comes from the page
+   - **Remote schemes only**: Python reads a page's remote file from `http(s)`, `s3`, `gs`, `r2` or `hf` URLs (no Azure:
+     the wheel carries no azure extension), and refuses a path, `file://`, a Windows path or any other scheme before any
+     SQL runs: Python's DuckDB can read this machine's files, and the page must not make it (R4's reason). The URL must
+     begin with exactly `<scheme>://`, lower case, and hold no space or control character anywhere: DuckDB matches its
+     remote file systems by that very prefix and reads anything else from this machine, so Python never judges a URL by
+     its own, more forgiving reading of it (the audit's blocker: `HTTP://…` and ` http://…` passed a check on the parsed
+     scheme, and DuckDB read them as local paths).
+   - **When Python reads none, it says why**: without the `datacube` extra; on a DuckDB of the person's own (`Frames`
+     given a connection: the extension settings would change it for good, so they are set only on a database
+     legend-lite made); and when the installed duckdb is not the one the carried httpfs is for (the wheel takes any
+     duckdb 1.5.5 and later, and httpfs is carried for 1.5.5: the refusal names both). A slow remote server holds the
+     page's other queries while it answers, as every query over a remote view does: one connection, its queries one at a
+     time. A file of this machine comes from the page
      through Files (its bytes), or from Python code. An `http://` URL may still name this machine's or its network's own
      servers, which Python fetches without the browser's CORS rules; only the engine's own page, with its token, can ask.
    - **One implementation**: the tab's mount (a view over the file, its model from the catalog) is `upload.ts`'s
@@ -553,21 +563,26 @@ Python's in-process services.
 
    **2c's seams, as built (2026-10-12)** (the user: no remote-engine calls in this phase, but the code "pluggable even if
    we never plug in the others").
-   - Python's engine answers every call the compiler answers -- a query's types, a parse, a print, and an execute's
-     plan -- through the one `Planner` it was made with, chosen once (R3); today `NativePlanner`, the native library,
-     on the `local` plane. One on a server is another `Planner`, with no other change to the engine.
+   - Python's engine answers every call the PAGE makes that the compiler answers -- the engine's pure/v1 API: a query's
+     types, a parse, a print, and an execute's plan -- through the one `Planner` it was made with, chosen once (R3);
+     today `NativePlanner`, the native library, on the `local` plane. One on a server is another `Planner`, with no
+     other change to the engine. Python's own calls in its process (a headless grid's view, `Frames.plan`) still plan
+     with the native library: routing them through the same planner is 2c's too.
    - `services.json` names the plane Python plans on and the planes it offers (today its own), and the page builds its
      planner menu and its status word from them: no plane is written into the page. Choosing another plane is Python's
-     (`ll.show(..., planner=...)`, when 2c is built).
+     (`ll.show(..., planner=...)`, when 2c is built); until then the page refuses an offer of a plane it could not
+     switch to, rather than list one whose entry would fail.
 
    **2d, as built (2026-10-12): Save and Open… on Python** (the user's choice of the two shapes: the page keeps the
    store's rules, Python keeps the records).
    - **Python's side** (`python/legend_lite/_home.py`): `home()` is this user's legend-lite folder (Q1: the operating
-     system's per-user data folder; `LEGEND_LITE_HOME`, or `home(path)` for this process, points it elsewhere), and
+     system's per-user data folder, made private to its owner; `home(path)` points this process elsewhere, and wins over
+     `LEGEND_LITE_HOME`, a folder for every process started with it, such as a test's own), and
      `SavedPages` keeps the page's saved pages in `home()/pages`: the browser's records, one `<id>.json` file each, the
      page's content kept as its exact JSON text and never read in Python. Four calls (`saved-pages.json`: all, find, put,
      remove), each record written whole (beside, then moved over), under a lock file several Python processes share;
-     an id that could name another place is refused.
+     an id that could name another place, or a Windows device, is refused; a file that is not a record is left out,
+     and said, so the others still open.
    - **The page's side**: `cube-store.ts`'s `HostRecords`, a third backend beside memory and IndexedDB, carries the four
      calls to the host, and the store's rules are `RuleStore`'s, unchanged. Python's services give `pages` from it; the
      save window and Open… say where (`in <home>/pages`), and its owner is `this user`, as the browser's is `this

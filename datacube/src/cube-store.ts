@@ -254,7 +254,7 @@ export class BrowserRecords implements CubeRecords {
   }
 }
 
-/** One of the four calls a host answers for the records it keeps (python/legend_lite/home.py's SavedPages). */
+/** One of the four calls a host answers for the records it keeps (python/legend_lite/_home.py's SavedPages). */
 export type HostRecordsCall =
   | { readonly call: 'all' }
   | { readonly call: 'find' | 'remove'; readonly id: string }

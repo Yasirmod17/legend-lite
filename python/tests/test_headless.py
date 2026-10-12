@@ -331,12 +331,42 @@ class Remote(unittest.TestCase):
 
     def test_a_url_that_is_not_remote_is_refused_before_anything_runs(self):
         local = Path(self.folder.name, 'desks.csv')
-        for url in (str(local), local.as_uri(), 'C:\\Users\\x\\secret.csv', 'ftp://127.0.0.1/x.csv', 'http://', '~/.ssh/id_rsa'):
+        port = self.base.rsplit(':', 1)[1]
+        for url in (str(local), local.as_uri(), 'C:\\Users\\x\\secret.csv', 'ftp://127.0.0.1/x.csv', 'http://', '~/.ssh/id_rsa',
+                    # what Python's own reading of a URL takes for http, which DuckDB reads from this machine instead
+                    f'HTTP://127.0.0.1:{port}/desks.csv', f' http://127.0.0.1:{port}/desks.csv',
+                    f'ht\ttp://127.0.0.1:{port}/desks.csv', f'http://127.0.0.1:{port}/desks.csv\n',
+                    f'http://127.0.0.1:{port}/desks.csv\x7f', 'azure://account/c/x.parquet'):
             with self.subTest(url=url):
                 answer = self.mount(url, 'remote_refused')
                 self.assertEqual(answer.status, 400, answer.body[:300])
                 self.assertIn(b'never from this machine', answer.body)
         self.assertFalse(self.frames.taken('remote_refused'))
+
+    def test_a_duckdb_the_extensions_are_not_for_is_said_by_name(self):
+        import tempfile
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as other:
+            (Path(other) / 'v0.0.1' / 'osx_arm64').mkdir(parents=True)
+            with mock.patch.dict(os.environ, {'LEGEND_LITE_DUCKDB_EXTENSIONS': other}):
+                answer = self.mount(f'{self.base}/trades.parquet', 'remote_version')
+                self.assertEqual(answer.status, 404)
+                self.assertIn(b'for duckdb 0.0.1', answer.body)
+
+    def test_a_database_of_the_persons_own_is_left_as_they_keep_it(self):
+        import duckdb
+        own = duckdb.connect()
+        engine = Engine(ll.Frames(connection=own), headless=datacube._session.headless)
+        self.assertFalse(json.loads(engine.answer('GET', '/services.json', '', None).body)['remote'])
+        self.assertEqual(engine.answer('POST', '/remote.json', '', json.dumps(
+            {'url': f'{self.base}/trades.parquet', 'name': 'remote_own'})).status, 404)
+        self.assertEqual(own.execute("SELECT current_setting('autoinstall_known_extensions')").fetchone()[0], True)
+
+    def test_a_remote_view_is_not_let_go_of_as_a_files_table(self):
+        self.assertEqual(self.mount(f'{self.base}/desks.csv', 'remote_kept').status, 200)
+        answer = self.engine.answer('POST', '/forget.json', '', json.dumps({'name': 'desks.csv', 'table': 'remote_kept'}))
+        self.assertEqual(answer.status, 404)
+        self.assertEqual(self.frames.connection.execute('SELECT count(*) FROM remote_kept').fetchone()[0], 2)
 
     def test_without_the_extensions_the_engine_reads_no_remote_file(self):
         from unittest import mock

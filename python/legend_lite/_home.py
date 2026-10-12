@@ -2,9 +2,11 @@
 Python analogue of the browser's per-site storage -- a folder of this user's, shared by every notebook and script --
 and, in it, the saved pages DataCube's Save and Open… keep (§5, step 2d).
 
-``home()`` says where it is: ``LEGEND_LITE_HOME``, else the folder ``home(path)`` pointed this process at, else the
-operating system's per-user data folder (macOS ``~/Library/Application Support/legend-lite``, Linux
-``$XDG_DATA_HOME/legend-lite`` or ``~/.local/share/legend-lite``, Windows ``%LOCALAPPDATA%\\legend-lite``).
+``home()`` says where it is: the folder ``home(path)`` pointed this process at, else ``LEGEND_LITE_HOME`` (a folder for
+every process started with it: a test's own), else the operating system's per-user data folder (macOS
+``~/Library/Application Support/legend-lite``, Linux ``$XDG_DATA_HOME/legend-lite`` or ``~/.local/share/legend-lite``,
+Windows ``%LOCALAPPDATA%\\legend-lite``). Its folders are made private to this user (on POSIX: only its owner reads
+them), as the browser's storage is the person's own.
 
 The saved pages are the browser's records, kept as files: the page's rules (who owns a page, its times, search) are
 DataCube's own, run in the page, as they are over the browser's IndexedDB (cube-store.ts's RuleStore). Python keeps
@@ -32,11 +34,11 @@ def home(path: str | Path | None = None) -> Path:
     global _chosen
     if path is not None:
         _chosen = Path(path).expanduser().resolve()
-    explicit = os.environ.get('LEGEND_LITE_HOME')
-    if explicit:
-        return Path(explicit)
     if _chosen is not None:
         return _chosen
+    explicit = os.environ.get('LEGEND_LITE_HOME')
+    if explicit:
+        return Path(explicit).expanduser().resolve()
     return _system_home()
 
 
@@ -50,8 +52,10 @@ def _system_home() -> Path:
     return (Path(data) if data else Path.home() / '.local' / 'share') / 'legend-lite'
 
 
-# a record's id names its file: what a page makes (crypto.randomUUID) and nothing that could name another place
+# a record's id names its file: what a page makes (crypto.randomUUID) and nothing that could name another place -- nor
+# a device Windows keeps whatever folder it is in (CON, NUL, COM1, ...)
 _ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z')
+_DEVICE = re.compile(r'(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])\Z', re.IGNORECASE)
 
 
 class SavedPages:
@@ -62,8 +66,16 @@ class SavedPages:
         self.folder = folder if folder is not None else home() / 'pages'
 
     def all(self) -> list[dict[str, Any]]:
+        """Every record; one that is not a record (a file written by something else, cut short) is left out, and said
+        on standard error, so the others still open."""
+        found = []
         with self._locked():
-            return [self._read(f) for f in sorted(self.folder.glob('*.json'))]
+            for f in sorted(self.folder.glob('*.json')):
+                try:
+                    found.append(self._read(f))
+                except (ValueError, OSError) as unread:
+                    print(f'legend-lite: {f} is not a saved page ({unread}); it is left out', file=sys.stderr)
+        return found
 
     def find(self, id: str) -> dict[str, Any] | None:
         path = self._path(id)
@@ -91,18 +103,23 @@ class SavedPages:
             path.unlink(missing_ok=True)
 
     def _path(self, id: Any) -> Path:
-        if not isinstance(id, str) or not _ID.match(id):
+        if not isinstance(id, str) or not _ID.match(id) or _DEVICE.match(id):
             raise ValueError(f'a saved page\'s id is letters, digits, "-" and "_" (as a page makes one), not {id!r}')
         return self.folder / f'{id}.json'
 
     @staticmethod
     def _read(path: Path) -> dict[str, Any]:
-        return json.loads(path.read_text(encoding='utf-8'))
+        record = json.loads(path.read_text(encoding='utf-8'))
+        if not isinstance(record, dict):
+            raise ValueError('not a record')
+        return record
 
     @contextlib.contextmanager
     def _locked(self) -> Iterator[None]:
-        """The folder held for one call, across every Python process of this user (a lock file beside the records)."""
-        self.folder.mkdir(parents=True, exist_ok=True)
+        """The folder held for one call, across every Python process of this user (a lock file beside the records). The
+        folder and the one it is in are made private to this user when this makes them."""
+        self.folder.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.folder.mkdir(mode=0o700, exist_ok=True)
         with open(self.folder / '.lock', 'a+b') as lock:
             if sys.platform == 'win32':
                 import msvcrt

@@ -95,6 +95,10 @@ function planeOf(said: unknown): PythonPlane {
  * (`ll.show(..., planner=...)`, step 2c), so a page asks for none: Python offers only its own until then.
  */
 function pythonPlanes(offers: PythonOffers): PlaneService {
+  // a plane offered here would be one the page could choose, which it cannot yet: refused, never a menu entry that
+  // asks to reload and then fails
+  const other = offers.planes.find((p) => p.word !== offers.plane.word);
+  if (other) throw new Error(`the engine offers ${other.label}, and this page chooses no plane on Python yet (step 2c)`);
   const asPlane = (p: PythonPlane): Plane => ({ id: `host.plane.${p.word}`, word: p.word, label: p.label });
   return {
     word: offers.plane.word,

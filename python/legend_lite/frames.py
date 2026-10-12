@@ -185,6 +185,9 @@ class Frames:
 
     def __init__(self, connection: duckdb.DuckDBPyConnection | None = None) -> None:
         self.connection = connection if connection is not None else duckdb.connect()
+        # a database Frames made itself, which legend-lite may set up for its own reading (an engine's remote files),
+        # where the person's own is left as they keep it
+        self.owns_connection = connection is None
         for statement in compiler.session_setup('DuckDB'):
             self.connection.execute(statement)
         self._lock = threading.RLock()
@@ -277,12 +280,12 @@ class Frames:
 
     def file_table(self, name: str) -> str | None:
         """The table a page's file was read into, by the name a page gives it, as Frames named it -- or None when no
-        file's table has that name (a page drops no other)."""
+        file's table has that name (a page drops no other; a remote file's view is not let go of this way)."""
         if not _NAME.match(name):
             return None
         with self._lock:
             kept = self._files.get(name.lower())
-            return None if kept is None else kept[0]
+            return None if kept is None or kept[2] else kept[0]
 
     def forget_file(self, name: str) -> None:
         """A page's file let go of, its table dropped (by DataCube's code, inside ``holding``): its model served no more."""

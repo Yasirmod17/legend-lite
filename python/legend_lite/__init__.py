@@ -31,8 +31,9 @@ from .compiler import (
     table_model,
 )
 
-# Frames, Engine, show, DataCube, Page and home are not listed: `from legend_lite import *` would import duckdb through
-# them (home is the package's, beside the engine that keeps its pages)
+# Frames, Engine, show, DataCube and Page are not listed: `from legend_lite import *` would import duckdb through them.
+# Nor is home: it is the whole package's (//python:legend_lite, beside the engine that keeps its pages), not the
+# compiler's bindings'
 __all__ = [
     'Column', 'HeldModel', 'LegendError', 'Plan', 'catalog_columns_sql', 'database_from_catalog', 'model_elements', 'parse',
     'plan', 'plan_text', 'print_tree', 'relation_type', 'session_setup', 'table_model',

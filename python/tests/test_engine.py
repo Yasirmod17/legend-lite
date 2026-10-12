@@ -8,6 +8,7 @@ import json
 from decimal import Decimal
 import os
 import socket
+import sys
 import tempfile
 import threading
 import time
@@ -250,12 +251,23 @@ class SavedPagesKept(unittest.TestCase):
         self.assertEqual([p.name for p in self.folder.iterdir() if p.suffix == '.part'], [])
 
     def test_an_id_that_could_name_another_place_is_refused(self):
-        for bad in ('../escape', '.lock', '', 'a/b', 'a\\b', 'C:x', 7):
+        for bad in ('../escape', '.lock', '', 'a/b', 'a\\b', 'C:x', 7, 'CON', 'nul', 'COM1', 'lpt9'):
             with self.subTest(id=bad):
                 self.assertEqual(self.call(call='find', id=bad).status, 400)
                 self.assertEqual(self.call(call='put', record={'id': bad, 'name': 'x', 'content': '{}'}).status, 400)
         self.assertEqual(self.call(call='put', record={'id': 'ok', 'name': 'x', 'content': {'not': 'text'}}).status, 400)
         self.assertEqual(self.call(call='rename').status, 400)
+
+    def test_a_file_that_is_not_a_record_is_left_out_and_the_others_open(self):
+        self.assertEqual(self.call(call='put', record={'id': 'good', 'name': 'G', 'content': '{}'}).status, 204)
+        (self.folder / 'cut-short.json').write_text('{"id": "cut-sho', encoding='utf-8')
+        (self.folder / 'a-list.json').write_text('[1, 2]', encoding='utf-8')
+        self.assertEqual([r['id'] for r in json.loads(self.call(call='all').body)], ['good'])
+
+    @unittest.skipIf(sys.platform == 'win32', 'a folder private to its owner is a POSIX mode')
+    def test_the_folder_is_private_to_this_user(self):
+        self.assertEqual(self.call(call='put', record={'id': 'p', 'name': 'P', 'content': '{}'}).status, 204)
+        self.assertEqual(self.folder.stat().st_mode & 0o777, 0o700)
 
     def test_one_writer_at_a_time_across_its_holders(self):
         # another holder of the folder's lock (another notebook's process takes the same file lock) holds it: a put waits
@@ -273,12 +285,22 @@ class SavedPagesKept(unittest.TestCase):
         from unittest import mock
         import importlib
         home_module = importlib.import_module('legend_lite._home')
+        self.addCleanup(setattr, home_module, '_chosen', home_module._chosen)
+        home_module._chosen = None
         with mock.patch.dict(os.environ, {'LEGEND_LITE_HOME': self.place.name}):
-            self.assertEqual(ll.home(), Path(self.place.name))
+            self.assertEqual(ll.home(), Path(self.place.name).resolve())
+            # a folder the process points itself at wins over the one it was started with
+            chosen = Path(self.place.name) / 'chosen'
+            self.assertEqual(ll.home(chosen), chosen.resolve())
+            self.assertEqual(ll.home(), chosen.resolve())
+        home_module._chosen = None
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop('LEGEND_LITE_HOME', None)
-            self.addCleanup(setattr, home_module, '_chosen', home_module._chosen)
-            self.assertEqual(ll.home(self.place.name), Path(self.place.name).resolve())
+            if sys.platform == 'darwin':
+                self.assertEqual(ll.home(), Path.home() / 'Library' / 'Application Support' / 'legend-lite')
+            elif sys.platform.startswith('linux'):
+                os.environ['XDG_DATA_HOME'] = self.place.name
+                self.assertEqual(ll.home(), Path(self.place.name) / 'legend-lite')
         said = json.loads(self.engine.answer('GET', '/services.json', '', None).body)
         self.assertEqual(said['pages'], {'where': str(self.folder), 'user': 'this user'})
 

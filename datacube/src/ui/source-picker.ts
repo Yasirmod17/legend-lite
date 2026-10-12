@@ -115,7 +115,7 @@ export interface PickerSections<T> {
     /** Show the S3 credentials open: the file was refused without them. */
     readonly keys?: boolean;
     /** Who reads the file, said under the form: the page's own database (the server must let this page read it), or
-     *  its host's (Python's). */
+     *  its host's (a Python host's DuckDB). */
     readonly reader: 'page' | 'host';
   };
 }
@@ -612,7 +612,7 @@ export function pickSource<T>(doc: Document, options: PickSourceOptions<T>): Pro
         const endpoint = field(creds, 'Endpoint');
         el(doc, 'p', 'dc-picker-fine', form, remote.reader === 'page'
           ? 'The server must allow this page to read it (CORS); Delta tables are not read.'
-          : 'Python reads it, from a server or a bucket (never a file of this machine: choose that under Files); Delta tables are not read.');
+          : 'This page\'s host reads it, from a server or a bucket (never a file of its own machine: choose that under Files); Delta tables are not read.');
         const go = el(doc, 'div', 'dc-picker-actions', form);
         const submit = el(doc, 'button', 'dc-picker-button dc-primary', go, 'Open') as HTMLButtonElement;
         submit.type = 'submit';
