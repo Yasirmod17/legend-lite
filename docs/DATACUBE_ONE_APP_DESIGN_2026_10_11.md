@@ -375,6 +375,20 @@ Python's in-process services.
    - **1d.** The model actions (each a core and a window), the planes, the Pure & SQL window. `boot.ts` is then the
      tab's services. `demo/page.ts` goes, and with it the dead `if (models)` branches (both planners always return
      `models`).
+
+   **As built (2026-10-11, branch `datacube/one-app-1a`):**
+   - **1a** (e6d6ec56f): `src/app/services.ts` and `src/services/browser.ts`, and `boot.ts` reads everything through
+     them. The dead `if (models)` branches fell out here. `config.json` is read once as the page starts, not again at
+     each use.
+   - **1b** (1f3fff381): `src/app/sources.ts`.
+   - **1c** (ba2876221): `src/app/datacube-app.ts`, `openDataCube`, taking 1c's and 1d's moves together (the page, its
+     saved pages, share, the start, the planes' menu, the Pure & SQL window, the model actions), since they share their
+     state. The app builds its own windows (their markup and styles were `index.html`'s). The share link's address and
+     the tab's title are browser services. `boot.ts` is the tab's host, 465 lines; it was 2,384.
+   - **1d** (eadd0e854): `demo/page.ts` goes, its checks run on the app (`verify_page_test`: the sample grid and its
+     copy).
+   - **Not in step 1: each model action as a core and a window.** It comes with step 4, when headless is the second
+     caller; a split now would have no caller.
 2. **Python's pages open the app.** Four landings:
    - **2a.** `engine-page.ts` and `engine-cube.ts` go: the app over Python's services, the live page, `ll.show(df)` a
      page of one grid. Python's pages gain every app feature that needs no new service: the Pure & SQL window,
