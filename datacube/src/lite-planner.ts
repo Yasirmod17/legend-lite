@@ -456,21 +456,35 @@ export class LitePlanner implements Planner, TableModels, ModelWriter {
 
   /** E9's twin: a query (a protocol tree) planned -- its SQL and the compiler's result type. */
   async plan(query: Lambda, signal?: AbortSignal): Promise<Plan> {
-    const json = toJson(this.#overMapping(query));
+    const { lambda: json, model, runtime } = this.planRequest(query);
     const useCache = this.#options.cache !== false;
     const hit = useCache ? this.#cache.get(json) : undefined;
     if (hit !== undefined) return hit;
     if (signal?.aborted) throw signal.reason ?? new Error('aborted');
-    const { model, runtime } = this.#options;
     const handle = await this.#handle();
     const answer = this.#useWorker()
       ? await this.#ask({ kind: 'planJson', handle, lambda: json, runtime })
       : (await this.#load()).exports.planJsonHeldOrError(handle, json, runtime);
     if (signal?.aborted) throw signal.reason ?? new Error('aborted');
-    const body = JSON.parse(decode(answer, query)) as { sql: string; type: unknown };
-    const plan: Plan = { sql: body.sql, columns: relationColumns(body.type) };
+    const plan = this.readPlan(answer, query);
     if (useCache && this.#options.model === model) this.#cache.set(json, plan);
     return plan;
+  }
+
+  /**
+   * What a plan of `query` asks (planJson's request, its model as text where the planner holds it by a handle): what a
+   * host that plans AND runs in one step sends (PlanAndRun on Python: src/services/python-host.ts), so its plan is the
+   * one this planner would make.
+   */
+  planRequest(query: Lambda): { readonly lambda: string; readonly model: string; readonly runtime: string } {
+    const { model, runtime } = this.#options;
+    return { lambda: toJson(this.#overMapping(query)), model, runtime };
+  }
+
+  /** A plan's answer (planJson's, tagged) read as this planner reads its own: its SQL and the compiler's columns. */
+  readPlan(answer: string, query: Lambda): Plan {
+    const body = JSON.parse(decode(answer, query)) as { sql: string; type: unknown };
+    return { sql: body.sql, columns: relationColumns(body.type) };
   }
 
   /**

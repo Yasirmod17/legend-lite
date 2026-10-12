@@ -51,7 +51,8 @@ import duckdb
 import pyarrow as pa
 import pyarrow.ipc
 
-from . import _json, compiler
+from . import _json, _planner, compiler
+from ._library import library
 from .frames import Frames
 from ._home import SavedPages
 
@@ -71,6 +72,11 @@ _MAX_FILE_BODY = 256 * 1024 * 1024
 _FILE_IN, _FILE_OUT, _REMOTE, _SERVICES = '/file.json', '/forget.json', '/remote.json', '/services.json'
 # the page's saved pages, as the browser keeps its records (step 2d): all, one, put, remove
 _SAVED = '/saved-pages.json'
+# PLANANDRUN (docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md §15): a page's grid planned against the model Python holds and
+# run on its DuckDB, in one call; and the planner protocol's other requests, answered as the tab's worker answers them
+_PLAN_AND_RUN, _PLANNER = '/plan-and-run.json', '/planner.json'
+# the planner's answer to the plan a page's rows are of, in their Arrow schema's metadata
+_PLAN_KEY = b'legend.plan'
 # the only places a page's remote file may be read from (remote.json), each as DuckDB's httpfs names it: never this
 # machine's own files, which Python's DuckDB can read and a page must not make it (R4's reason). Azure's schemes are not
 # here: the wheel carries no azure extension. Nor does it carry iceberg: an Iceberg table's metadata names its data
@@ -153,6 +159,11 @@ def _said(status: int, message: str) -> Answer:
     return Answer(status, 'text/plain; charset=utf-8', message.encode('utf-8'))
 
 
+def _planned(said: dict[str, str], status: int = 200) -> Answer:
+    """A plan-and-run that answered no rows: the planner's own answer, and why its SQL was refused when it was."""
+    return Answer(status, 'application/json', json.dumps(said).encode('utf-8'))
+
+
 def duckdb_extensions() -> Path | None:
     """DuckDB's extensions as legend-lite carries them, laid out as DuckDB's own extension folder
     (``v1.5.5/<platform>/httpfs.duckdb_extension``): LEGEND_LITE_DUCKDB_EXTENSIONS, else the folder inside this package;
@@ -188,7 +199,7 @@ def private(path: str) -> bool:
     """Whether a call reads the engine's data -- the API, a frame's cube, its version -- and so, over HTTP, carries the
     token. The site's files are the page's own and carry no secret."""
     return path.startswith(_API) or path in ('/cube.json', '/version.json', '/page.json', _FILE_IN, _FILE_OUT, _REMOTE,
-                                             _SAVED, _SERVICES)
+                                             _SAVED, _SERVICES, _PLAN_AND_RUN, _PLANNER)
 
 
 def _arrow_requested(query: str) -> bool:
@@ -305,6 +316,10 @@ class Engine:
                 return self._remote(body or '')
             if path == _SAVED:
                 return self._saved(body or '')
+            if path == _PLAN_AND_RUN:
+                return _workers().submit(self._plan_and_run, body or '').result()
+            if path == _PLANNER:
+                return _workers().submit(self._planner, body or '').result()
             if not path.startswith(_API):
                 return _said(404, f'no such path: {path}')
             return _workers().submit(self._api, path, query, body or '').result()
@@ -541,6 +556,66 @@ class Engine:
                 traceback.print_exc()
                 return _said(500, message)
         return Answer(answer.status, answer.content_type, answer.body.encode('utf-8'))
+
+    def _plan_and_run(self, body: str) -> Answer:
+        """PLANANDRUN on Python (§15.2): ``{"lambda", "model", "runtime"}`` -- the plan request the page's planner makes
+        (lite-planner.ts ``planRequest``), its model as text -- planned against the model Python holds of that text
+        (``Frames.held_for``: only the models this engine serves, R4) by the planner function the tab's worker calls
+        (``planJson``), its SQL run on the frames' DuckDB, all in this one call: the page sends Pure, never SQL. The
+        answer is the database's rows as Arrow, the planner's answer in their schema's metadata (``legend.plan``),
+        which the page reads as its planner reads its own; or, no rows, JSON: the planner's refusal (``plan``), or its
+        plan and why its SQL was refused (``error``)."""
+        try:
+            asked = json.loads(body)
+        except ValueError:
+            return _said(400, 'a plan-and-run is {"lambda", "model", "runtime"}, as JSON')
+        if not (isinstance(asked, dict) and all(isinstance(asked.get(k), str) for k in ('lambda', 'model', 'runtime'))):
+            return _said(400, 'a plan-and-run is {"lambda", "model", "runtime"}, each a string')
+        with self.frames.serving() as models:
+            self._noted(models)
+            held = self.frames.held_for(asked['model'])
+            if held is None:
+                return _planned({'plan': 'ERR\nMODEL\nthis engine serves no source of that model: a page plans only over '
+                                           'the frames and files Python holds'})
+            planned = library().call('lite_plan_json_held', held.handle, asked['lambda'], asked['runtime'])
+            if not planned.startswith('OK\n'):
+                return _planned({'plan': planned})
+            sql = json.loads(planned[3:])['sql']
+            try:
+                rows = self.frames.connection.execute(sql).to_arrow_table()
+            except duckdb.Error as refused:
+                return _planned({'plan': planned, 'error': f'{type(refused).__name__}: {refused}'}, 422)
+        rows = rows.replace_schema_metadata({**(rows.schema.metadata or {}), _PLAN_KEY: planned.encode('utf-8')})
+        sink = pa.BufferOutputStream()
+        with pyarrow.ipc.new_stream(sink, rows.schema) as writer:
+            writer.write_table(rows)
+        return Answer(200, 'application/vnd.apache.arrow.stream', sink.getvalue().to_pybytes())
+
+    def _planner(self, body: str) -> Answer:
+        """The planner protocol's requests (datacube/src/planner-protocol.ts), answered by the native library as the
+        tab's worker answers them (legend_lite._planner): a held kind names its model by its text, never a handle (no
+        handle crosses hosts, §15.3), and is answered against the model Python holds of that text. ``hold`` and
+        ``release`` are the page's own; none of these runs SQL."""
+        try:
+            asked = json.loads(body)
+        except ValueError:
+            return _said(400, 'a planner request is its JSON')
+        kind = asked.get('kind') if isinstance(asked, dict) else None
+        if kind not in _planner.KINDS or kind in ('hold', 'release'):
+            return _said(400, f'this engine answers the planner requests {sorted(set(_planner.KINDS) - {"hold", "release"})}')
+        if kind in _planner.HELD:
+            model = asked.pop('model', None)
+            with self.frames.serving() as models:
+                self._noted(models)
+                held = self.frames.held_for(model) if isinstance(model, str) else None
+                if held is None:
+                    said = {'ok': True, 'answer': 'ERR\nMODEL\nthis engine serves no source of that model'}
+                else:
+                    said = _planner.answer(library(), {**asked, 'handle': held.handle})
+        else:
+            said = _planner.answer(library(), asked)
+        said.pop('id', None)
+        return Answer(200, 'application/json', json.dumps(said).encode('utf-8'))
 
     def _execute(self, body: str) -> Answer:
         """execute in upstream's Arrow format: the compiler plans over the frames' models, DuckDB runs its SQL,
@@ -847,9 +922,10 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 -- the stdlib's name
         url = urlsplit(self.path)
-        # the API, an open page saying what it is now (page.json: Python's page.read()), a page's file in or out, and
-        # the saved pages
-        if not (url.path.startswith(_API) or url.path in ('/page.json', _FILE_IN, _FILE_OUT, _REMOTE, _SAVED)):
+        # the API, an open page saying what it is now (page.json: Python's page.read()), a page's file in or out, the
+        # saved pages, and PlanAndRun's calls
+        if not (url.path.startswith(_API) or url.path in ('/page.json', _FILE_IN, _FILE_OUT, _REMOTE, _SAVED,
+                                                          _PLAN_AND_RUN, _PLANNER)):
             self._refuse_unread(404, f'no such path: {url.path}')
             return
         if not self._admitted(url.path):

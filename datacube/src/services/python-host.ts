@@ -19,12 +19,20 @@
 // page store (Save, Open…: step 2d), a remote file (2b's second part), the other planes (2c), its model home and saved
 // queries (step 3). A share link needs an address others can open; Python's is this machine's loopback.
 
-import { LegendEngineExecutor } from '../../../engine-client/src/engine-remote.ts';
+import { arrowIpcAnswer } from '../../../engine-client/src/arrow-ipc.ts';
+import { toRawTable } from '../../../engine-client/src/duckdb.ts';
+import { typedByPlan } from '../../../engine-client/src/engine.ts';
+import type { Plan } from '../../../engine-client/src/relation-type.ts';
+import { hostOf } from '../../../engine-client/src/receipt.ts';
+import type { ResultTable } from '../../../engine-client/src/result.ts';
+import type { Lambda } from '../../../pure-protocol/src/index.ts';
+import { LitePlanner } from '../lite-planner.ts';
+import type { PlannerWorker, Request, Response } from '../planner-protocol.ts';
 import { ExactNumber, fromJson, type ValueSpecification } from '../../../pure-protocol/src/index.ts';
 import { base64 } from '../headless/web.ts';
 import { HostRecords, RuleStore, type HostRecordsCall } from '../cube-store.ts';
 import { pageToJson, readPage, type PageDocument } from '../page-document.ts';
-import { RemoteRun } from '../runner.ts';
+import { PlanAndRun, QueryFailure } from '../runner.ts';
 import type { InferredModel } from '../infer.ts';
 import type { S3Credentials } from '../remote.ts';
 import { fileBytes, type UploadResult } from '../upload.ts';
@@ -118,6 +126,123 @@ async function asked(link: PythonLink, path: string): Promise<string> {
     .catch((e: unknown) => { throw new Error(`the engine did not answer: ${String(e)}`); });
   if (!answer.ok) throw new Error(`the engine did not say what to show: ${answer.status} ${await answer.text()}`);
   return answer.text();
+}
+
+/**
+ * THE PLANNER'S WORKER, ANSWERED BY PYTHON (§15.2): the planner protocol's requests -- the ones the tab's worker answers --
+ * carried to Python's native library, which answers them as it answers headless's (`planner.json`). No handle crosses
+ * the hosts (§15.3): a `hold` is kept here, its model's text by the handle this gives, and a held model's request sends
+ * that text in the handle's place, Python planning against the model it holds of that text.
+ */
+function pythonWorker(link: PythonLink): PlannerWorker {
+  const held = new Map<number, string>();
+  let next = 1;
+  let alive = true;
+  const worker: PlannerWorker = {
+    onmessage: null,
+    onerror: null,
+    postMessage(message: Request): void {
+      const reply = (response: Response): void => { if (alive) worker.onmessage?.({ data: response }); };
+      const { id, base: _base, ...body } = message;
+      if (body.kind === 'hold') {
+        const handle = next++;
+        held.set(handle, body.model);
+        reply({ id, ok: true, answer: `OK\n${handle}` });
+        return;
+      }
+      if (body.kind === 'release') {
+        held.delete(body.handle);
+        reply({ id, ok: true, answer: 'OK\n' });
+        return;
+      }
+      let sent: Record<string, unknown> = body;
+      if ('handle' in body) {
+        const { handle, ...rest } = body;
+        const model = held.get(handle);
+        if (model === undefined) {
+          reply({ id, ok: true, answer: `ERR\nMODEL\nno model held as ${handle} on this page` });
+          return;
+        }
+        sent = { ...rest, model };
+      }
+      void link.fetch(`${link.baseUrl}/planner.json`, {
+        method: 'POST',
+        headers: { ...headers(link), 'Content-Type': 'application/json' },
+        body: JSON.stringify(sent),
+      }).then(async (answer) => {
+        const text = await answer.text();
+        if (!answer.ok) {
+          reply({ id, ok: false, error: `the engine answered ${answer.status}: ${text}` });
+          return;
+        }
+        reply({ id, ...(JSON.parse(text) as { ok: true; answer: string } | { ok: false; error: string }) });
+      }, (e: unknown) => {
+        // the call itself failed: the worker's death, as a crashed tab worker's is (the planner starts another)
+        if (!alive) return;
+        alive = false;
+        worker.onerror?.({ message: `the engine did not answer: ${String(e)}` });
+      });
+    },
+    terminate(): void {
+      alive = false;
+    },
+  };
+  return worker;
+}
+
+/**
+ * PLANANDRUN ON PYTHON (§15.2): the tab's planner over Python's worker for the compiler's questions, and one call
+ * (`plan-and-run.json`) that plans the query against the model Python holds and runs its SQL on Python's DuckDB --
+ * the page sends Pure, never SQL (R4). Python answers the database's rows as Arrow, the planner's answer in their
+ * metadata; the page reads the plan as its planner reads its own, and the rows typed by it as the tab's executor types
+ * the tab's (engine.ts typedByPlan, §15.3a).
+ */
+export function pythonRunner(link: PythonLink, model: string, runtime: string): PlanAndRun {
+  const planner = new LitePlanner({ model, runtime, worker: () => pythonWorker(link) });
+  const readPlan = (answer: string, query: Lambda): Plan => {
+    try {
+      return planner.readPlan(answer, query);
+    } catch (e) {
+      throw new QueryFailure(e, query);
+    }
+  };
+  const planAndRun = async (query: Lambda, epoch: number, signal?: AbortSignal): Promise<{ plan: Plan; rows: ResultTable }> => {
+    const started = performance.now();
+    const answer = await link.fetch(`${link.baseUrl}/plan-and-run.json`, {
+      method: 'POST',
+      headers: { ...headers(link), 'Content-Type': 'application/json' },
+      body: JSON.stringify(planner.planRequest(query)),
+      ...(signal ? { signal } : {}),
+    }).catch((e: unknown) => {
+      if (signal?.aborted) throw e;
+      throw new QueryFailure(new Error(`the engine did not answer: ${String(e)}`), query);
+    });
+    if (!answer.ok || (answer.headers.get('Content-Type') ?? '').startsWith('application/json')) {
+      // no rows: the planner refused (its own answer, read as it reads every refusal), or its SQL did (and why)
+      const text = await answer.text();
+      const said = (() => { try { return JSON.parse(text) as { plan?: string; error?: string }; } catch { return {}; } })();
+      if (said.plan === undefined) throw new QueryFailure(new Error(`the engine answered ${answer.status}: ${text}`), query);
+      const plan = readPlan(said.plan, query);
+      throw new QueryFailure(new Error(said.error ?? `the engine answered ${answer.status}`), query, plan.sql);
+    }
+    const { table, metadata } = arrowIpcAnswer(new Uint8Array(await answer.arrayBuffer()));
+    const said = metadata.get('legend.plan');
+    if (said === undefined) throw new QueryFailure(new Error('the engine answered rows without the plan they are of'), query);
+    const plan = readPlan(said, query);
+    try {
+      const rows = typedByPlan(toRawTable(table, epoch, performance.now() - started), plan);
+      return { plan, rows: { ...rows, receipt: { plane: 'engine', where: `the engine at ${hostOf(link.baseUrl)}` } } };
+    } catch (e) {
+      throw new QueryFailure(e, query, plan.sql);
+    }
+  };
+  return new PlanAndRun({
+    name: 'python',
+    planner,
+    planAndRun,
+    // the whole result as one chunk: streamed back in chunks is a follow-up (§15.7, 3)
+    stream: async (query, epoch, onChunk, signal) => { onChunk((await planAndRun(query, epoch, signal)).rows); },
+  });
 }
 
 /** A frame as Python says it is now (`cube.json`): the model Python wrote for it, and its version. */
@@ -257,16 +382,8 @@ export function pythonServices(o: PythonServicesOptions): Services {
         if (how?.mapping !== undefined || (how?.enumerations?.length ?? 0) > 0) {
           throw new Error('Python plans a source over the model it wrote: it takes no mapping or enumerations from the page');
         }
-        return {
-          runner: new RemoteRun(new LegendEngineExecutor({
-            baseUrl: link.baseUrl,
-            model,
-            runtime,
-            serializationFormat: 'ARROW_IPC',
-            ...(link.authorization === undefined ? {} : { authorization: link.authorization }),
-            fetch: link.fetch,
-          })),
-        };
+        // PlanAndRun on Python (§15): planned against the model Python holds and run on its DuckDB, in one call
+        return { runner: pythonRunner(link, model, runtime) };
       },
       database: pythonDatabase(link, o.offers),
     },

@@ -35,6 +35,7 @@ import { sourceColumns } from '../../src/source-columns.ts';
 import { TreeState } from '../../src/tree.ts';
 import { LitePlanner } from '../../src/lite-planner.ts';
 import { CASES, queries } from '../wasm-differential/cases.ts';
+import { pythonRunner } from '../../src/services/python-host.ts';
 
 /** What the harness hands the page: the engine, and the frame it serves. */
 interface Served {
@@ -180,6 +181,30 @@ async function run(): Promise<void> {
       compared += 1;
     }
     deepEqual(differ, [], 'Python\'s engine and the tab disagree:');
+    equal(CASES.length > 0 && compared === CASES.length, true, `cases compared: ${compared} of ${CASES.length}`);
+  });
+
+  // PLANANDRUN ON PYTHON (docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md §15): the runner Python's pages use -- planned
+  // against the model Python holds, run on its DuckDB, in one call -- and the tab's, over the same rows: the same plan
+  // function, the same reading, so the same answers, SQL and all
+  await check('every cube case answers the same through PlanAndRun on Python and in the tab', async () => {
+    const python = pythonRunner({ baseUrl: location.origin, fetch: (i, init) => fetch(i, init), authorization: served.authorization },
+      served.model, served.runtime);
+    const differ: string[] = [];
+    let compared = 0;
+    for (const [i, { name, query }] of queries().entries()) {
+      const snapshot: CubeSnapshot = onTheFrame(CASES[i]!.snapshot, served.source);
+      const q: Lambda = onTheFrame(query, served.source);
+      const there = await python.run(q, snapshot, CASES[i]!.scope);
+      const here = await tab.run(q, snapshot, CASES[i]!.scope);
+      equal(there.sql, here.sql, `${name}: the SQL Python planned is the tab's plan:`);
+      const inOrder = ordered(here.sql);
+      const a = shape(there.rows, inOrder);
+      const b = shape(here.rows, inOrder);
+      if (a !== b) differ.push(`${name}\n  python: ${a.slice(0, 400)}\n  tab:    ${b.slice(0, 400)}`);
+      compared += 1;
+    }
+    deepEqual(differ, [], 'PlanAndRun on Python and the tab disagree:');
     equal(CASES.length > 0 && compared === CASES.length, true, `cases compared: ${compared} of ${CASES.length}`);
   });
 

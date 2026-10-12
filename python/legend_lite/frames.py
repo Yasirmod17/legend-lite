@@ -195,8 +195,9 @@ class Frames:
         self._tables: dict[str, Table] = {}
         # the tables a page's files were read into on this connection by DataCube's own code (the engine's file.json),
         # and the views a page's remote files are read through (remote.json; docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md
-        # §4.3), each by its name: its name as written, its model, and whether it is a view
-        self._files: dict[str, tuple[str, str, bool]] = {}
+        # §4.3), each by its name: its name as written, its model, whether it is a view, and its model held (planned
+        # against while it is kept, as a frame's is: §15.3)
+        self._files: dict[str, tuple[str, str, bool, compiler.HeldModel]] = {}
 
     def register(self, name: str, frame: Any, mode: str = LIVE) -> Table:
         """Registers a frame (or a function returning one) as the table ``name``, Live or Snapped, and
@@ -246,7 +247,20 @@ class Frames:
                 if table.mode == LIVE:
                     table._ready()
             yield {**{table.name: table.model for table in self._tables.values()},
-                   **{name: model for name, model, _view in self._files.values()}}
+                   **{name: model for name, model, _view, _held in self._files.values()}}
+
+    def held_for(self, model: str) -> compiler.HeldModel | None:
+        """The model held for the frame or page file whose model is exactly this text -- what a page's plan is made
+        against (the engine's plan-and-run.json, planner.json) -- or None: no model this engine serves. Asked inside
+        ``serving``, the frames held still."""
+        with self._lock:
+            for table in self._tables.values():
+                if table.model == model and table.held is not None:
+                    return table.held
+            for _name, kept, _view, held in self._files.values():
+                if kept == model:
+                    return held
+        return None
 
     @contextlib.contextmanager
     def reading_file(self, asked: str, view: bool = False) -> Iterator[str]:
@@ -268,15 +282,21 @@ class Frames:
                 yield name
             except BaseException:
                 # what the read made of the name taken out again: the name was free, so nothing else is under it
-                self._files.pop(name.lower(), None)
+                dropped = self._files.pop(name.lower(), None)
+                if dropped is not None:
+                    dropped[3].close()
                 self.connection.execute(f'DROP {"VIEW" if view else "TABLE"} IF EXISTS main."{name}"')
                 raise
 
     def keep_file(self, name: str, model: str, view: bool = False) -> None:
         """The table a page's file was read into, or the view a remote file is read through (``reading_file``'s name),
         and the model DataCube's code wrote for it: served beside the frames' from now on."""
+        held = compiler.HeldModel(model)
         with self._lock:
-            self._files[name.lower()] = (name, model, view)
+            before = self._files.get(name.lower())
+            self._files[name.lower()] = (name, model, view, held)
+        if before is not None:
+            before[3].close()
 
     def file_table(self, name: str) -> str | None:
         """The table a page's file was read into, by the name a page gives it, as Frames named it -- or None when no
@@ -290,7 +310,9 @@ class Frames:
     def forget_file(self, name: str) -> None:
         """A page's file let go of, its table dropped (by DataCube's code, inside ``holding``): its model served no more."""
         with self._lock:
-            self._files.pop(name.lower(), None)
+            gone = self._files.pop(name.lower(), None)
+        if gone is not None:
+            gone[3].close()
 
     @contextlib.contextmanager
     def holding(self) -> Iterator[None]:
@@ -334,8 +356,9 @@ class Frames:
             for table in self._tables.values():
                 table._drop()
             self._tables.clear()
-            for name, _model, view in self._files.values():
+            for name, _model, view, held in self._files.values():
                 self.connection.execute(f'DROP {"VIEW" if view else "TABLE"} IF EXISTS main."{name}"')
+                held.close()
             self._files.clear()
 
     def __getitem__(self, name: str) -> Table:

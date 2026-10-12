@@ -727,9 +727,14 @@ As it stands: **Java's** execution (core's `exec`, step K) returns an `Execution
 the page's. **Python's own** results do not yet: `Frames.execute` and `grid.to_pandas()` give DuckDB's Arrow types, not
 the compiler's. Closing that is part of this work (15.8), the Python executor PlanAndRun adds.
 
-Later, and only if the suite shows the executors drifting: the planner could write each result column's expected
-database type into the plan beside its Pure type, so every executor checks mechanically that the database answered
-what the planner expected (sent to the Plan Gen line, 2026-10-12).
+Where this moves to (the Plan Gen line, 2026-10-12: "it's the right layer, it's already designed, and I wouldn't wait
+for drift"): the plan already describes each result column as `ExecutionPlan.TdsResult`'s `TdsColumn(name, type,
+sqlType)` -- its Pure type and the SQL type the database answers with, legend-engine's shape too -- and reading the
+database's rows by that description is phase 3 of docs/EXECUTION_PLAN_BOUNDARY_2026_10_05.md (§8), after its step 4.
+Its contract: one rule per (Pure type, sqlType) pair, kept as data all three hosts read, so Java, TypeScript and Python
+apply one table rather than three decoders, Java's `ExecutionResult` the reference until then. The planners' plan answer
+to DataCube (Boundary's `{"sql", "type"}`) carries no `sqlType` yet: when it does, it is `TdsColumn`'s, added by that
+phase, never a second field. Until then the executors type by the plan's Pure types, under 15.3a's contract.
 
 ### 15.4 Who may send a runner SQL
 

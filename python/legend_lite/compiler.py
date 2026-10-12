@@ -137,6 +137,11 @@ class HeldModel:
             raise ValueError('this model was let go (closed): hold it again')
         return self._handle
 
+    @property
+    def handle(self) -> str:
+        """The library's handle of the model held: what a planner request of a held kind names (legend_lite._planner)."""
+        return self._held()
+
     def plan(self, tree: Tree, runtime: str) -> Plan:
         """A relation query planned against the model held, through ``runtime``: its SQL and its columns."""
         out = _json.loads(_answer(library().call('lite_plan_json_held', self._held(), _json.dumps(tree), runtime)))

@@ -94,8 +94,8 @@ try {
     console.log(`FAIL the setup: ${verdict.setupError}`);
     failed = true;
   }
-  if (verdict.outcomes.length !== 4) {
-    console.log(`FAIL ${verdict.outcomes.length} checks ran, not 4`);
+  if (verdict.outcomes.length !== 5) {
+    console.log(`FAIL ${verdict.outcomes.length} checks ran, not 5`);
     failed = true;
   }
 
@@ -192,6 +192,23 @@ try {
   undefined, { timeout: 60_000 }).then(() => true, () => false);
   console.log(`${exampleRead ? 'ok  ' : 'FAIL'} an example opened on Python's page is read into Python's DuckDB as a file is`);
   if (!exampleRead) {
+    console.log(`  the page showed: ${(await cube.evaluate(() => document.body.innerText.slice(0, 300)))}`);
+    failed = true;
+  }
+  // NESTED VALUES (a Variant column) on Python's page: the orders example, its customers and items JSON -- planned and
+  // run as the tab plans and runs them (PlanAndRun), where Python's legend-engine answer refused a Variant column
+  await cube.click('.dc-titlebar-menu');
+  await cube.locator('.dc-menu .dc-menu-item', { has: cube.locator(':scope > .dc-menu-label:text-is("New")') }).hover();
+  await cube.locator('.dc-menu .dc-menu-item', { has: cube.locator(':scope > .dc-menu-label:text-is("Blank Page")') }).click();
+  await cube.locator('.dc-blank .dc-primary').click();
+  await cube.locator('.dc-picker-tab[data-section="examples"]').click();
+  await cube.click('.dc-picker-card[data-example="orders-json"]');
+  await cube.fill('.dc-picker-rows', '40');
+  await cube.click('.dc-picker-choice .dc-primary');
+  const nestedRead = await cube.waitForFunction(() => document.querySelector('.dc-picker') === null
+    && /\b40 rows\b/.test(document.body.innerText), undefined, { timeout: 60_000 }).then(() => true, () => false);
+  console.log(`${nestedRead ? 'ok  ' : 'FAIL'} a file of nested values (Variant columns) opens on Python's page, as in the tab`);
+  if (!nestedRead) {
     console.log(`  the page showed: ${(await cube.evaluate(() => document.body.innerText.slice(0, 300)))}`);
     failed = true;
   }
