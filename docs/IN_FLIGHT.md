@@ -735,6 +735,21 @@ full CI run on it.
 Not touched: the database owner's `lowering/` files (`Render`, `WireRender`, `LiteralSpelling`, `Fold`, `Scalars`,
 `MixedEncoding`), `sql/dialect/`, the parser.
 
+**Landed 2026-10-12 (ebc419f, the merge of PR neema2/legend-lite#28 at d312dfd over main d2eefc5; gates run 38198865199,
+green on every job after one re-run of windows / warehouse; diagnostics run 38198865034, green; GATES "`#SQL{...}#`").**
+- **The re-run:** `//datacube:python_engine_test` failed once in its teardown. Answers to a taken-down widget view were
+  still in flight when the browser closed: the race the TeaVM landing met, which the DataCube line is fixing. This
+  change touches nothing under `datacube/`.
+- **Files beyond the announced list:** none.
+- **Found by the PR's CI on the way:**
+  - the Postgres parity harness's snapped answers held on Linux only: `bytea` was snapped as a JVM identity hash, and
+    float answers differ in their last digit between platforms;
+  - two `AGE(x)` answers drifted a day after their snap.
+
+  Both are fixed in the harness (`testcases/SqlParity.java`).
+- **The independent review's one finding** (fix 4 let a row's own window column resolve to the enclosing row's) is
+  fixed in `Lowerer.scopedResolver`, with two tests.
+
 ## Rules between sessions
 
 1. Never force-push; never bare `git stash` (the stash stack is shared by every worktree).

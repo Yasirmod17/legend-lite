@@ -8868,8 +8868,14 @@ Announced in `docs/IN_FLIGHT.md` the same day (2aa74a8). Branch `claude/loving-e
      identical, 0 differing (`compare_judges.py`; both builds executed every pass, 31 sandboxed processes each,
      about 16 minutes). Rerun on 2026-10-12 with the review's `scopedResolver` fix: 0 differing again
      (the six passes executed, about 20 minutes).
-   - **The full CI run:** the pull request's (neema2/legend-lite#28), recorded at landing. Its first two runs failed
-     only in the core lanes, in `//core:sql_parity_postgres_test`'s check that the snapped answers are Postgres's:
+   - **The full CI run:** the pull request's (neema2/legend-lite#28). It landed 2026-10-12 as ebc419f, merging d312dfd
+     over main d2eefc5 with `[skip ci]`:
+     - gates run 38198865199, green on every job (52 checks) after one re-run of windows / warehouse;
+     - diagnostics run 38198865034, green.
+
+     The re-run's failure was `//datacube:python_engine_test`'s teardown race, which this change does not touch: answers
+     to a taken-down widget view were still in flight when the browser closed. Its first two runs failed only in the
+     core lanes, in `//core:sql_parity_postgres_test`'s check that the snapped answers are Postgres's:
      - **Linux, macOS and Windows** (38194644588): the two `AGE(x)` answers drifted a day after their snap. `AGE(x)` is
        measured from today, and so is `CURRENT_DATE - INTERVAL '365 days'`: the three are now volatile, not snapped
        (SKIP; they were refused).
