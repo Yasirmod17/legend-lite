@@ -6,9 +6,9 @@
 // so the app opens sources the same way on every host; the source picker (src/ui/source-picker.ts) is offered the
 // sections the services can open.
 //
-// Each grid has ITS OWN planner over ITS OWN model (`another`): a page's grids share no model. The tables a page's
-// files are read into are its own and named apart (no grid's table is ever replaced by another's), and a file's table
-// goes with its last grid.
+// Each grid has ITS OWN rows over ITS OWN model (the engine service's `rows`, §4.5): a page's grids share no model. The
+// tables a page's files are read into are its own and named apart (no grid's table is ever replaced by another's), and
+// a file's table goes with its last grid. A Python host's frame is a source too, its model Python's.
 
 import { UI_LOCALE } from '../../../engine-client/src/locale.ts';
 import type { QueryEngine } from '../../../engine-client/src/engine.ts';
@@ -25,6 +25,7 @@ import {
   type CubeDocument,
   type CubeSource,
   type FileSource,
+  type FrameSource,
   type QuerySource,
   type RemoteSource,
   type WarehouseSource,
@@ -34,6 +35,7 @@ import type { InferredModel } from '../infer.ts';
 import type { GridMaker } from '../page/page-app.ts';
 import type { ModelOptions } from '../planner.ts';
 import { inferFormat, type S3Credentials } from '../remote.ts';
+import type { QueryRunner } from '../runner.ts';
 import type { ModelElement } from '../saved-queries.ts';
 import { SAMPLES, sampleById, sampleFileName, type Sample } from '../samples.ts';
 import type { CubeSnapshot } from '../snapshot.ts';
@@ -41,7 +43,7 @@ import { sourceColumns } from '../source-columns.ts';
 import type { TreeState } from '../tree.ts';
 import { pickSource, type DatabaseSession, type PickerSections, type RemoteCredentials, type SectionId } from '../ui/source-picker.ts';
 import { formatOf, tableNameOf } from '../upload.ts';
-import type { ConfiguredProject, Services, WarehouseService } from './services.ts';
+import type { ConfiguredProject, GridRows, LocalEngine, QueryService, Services, WarehouseService } from './services.ts';
 
 // saved queries' code, fetched the first time it is needed -- the Saved queries section, a query link -- as charts
 // are: a grid-only page never downloads it (test/bundle-budget.test.ts)
@@ -64,6 +66,8 @@ export type GridPlace = {
   readonly engine?: QueryEngine;
   /** Its own planner, over its own model (a page's grids share no model); the page's planner when none. */
   readonly planner?: Planner;
+  /** Planned and run by the host instead (a Python host's frame: R4): no planner or engine in the page. */
+  readonly runner?: QueryRunner;
   /** What its header says it reads. */
   readonly label?: string;
   /**
@@ -164,6 +168,15 @@ export interface PageSources {
   reopened(doc: CubeDocument, keys: readonly string[], several: boolean, table?: string): Promise<Opened | undefined>;
   /** A saved query's record -- from a store, or as a share link carries it -- as a cube's source. */
   openedRecord(q: SavedQueryRecord): Promise<OpenedQuery>;
+  /** A frame of the host's (Python's dataframe) for a grid: fresh, or a saved cube rebuilt over it. */
+  openedFrame(name: string, saved?: CubeDocument, capped?: boolean): Promise<Opened>;
+  /** The frame a grid reads, by its id: what following the host's frames refreshes. */
+  frameOf(id: string): string | undefined;
+  /** A frame's version as the page last read it; undefined when no grid has read it. */
+  frameVersion(name: string): number | undefined;
+  /** A frame read again, its host having moved it: whether its model is the one its grids read (its new version noted,
+   *  and their views re-run will do), or changed (its columns: its grids open again over the new model). */
+  frameAgain(name: string): Promise<'same' | 'changed'>;
   /** The source picker, offering every section the services can open; `act` does what the person chose. */
   pick<T>(purpose: 'add' | 'open', act: (chosen: Chosen) => Promise<T | null>, start?: SectionId): Promise<T | undefined>;
   /** The single-user app's launch key: signed in at the warehouse that served the page, its tables listed. */
@@ -267,13 +280,32 @@ function asSession(s: SignedIn): DatabaseSession {
   };
 }
 
+/** Whether the source picker has a section to offer over these services: New ▸ Data Source… and the blank page's button
+ *  are offered only then. A warehouse and saved queries are read through the page's own pair (`local`). */
+export function picksSources(services: Services): boolean {
+  const { database, local } = services.engine;
+  return database.ingestFile !== undefined || database.mountRemote !== undefined
+    || (local !== undefined && (services.queries !== undefined || services.warehouse !== undefined));
+}
+
 /** The page's sources, over the host's services. */
 export function pageSources(d: SourcesOf): PageSources {
   const { services, page, gridMaker } = d;
-  const { planner, tables, seeds } = services.engine;
-  const engine = services.engine.database.engine;
-  const warehouse = services.warehouse;
+  const { database } = services.engine;
+  /** The page's own planner and database, where it has them (the tab): what only that shape opens needs it. */
+  const local = services.engine.local;
+  /** A warehouse is read through the page's own pair (its model writer, its Snap): offered where both are. */
+  const warehouse = local ? services.warehouse : undefined;
   const modelHome = services.modelHome;
+  /** Saved queries are read by the page's own compiler and their test data made in its database: offered where both. */
+  const queries = local ? services.queries : undefined;
+  /** A grid's place from its rows: a planner and the engine it runs on, or the host's runner. */
+  const rowsPlace = (rows: GridRows): Pick<GridPlace, 'planner' | 'engine' | 'runner'> =>
+    (rows.runner ? { runner: rows.runner } : { planner: rows.planner, engine: rows.engine });
+  /** What types a source's columns: the rows' planner, or the host's runner (both answer lambdaRelationType). */
+  const typer = (rows: GridRows): Planner | QueryRunner => rows.runner ?? rows.planner;
+  /** The rows' own planner let go (a runner holds no model in the page). */
+  const letGo = (rows: GridRows): void => { rows.planner?.dispose?.(); };
 
   // -- each grid's file and planners, kept by its id ---------------------------------------------------------------
 
@@ -324,7 +356,7 @@ export function pageSources(d: SourcesOf): PageSources {
     for (const [table, fileName] of [...held]) {
       if (read.has(table)) continue;
       held.delete(table);
-      void services.engine.database.forgetFile(fileName, table).catch(() => {}).finally(() => taken.delete(table));
+      void database.forgetFile?.(fileName, table).catch(() => {}).finally(() => taken.delete(table));
     }
     // a planner no grid plans through any more lets its model go (a grid and its copies share one)
     for (const [grid, owned] of [...gridPlanners]) {
@@ -351,27 +383,29 @@ export function pageSources(d: SourcesOf): PageSources {
    * A warehouse table's model: its own runtime (the catalog's database type), and the runtime its Snap -- a copy into
    * the host's database -- is planned against (the host database's type).
    */
-  const warehouseModel = (o: CatalogObject): Promise<InferredModel & { readonly snapRuntime: string }> => tables.tableModel(
+  const warehouseModel = (l: LocalEngine, o: CatalogObject): Promise<InferredModel & { readonly snapRuntime: string }> => l.tables.tableModel(
     o.columns.map((c) => ({ ...c, dataType: c.type })),
-    { table: o.name, schema: o.schema, convertible: false, databaseType: o.databaseType, snapDatabaseType: engine.databaseType });
+    { table: o.name, schema: o.schema, convertible: false, databaseType: o.databaseType, snapDatabaseType: l.engine.databaseType });
   /**
    * A warehouse table's Snap: the rows pulled with the live plan, into a table of the same name in the host's database,
    * and every query on the copy planned by the SAME model against the snap runtime.
    */
-  const snapOf = (o: CatalogObject, m: InferredModel & { readonly snapRuntime: string }): { snapTarget: SnapTarget } => ({
+  const snapOf = (l: LocalEngine, o: CatalogObject, m: InferredModel & { readonly snapRuntime: string }): { snapTarget: SnapTarget } => ({
     snapTarget: {
       schema: o.schema, table: o.name, source: m.source, conversions: m.conversions,
-      planner: services.engine.another(m.model, m.snapRuntime, { bitColumns: m.bitColumns }),
+      planner: l.another(m.model, m.snapRuntime, { bitColumns: m.bitColumns }),
     },
   });
 
   /** A warehouse table for a grid: Live there as the user, Snap into the host's database; its own planner over its model. */
   async function openedTable(on: WarehouseService, session: WarehouseSession, chosen: CatalogObject, saved?: CubeDocument,
     capped = false): Promise<Opened> {
+    // read through the page's own pair: a warehouse is offered only where the page has one
+    if (!local) throw new Error('this page reads no warehouse');
     // A warehouse table is read-only: a column the compiler says must be converted to be declared cannot be, so it is
     // left out, and named.
-    const m = await warehouseModel(chosen);
-    const own = services.engine.another(m.model, m.runtime, { bitColumns: m.bitColumns });
+    const m = await warehouseModel(local, chosen);
+    const own = local.another(m.model, m.runtime, { bitColumns: m.bitColumns });
     const columns = await sourceColumns(own, m.source);
     const live = track(on.live(session, chosen.catalog));
     const name = `${chosen.schema}.${chosen.name}`;
@@ -381,7 +415,7 @@ export function pageSources(d: SourcesOf): PageSources {
       columns: columns.map((c) => ({ name: c.name, type: c.type })),
     };
     const r = rebuilt(saved, m.source, columns, name, capped);
-    const snap = snapOf(chosen, m);
+    const snap = snapOf(local, chosen, m);
     return {
       label: name,
       notes: r.notes,
@@ -482,14 +516,16 @@ export function pageSources(d: SourcesOf): PageSources {
     } = {},
   ): Promise<Opened> {
     try {
+      const { ingestFile, forgetFile } = database;
+      if (!ingestFile || !forgetFile) throw new Error('this page takes no file');
       // the name the page's model keeps for it, when no grid on screen holds that name; else a fresh one, and said
       const kept = how.table !== undefined && !taken.has(how.table) ? how.table : undefined;
       if (kept !== undefined) taken.add(kept);
       const table = kept ?? freshTable(tableNameOf(file.name));
-      const opened = await services.engine.database.ingestFile(file, { table });
+      const opened = await ingestFile(file, { table });
       const loadedAt = new Date();
-      const own = services.engine.another(opened.model, opened.runtime, { bitColumns: opened.bitColumns });
-      const columns = await sourceColumns(own, opened.source);
+      const rows = services.engine.rows(opened.model, opened.runtime, { bitColumns: opened.bitColumns });
+      const columns = await sourceColumns(typer(rows), opened.source);
       const source = await fileSource(file, formatOf(file.name), columns, how.sample);
       const saved = how.saved;
       const r = rebuilt(saved, opened.source, columns, opened.fileName, how.capped === true);
@@ -510,11 +546,11 @@ export function pageSources(d: SourcesOf): PageSources {
         notes,
         // never made into a grid: its planner's model let go, its table gone, and its name free again
         discard: () => {
-          own.dispose?.();
-          return services.engine.database.forgetFile(file.name, table).catch(() => {}).finally(() => taken.delete(table));
+          letGo(rows);
+          return forgetFile(file.name, table).catch(() => {}).finally(() => taken.delete(table));
         },
         make: gridMaker(r.snapshot, r.configuration, [], {
-          planner: own,
+          ...rowsPlace(rows),
           cubeSource: source,
           heldCopy: { label: opened.fileName, takenAt: loadedAt, rowCount: opened.rowCount },
           label: opened.fileName,
@@ -546,7 +582,7 @@ export function pageSources(d: SourcesOf): PageSources {
     const open = [...files.values()].find((f) => f.sha256 === src.sha256);
     if (open) return { file: open.file, ...(open.handle ? { handle: open.handle } : {}) };
     let kept: FileHandle | undefined;
-    const { handles } = await services.pages;
+    const handles = (await services.pages)?.handles;
     for (const key of keys) kept ??= await handles?.get(key);
     if (kept) {
       const read = await readHandle(kept, false);
@@ -614,17 +650,43 @@ export function pageSources(d: SourcesOf): PageSources {
 
   /** A remote file for a grid, mounted as a view of its own; its keys are never written down. */
   async function openedRemote(url: string, s3: S3Credentials | undefined, saved?: CubeDocument, capped = false): Promise<Opened> {
-    const m = await services.engine.database.mountRemote(url, s3, freshTable('remote'));
-    const own = services.engine.another(m.model, m.runtime, { bitColumns: m.bitColumns });
-    const columns = await sourceColumns(own, m.source);
+    if (!database.mountRemote) throw new Error('this page reads no remote file');
+    const m = await database.mountRemote(url, s3, freshTable('remote'));
+    const rows = services.engine.rows(m.model, m.runtime, { bitColumns: m.bitColumns });
+    const columns = await sourceColumns(typer(rows), m.source);
     const name = lastSegment(url);
     const cubeSource: RemoteSource = { _type: 'remoteFile', name, url, columns: columns.map((c) => ({ name: c.name, type: c.type })) };
     const r = rebuilt(saved, m.source, columns, name, capped);
     return {
       label: name,
       notes: r.notes,
-      make: gridMaker(r.snapshot, r.configuration, [], { planner: own, cubeSource, label: name, ...(r.tree ? { tree: r.tree } : {}), foldPanel: capped }),
-      discard: async () => own.dispose?.(),
+      make: gridMaker(r.snapshot, r.configuration, [], { ...rowsPlace(rows), cubeSource, label: name, ...(r.tree ? { tree: r.tree } : {}), foldPanel: capped }),
+      discard: async () => letGo(rows),
+    };
+  }
+
+  // -- a frame (Python's dataframe) --------------------------------------------------------------------------------
+
+  /** Each frame as its grids last read it -- its version, its model and its source -- a later version a change to follow. */
+  const framesRead = new Map<string, { readonly version: number; readonly model: string; readonly source: string }>();
+
+  /**
+   * A FRAME FOR A GRID: the model its host wrote when it was registered, the grid's rows in the host's shape (on a
+   * Python host, planned and run by Python: R4) -- a fresh grid, or a saved cube rebuilt over what the frame holds now.
+   */
+  async function openedFrame(name: string, saved?: CubeDocument, capped = false): Promise<Opened> {
+    if (!database.frame) throw new Error(`${saved ? `"${saved.name}" reads` : 'this is'} the dataframe ${name}: open it from Python, where it is (ll.show)`);
+    const m = await database.frame(name);
+    const rows = services.engine.rows(m.model, m.runtime);
+    const columns = await sourceColumns(typer(rows), m.source);
+    framesRead.set(name, { version: m.version, model: m.model, source: JSON.stringify(m.source) });
+    const cubeSource: FrameSource = { _type: 'frame', name, columns: columns.map((c) => ({ name: c.name, type: c.type })) };
+    const r = rebuilt(saved, m.source, columns, name, capped);
+    return {
+      label: name,
+      notes: r.notes,
+      make: gridMaker(r.snapshot, r.configuration, [], { ...rowsPlace(rows), cubeSource, label: name, ...(r.tree ? { tree: r.tree } : {}), foldPanel: capped }),
+      discard: async () => letGo(rows),
     };
   }
 
@@ -677,7 +739,7 @@ export function pageSources(d: SourcesOf): PageSources {
     return p;
   };
   const projectFor = (q: Pick<Query, 'groupId' | 'artifactId' | 'versionId'>): ConfiguredProject | undefined =>
-    services.queries.projects.find((p) => p.groupId === q.groupId && p.artifactId === q.artifactId && p.versionId === q.versionId);
+    queries?.projects.find((p) => p.groupId === q.groupId && p.artifactId === q.artifactId && p.versionId === q.versionId);
 
   async function openedQuery(store: QueryReader, id: string): Promise<OpenedQuery> {
     return openedRecord(await store.get(id));
@@ -685,15 +747,18 @@ export function pageSources(d: SourcesOf): PageSources {
 
   /** A saved query's record -- from a store, or as a share link carries it -- as a cube's source. */
   async function openedRecord(q: SavedQueryRecord): Promise<OpenedQuery> {
+    // read by the page's own compiler, its test data made in the page's database: offered only where it has them
+    if (!local || !queries) throw new Error(`“${q.name}” is a saved query: this page reads none`);
+    const { planner, engine, seeds } = local;
     const { contextOf, enumerationsOf, enumsAsStrings, projectOf, sourceOf } = await savedQueries();
     const project = projectFor(q);
     if (!project && !modelHome) throw new Error(`“${q.name}” belongs to ${projectOf(q)}, which this page has no model for (config.json projects[], or a depot)`);
     const key = projectOf(q);
     // the page's own project (config.json projects[]), else the version opened by name from Depot (design Phase 3)
     const model = await once(projectModels, key, async () => (project
-      ? (await Promise.all(project.models.map((url) => services.queries.fetchText(url)))).join('\n')
+      ? (await Promise.all(project.models.map((url) => queries.fetchText(url)))).join('\n')
       : (await import('../../../depot-client/src/model-text.ts')).modelText((await modelHome!.connect()).depot, q.groupId, q.artifactId, q.versionId)));
-    const elements = await services.engine.elements(model) as ModelElement[];
+    const elements = await local.elements(model) as ModelElement[];
     const context = contextOf(q, elements);
     const lambdaOf = await planner.parse(q.content);
     const values = new Map<string, ValueSpecification>();
@@ -714,7 +779,7 @@ export function pageSources(d: SourcesOf): PageSources {
     } else {
       await once(seeded, key, async () => {
         for (const url of project.seed) {
-          for (const line of (await services.queries.fetchText(url)).split('\n')) {
+          for (const line of (await queries.fetchText(url)).split('\n')) {
             const sql = line.trim();
             if (sql && !sql.startsWith('--')) await engine.run(sql, 0);
           }
@@ -722,7 +787,7 @@ export function pageSources(d: SourcesOf): PageSources {
       });
     }
     const how: ModelOptions = { mapping: context.mapping, enumerations: [...enumerationsOf(elements)] };
-    const own = services.engine.another(model, context.runtime, how);
+    const own = local.another(model, context.runtime, how);
     // rule 4: an enumeration column is read as its value's name
     const named = new Set((await own.relationType(lambda([], source))).filter((c) => c.enumeration).map((c) => c.name));
     if (named.size > 0) source = enumsAsStrings(source, named);
@@ -779,8 +844,8 @@ export function pageSources(d: SourcesOf): PageSources {
     if (src._type === 'savedQuery') return openedSavedQuery(await openedRecord(src.query), doc, several);
     if (src._type === 'warehouseTable') return reopenTable(src, doc, several);
     if (src._type === 'remoteFile') return reopenRemote(src, doc, several);
-    // a dataframe's rows are the Python's that serves it: opened there (`ll.show(page)`), never here
-    if (src._type === 'frame') throw new Error(`"${doc.name}" reads the dataframe ${src.name}: open it from Python, where it is (ll.show)`);
+    // a dataframe's rows are the Python's that serves it: opened where the host has its frames, refused elsewhere
+    if (src._type === 'frame') return openedFrame(src.name, doc, several);
     if (!isFileCube(doc)) throw new Error(`"${doc.name}" reads a source this page cannot open`);
     const got = await fileFor(doc, keys);
     if (!got) return undefined;
@@ -799,30 +864,44 @@ export function pageSources(d: SourcesOf): PageSources {
    * read INSIDE the window, so a refusal is shown there.
    */
   async function pick<T>(purpose: 'add' | 'open', act: (chosen: Chosen) => Promise<T | null>, start?: SectionId): Promise<T | undefined> {
-    const queries = services.queries;
     const address = services.browser.address;
+    const files = database.ingestFile !== undefined;
     const sections: PickerSections<T | null> = {
-      files: {
+      ...(files ? { files: {
         accept: '.csv,.parquet,.json,.jsonl,.ndjson,text/csv,application/json',
         formats: ['CSV', 'Parquet', 'JSON', 'JSON Lines'],
         // where the browser can keep a handle to the file, pick THROUGH it: a saved cube then reopens its file from
         // where it was picked (file-handles.ts)
         ...(canKeepHandles() ? { pick: () => pickDataFile() } : {}),
-        open: (file, handle) => act({ kind: 'file', file, ...(handle ? { handle: handle as FileHandle } : {}) }),
-      },
-      examples: {
+        open: (file: File, handle?: unknown) => act({ kind: 'file', file, ...(handle ? { handle: handle as FileHandle } : {}) }),
+      } } : {}),
+      ...(files ? { examples: {
         list: SAMPLES.map((s) => ({
           id: s.id, name: s.label, description: s.about, rows: s.defaultRows,
           tags: [s.format === 'jsonl' ? 'JSON Lines' : 'CSV'],
         })),
         open: (id, rows) => act({ kind: 'file', ...sampleFile(id, rows) }),
         // the generated file itself, for sharing or reopening
-        download: (id, rows) => {
+        download: (id: string, rows: number) => {
           const { file, text } = sampleFile(id, rows);
           services.browser.download(file.name, file.type, text);
         },
-      },
-      saved: {
+      } } : {}),
+      ...(queries ? { saved: savedSection(queries, address, act) } : {}),
+      ...(warehouse ? { database: databaseSection(warehouse, (session, object) => act({ kind: 'table', session, object })) } : {}),
+      ...(database.mountRemote ? { remote: {
+        detect: detectFormat,
+        open: (url: string, credentials?: RemoteCredentials) => act({ kind: 'remote', url, ...(credentials ? { s3: s3Of(credentials) } : {}) }),
+      } } : {}),
+    };
+    const made = await pickSource(document, { purpose, sections, ...(start ? { start } : {}) });
+    return made ?? undefined;
+  }
+
+  /** The Saved queries section: the store's queries, searched; one opened as a grid's source, or its link copied. */
+  function savedSection<T>(queries: QueryService, address: (() => string) | undefined,
+    act: (chosen: Chosen) => Promise<T | null>): NonNullable<PickerSections<T | null>['saved']> {
+    return {
         where: queries.where,
         // the browser's store: a query saved in another tab (Legend Query) appears without reopening
         ...(queries.watch ? { watch: queries.watch } : {}),
@@ -854,15 +933,7 @@ export function pageSources(d: SourcesOf): PageSources {
           await services.browser.writeClipboard(link);
           return `Link copied (${link.length.toLocaleString(UI_LOCALE)} characters): it opens the query as the cube’s source, and holds the query, never its rows.`;
         } } : {}),
-      },
-      ...(warehouse ? { database: databaseSection(warehouse, (session, object) => act({ kind: 'table', session, object })) } : {}),
-      remote: {
-        detect: detectFormat,
-        open: (url, credentials) => act({ kind: 'remote', url, ...(credentials ? { s3: s3Of(credentials) } : {}) }),
-      },
     };
-    const made = await pickSource(document, { purpose, sections, ...(start ? { start } : {}) });
-    return made ?? undefined;
   }
 
   return {
@@ -876,6 +947,20 @@ export function pageSources(d: SourcesOf): PageSources {
     named,
     reopened,
     openedRecord,
+    openedFrame,
+    frameOf: (id) => {
+      const src = gridPlaces.get(id)?.cubeSource;
+      return src?._type === 'frame' ? src.name : undefined;
+    },
+    frameVersion: (name) => framesRead.get(name)?.version,
+    frameAgain: async (name) => {
+      if (!database.frame) throw new Error('this page reads no frame');
+      const was = framesRead.get(name);
+      const m = await database.frame(name);
+      if (!was || was.model !== m.model || was.source !== JSON.stringify(m.source)) return 'changed';
+      framesRead.set(name, { ...was, version: m.version });
+      return 'same';
+    },
     pick,
     signInWithKey: async (key) => {
       if (!warehouse) throw new Error('this page reaches no warehouse');

@@ -114,6 +114,21 @@ try {
     failed = true;
   }
 
+  // THE APP ON PYTHON (docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md, step 2a): the frame is a page of one grid (R1), the
+  // tab's app over Python's services; its Generated Pure & SQL window has the query the page sent and the SQL that
+  // answered it, which Python's planner wrote and Python ran (R4: the page sends Pure, never SQL)
+  const onApp = await cube.waitForFunction(() => document.querySelector('.dc-page') !== null
+    && window.__dataPage?.grids.length === 1
+    && /#>\{/.test(document.getElementById('pure')?.textContent ?? '')
+    && /\bSELECT\b/i.test(document.getElementById('sql')?.textContent ?? ''), undefined, { timeout: 30_000 }).then(() => true, () => false);
+  console.log(`${onApp ? 'ok  ' : 'FAIL'} the frame is a page of one grid on DataCube's app, its Pure & SQL window the query sent and the SQL Python ran`);
+  if (!onApp) {
+    const seen = await cube.evaluate(() => ({ grids: window.__dataPage?.grids.length, pure: document.getElementById('pure')?.textContent?.slice(0, 200),
+      sql: document.getElementById('sql')?.textContent?.slice(0, 200) }));
+    console.log(`  the page had: ${JSON.stringify(seen)}`);
+    failed = true;
+  }
+
   // FOLLOWING THE FRAME (show's cube.update): Python changes it, and the open page shows the change by itself
   const after = async (command, name, test) => {
     engine.stdin.write(`${command}\n`);
@@ -129,6 +144,29 @@ try {
     () => /\b11 rows\b/.test(document.body.innerText));
   await after('columns', 'a frame with a new column opens the cube again over its new model',
     () => document.body.innerText.includes('trader'));
+
+  // A FRAME CLOSED IN PYTHON: its open tab keeps what it shows, and says it no longer follows the frame -- in its status
+  // line and its title (the app's live page, docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md §5)
+  engine.stdin.write('show-closing\n');
+  const closingLine = await nextLine();
+  if (!closingLine.startsWith('done show-closing ')) throw new Error(`the engine did not show the frame: ${closingLine}`);
+  const closingTab = await browser.newPage();
+  closingTab.on('pageerror', (e) => { console.log(`closing tab error: ${e.message}`); failed = true; });
+  await closingTab.goto(JSON.parse(closingLine.slice('done show-closing '.length)));
+  const closingShown = await closingTab.waitForFunction(() => /\b2 rows\b/.test(document.body.innerText), undefined,
+    { timeout: 60_000 }).then(() => true, () => false);
+  engine.stdin.write('close-closing\n');
+  if ((await nextLine()) !== 'done close-closing') throw new Error('the engine did not close the frame');
+  const closedSaid = closingShown && await closingTab.waitForFunction(
+    () => /not following the frame: the frame was closed/.test(document.querySelector('.dc-app-status')?.textContent ?? '')
+      && /not followed: the frame was closed/.test(document.title) && /\b2 rows\b/.test(document.body.innerText),
+    undefined, { timeout: 30_000 }).then(() => true, () => false);
+  console.log(`${closedSaid ? 'ok  ' : 'FAIL'} a frame closed in Python: its tab keeps its rows and says it no longer follows the frame`);
+  if (!closedSaid) {
+    console.log(`  the tab said: ${await closingTab.evaluate(() => `${document.title} | ${document.querySelector('.dc-app-status')?.textContent}`)}`);
+    failed = true;
+  }
+  await closingTab.close();
 
   // A PAGE FROM PYTHON (docs/DATACUBE_PYTHON_PAGES_DESIGN_2026_10_09.md, step 1): a page of the engine's two frames
   // on two sheets, written by DataCube's own writers (the test page's __pythonPageDocument), served by Python as `q3`,
@@ -293,6 +331,11 @@ try {
   await check('two notebook cubes show their frames\' rows, over the widget\'s channel',
     () => /\b10 rows\b/.test(document.getElementById('nb').innerText) && document.getElementById('nb').innerText.includes('APAC')
       && /\b3 rows\b/.test(document.getElementById('nb2').innerText));
+  // the app's windows in a notebook: its Generated Pure & SQL window, in the widget's own element, has the SQL that
+  // answered the grid -- Python's planner's, run by Python
+  await check('a notebook cube\'s Pure & SQL window has the query sent and the SQL Python ran',
+    () => /#>\{/.test(document.getElementById('nb').querySelector('#pure')?.textContent ?? '')
+      && /\bSELECT\b/i.test(document.getElementById('nb').querySelector('#sql')?.textContent ?? ''));
   const once = fetched.get('/widget.js') === 1 && fetched.get('/widget.css') === 1;
   console.log(`${once ? 'ok  ' : 'FAIL'} DataCube's module came once for the page (${fetched.get('/widget.js')} widget.js, ${fetched.get('/widget.css')} widget.css)`);
   if (!once) failed = true;

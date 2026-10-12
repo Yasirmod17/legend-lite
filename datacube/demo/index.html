@@ -60,9 +60,6 @@
      when the page was a document with text above and below it. The
      page is the viewport now, so the grid takes whatever the title
      bar and the zones leave. */
-  #status { font-size: 12px; opacity: .75; margin-top: 10px; }
-  #status.bad { color: crimson; opacity: 1; }
-  #status.warn-text { color: #a15c00; opacity: 1; font-weight: 600; }
   #busy {
     font-size: 12px; padding: 2px 8px; border-radius: 4px;
     background: color-mix(in srgb, currentColor 10%, transparent);
@@ -85,11 +82,6 @@
   /* In the cube's STATUS bar now, so it has to be small and quiet.
      Scoped to the bar: the same element is offstage until `boot`
      moves it, and an offstage width cap would be nonsense. */
-  .dc-status-host #status {
-    /* the bar's own type: one face and size across it */
-    font: inherit; opacity: .75; white-space: nowrap; overflow: hidden;
-    text-overflow: ellipsis; max-width: 40vw; margin: 0;
-  }
 
 </style>
 </head>

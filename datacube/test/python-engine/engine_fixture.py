@@ -5,7 +5,9 @@ source, the rows (the page loads the same rows into the tab's DuckDB), and each 
 the test's commands until its standard input closes: `update`, `columns`, `widget-update`, `page <json>` (a page of
 its frames served, as `q3`), `page-again` (that page served again, its second sheet renamed), `desks-update` (the second
 frame a row more), `py-page` (a page built with ll.Page and shown; answered `done py-page <its link as JSON>`),
-`py-page-sheet` (a sheet added to it in Python), `widget-page-sheet` (a sheet added to the notebook's page), `py-page-read` (answered `done py-page-read <its sheets' names, as
+`py-page-sheet` (a sheet added to it in Python), `widget-page-sheet` (a sheet added to the notebook's page),
+`show-closing` (a frame of two rows shown, `closing`; answered `done show-closing <its link as JSON>`), `close-closing`
+(that frame's cube closed in Python), `py-page-read` (answered `done py-page-read <its sheets' names, as
 page.read() says them, as JSON>`), `py-documents` (answered `done py-documents <pages Python writes, each its JSON
 text, as JSON>`: for DataCube's reader to read) -- each answered `done <command>` -- and `widget <name> <message>`, a message from a widget's page, as
 a notebook's channel brings it. What a widget sends its page is printed as it goes: `sent <json>` (its buffers in
@@ -166,6 +168,12 @@ def main() -> None:
                 command = f'py-page {json.dumps(shown_page.url)}'
             elif command == 'py-page-sheet':
                 pypage.sheet('Added in Python')
+            elif command == 'show-closing':
+                with contextlib.redirect_stdout(io.StringIO()):
+                    closing = ll.show(frame.slice(0, 2), name='closing', browser=False)
+                command = f'show-closing {json.dumps(closing.url)}'
+            elif command == 'close-closing':
+                closing.close()
             elif command == 'py-documents':
                 command = f'py-documents {json.dumps(python_documents(frame, served_page, desks))}'
             elif command == 'py-page-read':

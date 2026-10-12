@@ -1,7 +1,7 @@
 # DataCube: one app, every host (design, 2026-10-11)
 
-Status: **agreed** (the user, 2026-10-11: "agree on all 6 ruling"; §13, §14). Nothing here is built yet. It supersedes
-parts of four agreed designs, each named in §13 with what changes.
+Status: **agreed** (the user, 2026-10-11: "agree on all 6 ruling"; §13, §14). Step 1 and step 2a are built (§12). It
+supersedes parts of four agreed designs, each named in §13 with what changes.
 
 ## 0. In one paragraph
 
@@ -419,6 +419,60 @@ Python's in-process services.
      page of one grid. Python's pages gain every app feature that needs no new service: the Pure & SQL window,
      settings, renaming, "changed".
    - **2b.** Data in: upload, examples, remote files and Snap into Python's DuckDB, answered by DataCube's code headless.
+
+   **2a as built (2026-10-12, branch `datacube/one-app-2a`):**
+   - **The engine service is §4.5's contract.** `rows(model, runtime, how?)` gives a grid's rows in the host's shape:
+     the tab's a planner over the source's model and DuckDB-WASM, Python's a `RemoteRun` (R4). What only the page's own
+     pair has (the sample's planner, the model writer of a warehouse table, test data, Snap) is the engine service's
+     `local` part, absent on Python. A file and a remote file now open through `rows()`, so 2b gives them to Python by
+     giving the database service's `ingestFile` and `mountRemote`, with no change to the app.
+   - **Not built: the page's compiler as its own service (§4.5, point 3).** Its only reader is a saved query's text,
+     which needs the page's own pair for its test data, so on Python it comes with step 3, its first Python caller (as
+     each model action's core waits for step 4). Until then the parser is `local.planner`'s.
+   - **The data in**: the database service's ways are each optional; Python's gives `frame` (`cube.json`). A frame is a
+     source of the app's (`sources.openedFrame`), reopened from a page like any other. Its answer is a `FrameModel`
+     (model, runtime, source, version), not §4.5's `InferredModel`: a frame has no conversions, no columns left out and
+     no bit columns to say, and its version is what following reads. The grid's columns are typed the same way either
+     way, by the rows' own planner or runner.
+   - **Where the shape is read**: when a grid is made (`GridPlace` and CubeApp's options), and in the three helpers that
+     build a `GridPlace` from `rows()` (`sources.ts`: `rowsPlace`, `typer`, `letGo`). The model actions read only grids
+     that have a planner in the page (step 3 decides Python's).
+   - **The live page (§5)** is a service of its own, `services.live` (`watch`, and `page` when Python serves one: `read`,
+     `report`), beside the page store, since Python in 2a has the other editor but no store yet. The app follows it (a
+     page's version: opened again on the sheet shown; a frame's: its grids query again, or open again over a new model)
+     and reports the page once each change settles, a grid's own changes included, and once as it opens (so
+     `page.read()` has it before anything changes, as before). `services.pages` and `services.queries` are optional: no
+     store, no Save, Save As… or Open…, no New ▸ Blank Page where nothing could be put on it; no Saved queries section.
+   - **Following, one behavior on both of Python's hosts**: a move that fails to be followed (a frame not read, the page
+     not opened) is said in the status line and the title, and tried again at the next move; a success says nothing
+     more of it. Told that Python no longer serves it (the page or the frame closed, the engine gone), the page keeps
+     what it shows, says so, and reports nothing more. Before, the tab stopped at the first failure and the widget
+     kept trying: the widget's way is kept, for both. The status line keeps saying it between errors (an error shows
+     over it, and the next view brings it back), where the widget had a note of its own.
+   - **What a person sees change on Python's pages**: the page's bar, sheets and menu, as in the tab; the title is
+     `<name> – DataCube` (`(not followed: …)` after the name when it applies), not the name alone; a download's address
+     is let go of five seconds after its click, as Python's pages did (the tab's did so at once until now).
+   - **Known, not fixed here**: two notebook widgets on one page share the app windows' element ids (`#pure`, `#sql`) and
+     the harnesses' globals (`window.__dataPage`); each widget reads its own through its element. An app whose start
+     throws before it returns leaves its windows and its leave-the-page listener for the page's life.
+   - **`ll.show(df)` is a page of one grid** (R1): the app's `frame` start, the page named by the frame, followed by the
+     frame's version. Python is unchanged: the same links and widget state.
+   - **The hosts**: `src/services/python-host.ts` (the services, over HTTP or the widget's channel), `demo/engine.ts` (a
+     tab: asks for the versions about once a second while shown) and `demo/widget.ts` (a notebook: told by the widget's
+     state; the app's windows float in the widget's own element, beside the page's). `demo/engine-page.ts` and `demo/engine-cube.ts` are gone. The browser's own things every host has are
+     `src/services/browser-basics.ts`. The status line's look moved into the app (`.dc-app-status`, app.css).
+   - **Budgets** (test/bundle-budget.test.ts): the widget 500 KB to 560 KB, as §10 said (measured 536,970). The
+     engine page 300 KB to 380 KB (measured 366,792). §10's "the engine page's startup holds" did not survive R1: the
+     page itself, its sheets and the app's sources are at startup, where one cube's tab loaded the grid alone. Making
+     the source picker, the examples and the saved pages' windows lazy would trim the tab and the engine page both; it
+     is its own piece, on a measurement. The tab 389 KB to 391 KB (measured 390,035, +1,979).
+   - **Proven**: `python_engine_test` runs every earlier case on the app, plus: the frame as a page of one grid whose
+     Pure & SQL window has the query sent and the SQL Python ran, in a tab and in a notebook widget; a frame closed in
+     Python, its tab keeping its rows and saying it no longer follows. `marimo_test` names the re-run page by its frame.
+     Not covered by a test yet: a stale report's 409 asserted (it is tolerated), a frame's model changing under a page
+     (covered for a frame shown alone), and the live logic in jsdom.
+   - **Build** (Compiler Rewrite's review): the Depot client is declared once, on `:src_base` beside the SDLC client,
+     since only `src/` files import it; the bundles get it through `:src`.
    - **2c.** The planes on Python: the headless `fetch`; the remote planners called by Python.
    - **2d.** The page store on Python: Open… and Save into a folder.
 3. **Python's model home.**

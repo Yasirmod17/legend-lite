@@ -18,6 +18,7 @@ import type { TableModels } from '../infer.ts';
 import type { ModelOptions } from '../planner.ts';
 import { mountRemote } from '../remote.ts';
 import { catalogColumns, forgetUpload, ingestFile } from '../upload.ts';
+import { browserBasics, tabTitle } from './browser-basics.ts';
 import type {
   ConfiguredProject,
   DatabaseService,
@@ -71,13 +72,18 @@ export async function browserServices(o: BrowserServicesOptions): Promise<Servic
   return {
     engine: {
       plane: o.plane,
-      planner: o.planner.planner,
       label: o.planner.label,
-      another: (model, runtime, how) => o.planner.models.another(model, runtime, how),
-      elements: (text) => o.planner.models.elements(text),
-      tables: o.planner.tables,
-      seeds: o.planner.seeds,
+      // planned here and run here: a planner over the source's own model, on this tab's DuckDB
+      rows: (model, runtime, how) => ({ planner: o.planner.models.another(model, runtime, how), engine: o.duckdb.engine }),
       database: tabDatabase(o.duckdb, o.planner.tables),
+      local: {
+        planner: o.planner.planner,
+        another: (model, runtime, how) => o.planner.models.another(model, runtime, how),
+        elements: (text) => o.planner.models.elements(text),
+        tables: o.planner.tables,
+        seeds: o.planner.seeds,
+        engine: o.duckdb.engine,
+      },
     },
     // opened now and waited for where a page is saved or opened: the start's first grid does not wait on IndexedDB
     pages: browserPages(),
@@ -85,16 +91,9 @@ export async function browserServices(o: BrowserServicesOptions): Promise<Servic
     ...(modelHome ? { modelHome } : {}),
     warehouse: warehouseService(config),
     browser: {
-      download,
-      writeClipboard: async (text) => {
-        const clipboard = navigator.clipboard;
-        if (!clipboard) throw new Error('this browser does not let the page copy (a page not served over https or from this machine)');
-        await clipboard.writeText(text);
-      },
-      readSettings,
-      writeSettings,
+      ...browserBasics,
       address: () => o.location.href,
-      title: { base: document.title, set: (text) => { document.title = text; } },
+      title: tabTitle(),
     },
   };
 }
@@ -103,7 +102,6 @@ export async function browserServices(o: BrowserServicesOptions): Promise<Servic
 function tabDatabase(duck: { readonly engine: DuckDbEngine; readonly db: AsyncDuckDB }, tables: TableModels): DatabaseService {
   const { engine, db } = duck;
   return {
-    engine,
     ingestFile: (file, options) => ingestFile(engine, db, file, tables, options),
     forgetFile: (fileName, table) => forgetUpload(engine, db, fileName, table),
     mountRemote: async (url, s3, name) => {
@@ -221,35 +219,4 @@ function warehouseService(config: TabConfig): WarehouseService {
     },
     live: (session, catalog) => new WarehouseEngine(session, catalog),
   };
-}
-
-/** Hand a file to the user. */
-function download(name: string, mime: string, content: string | Uint8Array): void {
-  const url = URL.createObjectURL(new Blob([typeof content === 'string' ? content : content.slice()], { type: mime }));
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = name;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-const SETTINGS_KEY = 'dataCube.settings';
-
-/** The settings this browser kept, or none. */
-function readSettings(): Record<string, unknown> | undefined {
-  try {
-    const raw = window.localStorage.getItem(SETTINGS_KEY);
-    const parsed: unknown = raw === null ? undefined : JSON.parse(raw);
-    return parsed !== null && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function writeSettings(values: Record<string, unknown>): void {
-  try {
-    window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(values));
-  } catch {
-    // storage refused (private window, quota): the settings hold for this visit
-  }
 }

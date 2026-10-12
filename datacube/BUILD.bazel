@@ -66,6 +66,10 @@ js_library(
         # the page's model (src/page-model.ts, Create a Class…: docs/DATACUBE_MODEL_DESIGN_2026_10_10.md §15.3): the
         # SDLC's client, over the page's own SDLC (Studio's) or a server's
         "//sdlc-client:sdlc_client",
+        # the model home's Depot client (a saved query's project opened by name): src/services/browser.ts connects to it
+        # and src/app/sources.ts reads a project's model text, both by a dynamic import that every bundle of the app
+        # inlines or splits off
+        "//depot-client:depot_client",
         # where a query runs: the engine interface, results, the type reader, DuckDB, the warehouse,
         # pure/v1 (engine-client/README.md; moved out of here 2026-10-04)
         "//engine-client:engine_client",
@@ -1022,7 +1026,7 @@ _BUNDLES = {
     "src/planner-worker.ts": "demo/planner-worker.js",
     "demo/remote-harness.ts": "demo/remote-bundle.js",
     "demo/stress.ts": "demo/stress.js",
-    # one cube on an engine that runs its queries (Python's: docs/DATACUBE_PYTHON_SHOW_DESIGN_2026_10_08.md)
+    # DataCube's app on Python, every query Python's (docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md, step 2a)
     "demo/engine.ts": "demo/bundle-engine.js",
 }
 
@@ -1033,8 +1037,7 @@ _UNSPLIT = ["src/planner-worker.ts"]
 
 [esbuild_bundle(
     name = "bundle_" + out[len("demo/"):-len(".js")].replace("-", "_"),
-    # demo/boot.ts opens a saved query's project by name from Depot (the model home; design Phase 3)
-    srcs = glob(["demo/**/*.ts"]) + [":src", "//depot-client:depot_client", "//sdlc-client:sdlc_client"],
+    srcs = glob(["demo/**/*.ts"]) + [":src"],
     outs = [out],
     out_dirs = [] if entry in _UNSPLIT else ["demo/chunks-" + out[len("demo/"):-len(".js")]],
     args = [
@@ -1074,9 +1077,9 @@ esbuild_bundle(
 
 esbuild_bundle(
     name = "widget",
+    # DataCube's app over Python's services (src/app/, src/services/python-host.ts), and the libraries it reaches -- the
+    # model home's Depot client among them, inlined here as everything is -- through :src
     srcs = [
-        "demo/engine-cube.ts",
-        "demo/engine-page.ts",
         "demo/widget.ts",
         "demo/widget-loader.ts",
         "demo/widget-styles.css",

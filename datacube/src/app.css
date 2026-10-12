@@ -3989,6 +3989,17 @@
 .dc-pe-fold.dc-folded > .dc-section-title::before { content: '\25b8'; }
 .dc-pe-fold.dc-folded > :not(.dc-section-title) { display: none; }
 
+/* THE APP'S STATUS LINE (src/app/datacube-app.ts): what the planner says as it starts, the page's errors, and that it no
+   longer follows Python -- in the first grid's status bar, in the bar's own type. Whatever element the host hands the
+   app carries this class; it was the tab's page's (#status). */
+.dc-app-status { font-size: 12px; opacity: .75; margin-top: 10px; }
+.dc-app-status.bad { color: crimson; opacity: 1; }
+.dc-app-status.warn-text { color: #a15c00; opacity: 1; font-weight: 600; }
+.dc-status-host .dc-app-status {
+  font: inherit; opacity: .75; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; max-width: 40vw; margin: 0;
+}
+
 /* THE APP'S WINDOWS (src/app/datacube-app.ts: Open…'s list, Share, the Generated Pure & SQL), floating: `makeWindow`
    positions and sizes them, so only the frame is described here. They were the tab's page's; the app builds them on
    every host. */
