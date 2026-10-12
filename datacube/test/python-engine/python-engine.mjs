@@ -66,7 +66,9 @@ let closing = false;
 let browser;
 try {
   browser = await chromium.launch();
-  const page = await browser.newPage();
+  // a browser away from UTC: every check here answers alike whatever zone the person is in (the tab's DuckDB set up as
+  // Python's: services/browser.ts setUpSession)
+  const page = await browser.newPage({ timezoneId: 'America/New_York' });
   page.on('pageerror', (e) => { console.log(`page error: ${e.message}`); failed = true; });
   page.on('console', (m) => { if (m.type() === 'error') console.log(`page console: ${m.text()}`); });
   page.on('requestfailed', (r) => console.log(`request failed: ${r.url()} -- ${r.failure()?.errorText ?? ''}`));
@@ -94,8 +96,8 @@ try {
     console.log(`FAIL the setup: ${verdict.setupError}`);
     failed = true;
   }
-  if (verdict.outcomes.length !== 6) {
-    console.log(`FAIL ${verdict.outcomes.length} checks ran, not 6`);
+  if (verdict.outcomes.length !== 7) {
+    console.log(`FAIL ${verdict.outcomes.length} checks ran, not 7`);
     failed = true;
   }
 

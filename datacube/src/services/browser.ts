@@ -64,9 +64,20 @@ export interface BrowserServicesOptions {
   readonly location: { readonly href: string };
 }
 
-/** The tab's services, built once as the page starts. */
+/**
+ * THE TAB'S DUCKDB SET UP as the planner's SQL expects, as Python's Frames sets up its own: the dialect's own session
+ * setup, from the compiler (`Boundary.sessionSetup`: a DuckDB session in UTC), run on the connection before any query
+ * the planner wrote. Left alone, DuckDB-WASM takes the browser's zone -- a fixed offset of it at that ("Etc/GMT+5" in New
+ * York, in summer too) -- and `now()`, `today()` and any zoned timestamp answered otherwise than on Python.
+ */
+export async function setUpSession(engine: DuckDbEngine, tables: TableModels): Promise<void> {
+  for (const statement of await tables.sessionSetup(engine.databaseType)) await engine.run(statement, 0);
+}
+
+/** The tab's services, built once as the page starts: its DuckDB set up first (`setUpSession`). */
 export async function browserServices(o: BrowserServicesOptions): Promise<Services> {
   const { config } = o;
+  await setUpSession(o.duckdb.engine, o.planner.tables);
   const modelHome = o.config.depot ? depotHome(o.config.depot, o.location) : undefined;
   return {
     engine: {

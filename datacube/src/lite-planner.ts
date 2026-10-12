@@ -48,6 +48,7 @@ interface TeavmModule {
     // legend-engine's pure/v1, routed as legend-lite's server routes it: `OK\n<status>\n<type>\n<body>`
     pureV1OrError(path: string, rawQuery: string, body: string): string;
     testDataSqlOrError(model: string, database: string, tablesJson: string): string;
+    sessionSetupOrError(databaseType: string): string;
   };
 }
 
@@ -625,6 +626,14 @@ export class LitePlanner implements Planner, TableModels, ModelWriter {
       ? await this.#ask({ kind: 'catalogColumnsSql', schema, table })
       : (await this.#load()).exports.catalogColumnsSqlOrError(schema, table);
     return decode(answer, `the catalog of ${table}`);
+  }
+
+  /** What a session of the database runs before it is queried (the dialect's own setup: a DuckDB session in UTC). */
+  async sessionSetup(databaseType: string): Promise<readonly string[]> {
+    const answer = this.#useWorker()
+      ? await this.#ask({ kind: 'sessionSetup', databaseType })
+      : (await this.#load()).exports.sessionSetupOrError(databaseType);
+    return JSON.parse(decode(answer, `a ${databaseType} session's setup`)) as string[];
   }
 
   /**

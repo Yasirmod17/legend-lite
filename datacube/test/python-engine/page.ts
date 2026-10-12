@@ -25,7 +25,7 @@ import { arrowResultTable, LegendEngineExecutor } from '../../../engine-client/s
 import { arrowIpcStream } from '../../../engine-client/src/pure-v1.ts';
 import type { ResultTable } from '../../../engine-client/src/result.ts';
 import type { Lambda } from '../../../pure-protocol/src/index.ts';
-import { PlanThenRun, RemoteRun } from '../../src/runner.ts';
+import { PlanThenRun, RemoteRun, type PlanAndRun } from '../../src/runner.ts';
 import type { CubeSnapshot } from '../../src/snapshot.ts';
 import { defaultChart } from '../../src/chart-spec.ts';
 import { DEFAULT_CONFIGURATION } from '../../src/config.ts';
@@ -37,6 +37,7 @@ import { LitePlanner } from '../../src/lite-planner.ts';
 import { CASES, queries } from '../wasm-differential/cases.ts';
 import { askedOffers, pythonDatabase, pythonRunner, type PythonLink } from '../../src/services/python-host.ts';
 import { ingestFile } from '../../src/upload.ts';
+import { setUpSession } from '../../src/services/browser.ts';
 
 /** What the harness hands the page: the engine, and the frame it serves. */
 interface Served {
@@ -172,6 +173,8 @@ async function run(): Promise<void> {
     notional DOUBLE, pnl DOUBLE, qty INTEGER)`, 0);
   await local.run(`INSERT INTO trades VALUES ${served.rows.map((r) => `(${r.map(sqlValue).join(', ')})`).join(', ')}`, 0);
   const planner = new LitePlanner({ ...engine, workerUrl: new URL('planner-worker.js', location.href).href });
+  // set up as the tab sets its DuckDB up (services/browser.ts): this browser is in New York (python-engine.mjs)
+  await setUpSession(local, planner);
   const tab = new PlanThenRun(planner, local);
 
   await check('every cube case answers the same on Python\'s engine and in the tab', async () => {
@@ -259,6 +262,23 @@ async function run(): Promise<void> {
       await python.forgetFile(name, there.table);
     }
     deepEqual(differ, [], 'Python\'s page and the tab read a file differently:');
+  });
+
+  // THE SESSION'S ZONE: this browser is in New York, Python's process in UTC; the tab's DuckDB set up as Python's is, a
+  // query of the time now answers the same instant on both (planned `CAST(now() AS TIMESTAMP)`: the session's wall time)
+  await check('the time now answers alike on Python and in a tab in New York: both sessions in UTC', async () => {
+    equal(Intl.DateTimeFormat().resolvedOptions().timeZone, 'America/New_York', 'the browser\'s zone:');
+    const zone = await local.run("SELECT current_setting('TimeZone') AS zone", 0);
+    equal(zone.columns[0]!.values[0], 'UTC', 'the tab\'s session zone:');
+    const python = pythonRunner({ baseUrl: location.origin, fetch: (i, init) => fetch(i, init), authorization: served.authorization },
+      served.model, served.runtime);
+    const q = onTheFrame((await tab.parse('|#>{trades::DB.TRADES}#->limit(1)->extend(~[n: x|now()])->select(~[n])')) as Lambda,
+      served.source);
+    const snapshot = CASES[0]!.snapshot;
+    const at = async (r: PlanAndRun): Promise<number> =>
+      Date.parse(`${String((await r.run(q, snapshot)).rows.columns[0]!.values[0])}Z`);
+    const [here, there] = [await at(tab), await at(python)];
+    equal(Math.abs(here - there) < 60_000, true, `now() in the tab ${new Date(here).toISOString()}, on Python ${new Date(there).toISOString()}:`);
   });
 
   await check('a query\'s types, parse and print: the same compiler\'s answers', async () => {

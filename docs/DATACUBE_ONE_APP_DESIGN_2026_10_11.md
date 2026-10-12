@@ -785,7 +785,11 @@ phase, never a second field. Until then the executors type by the plan's Pure ty
     Python's token can have Python read a local file through a model Python serves.
   - The same holds for Python's pure/v1 execute, which predates PlanAndRun. Python's `remote.json` already refuses a
     local URL for this reason.
-  - The fix is open for the user.
+  - **Accepted (the user, 2026-10-12)**: "its your datacube started from your python that could just read that file
+    anyway". The person whose files they are runs that Python, and the rows show on their own screen.
+  - What it would still matter for: a page someone else made, opened on your Python; or script injected into the page,
+    which already holds the token and the frames.
+  - So refusing `file:` when Python plans for a page is an optional hardening, not a blocker.
 - **A warehouse**: the signed-in person's SQL, under the warehouse's own grants, as today.
 
 ### 15.5 What it replaces
@@ -804,8 +808,11 @@ identical in their columns, types and values, with the tab's local pair the refe
 
 ### 15.7 Known differences, and their follow-ups (the user, 2026-10-12)
 
-1. **The two DuckDB versions** (DuckDB-WASM `1.33.1-dev57`, Python's `duckdb 1.5.5`): accepted for now. Follow-up: every
-   DuckDB, the corpus tests' included, bumped to one 1.5 release.
+1. **The two DuckDB versions**: accepted for now. Follow-up: every DuckDB, the corpus tests' included, bumped to one 1.5
+   release.
+   - The tab's engine is DuckDB v1.5.4; `1.33.1-dev57` is only the npm package's own version (measured
+     2026-10-12, `SELECT version()` in the pinned Chromium).
+   - Python's is `duckdb 1.5.5`: one patch release apart.
 2. **Python's one DuckDB connection is shared** by every page on its process, so their queries run one at a time:
    sharing is a feature. Follow-up option: a connection per page, to the same database.
 3. **Large results from Python come back whole.** Follow-up: streamed back in chunks, as the tab's export reads them.
@@ -840,7 +847,7 @@ Rewrite line, then audited before it lands.
   - Planning: the page's own `LitePlanner` over `pythonWorker`. Hold and release are kept in the page, and a held kind
     sends the model's text, so no handle crosses hosts.
   - One `POST plan-and-run.json` per grid. Python plans against the model it holds for that frame or file
-    (`Frames.held_for`), runs only that SQL (R4, short of a query's own `sourceUrl`: 15.4) and types the rows
+    (`Frames.held_for`), runs only that SQL (R4; a query's own `sourceUrl('file:...')` accepted: 15.4) and types the rows
     (`Frames.run`). Both new routes are private, POST-only, and always answered: what one does not answer is logged
     and said (500), never a dropped call.
   - The answer is Arrow IPC, the planner's answer in its schema's metadata (`legend.plan`). The page reads it as its
@@ -859,6 +866,15 @@ Rewrite line, then audited before it lands.
   - each typing rule (each Pure type, a SUM past 64 bits, an untyped column refused, pandas' nullable types).
 - **A page's file, a part at a time** (§4.3's "Any size"): `file-part.json`, then `file.json` names the upload; the
   256 MB body limit is gone.
+- **One session on both hosts** (measured 2026-10-12): left alone, DuckDB-WASM took the browser's zone, and a fixed
+  offset of it at that: `Etc/GMT+5` in New York, in October too.
+  - So `now()` answered 16:28 in the tab and 21:28 on Python, and `today()` could differ by a date in the evening.
+  - Now each host asks the compiler, as it sets up its DuckDB, what a DuckDB session runs (`Boundary.sessionSetup`:
+    `SET TimeZone='UTC'`), and runs it. Nothing of it is written in either host.
+    - The tab: services/browser.ts `setUpSession`, over the planner protocol's `sessionSetup` (the module's existing
+      export `sessionSetupOrError`). The stress page does the same.
+    - Python: `Frames`, through the native library's `lite_session_setup`.
+  - `python_engine_test` now runs its browser in New York: every cube case, and the time now, answer alike.
 - **Budget**: the grid page's gzipped script grew 390,817 -> 391,138 bytes (PlanAndRun and the shared plan
   reading), and its budget went 391,000 -> 392,000. Gzip-compressed files are 15.7's encoding follow-up, read by
   neither host today.

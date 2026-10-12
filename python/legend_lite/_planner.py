@@ -22,6 +22,7 @@ KINDS: dict[str, tuple[str, Callable[[dict[str, Any]], tuple[str, ...]]]] = {
     'planJson': ('lite_plan_json_held', lambda m: (str(m['handle']), m['lambda'], m['runtime'])),
     'pureV1': ('lite_pure_v1', lambda m: (m['path'], m['query'], m['body'])),
     'testData': ('lite_test_data_sql', lambda m: (m['model'], m['database'], m['tables'])),
+    'sessionSetup': ('lite_session_setup', lambda m: (m['databaseType'],)),
 }
 
 # the kinds that plan against a model held (by its handle in the tab; by its text from a page to Python's engine)
