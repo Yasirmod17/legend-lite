@@ -348,6 +348,14 @@ class SqlToPureTest {
                 + " supported yet", refusal("select round(avg(age)) as a from tb('s::DB.T')").getMessage());
         assertEquals("|| of a quotient, average or root of numerics (exact in Postgres, a double here) is not"
                 + " supported yet", refusal("select dept || ID / 3.0 as t from tb('s::DB.T')").getMessage());
+        // a double with an inexact numeric in it is still inexact: Postgres's double of the exact value is not this one
+        assertEquals("floor of a quotient, average or root of numerics (exact in Postgres, a double here) is not"
+                + " supported yet", refusal("select floor(ID / 3.0 * 1::float8) as f from tb('s::DB.T')").getMessage());
+        // a sum of integers is a bigint or a numeric in Postgres by the column's width: its division is refused
+        assertEquals("dividing a sum of integers by an integer is not supported yet: Postgres's sum of an integer"
+                + " column is a bigint or a numeric by the column's width, which divide differently (cast it:"
+                + " sum(x)::bigint / n or sum(x)::numeric / n)",
+                refusal("select sum(age) / 2 as s from tb('s::DB.T')").getMessage());
         // a double's quotient is a double in Postgres too: round is rint, half to even, as Pure's round of a Float
         assertEquals("#>{s::DB.T}#->extend(~[r:r|round($r.ID / toFloat(2.0D))->toFloat()])->select(~[r])",
                 pure("select round(ID / 2.0::float8) as r from tb('s::DB.T')"));

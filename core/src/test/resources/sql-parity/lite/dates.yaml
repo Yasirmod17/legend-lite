@@ -43,3 +43,10 @@ tests:
     sql: "SELECT date_trunc('month', order_date) AS m, count(*) AS n, sum(amount) AS s FROM orders GROUP BY date_trunc('month', order_date) ORDER BY 1"
   - id: date_trunc_of_a_date_is_refused
     sql: "SELECT date_trunc('month', d) AS a FROM dates WHERE id = 1"
+  # an interval's trailing field: Postgres keeps only that field's part of the text; a field named twice is an error
+  - id: interval_with_a_field_and_more_text_is_refused
+    sql: "SELECT DATE '2024-01-01' + INTERVAL '1 day 1' MONTH AS a FROM departments WHERE id = 1"
+  - id: interval_naming_a_field_twice_is_refused
+    sql: "SELECT DATE '2024-01-01' + INTERVAL '1 mon 1 month' AS a FROM departments WHERE id = 1"
+  - id: interval_week_and_days
+    sql: "SELECT DATE '2024-01-01' + INTERVAL '1 week 2 days' AS a, DATE '2024-01-01' + INTERVAL '-3' DAY AS b FROM departments WHERE id = 1"

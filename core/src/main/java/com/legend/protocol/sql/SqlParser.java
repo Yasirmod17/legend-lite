@@ -944,6 +944,17 @@ public final class SqlParser {
                 at++;
                 String value = next().text();
                 if (peek().kind() == Kind.IDENT && INTERVAL_UNITS.contains(peek().text().toLowerCase(Locale.ROOT))) {
+                    // Postgres keeps only the field's part of the text (INTERVAL '1 day 1' MONTH is a month): a
+                    // single whole number reads the same either way
+                    String whole = value.strip();
+                    int digit = whole.startsWith("+") || whole.startsWith("-") ? 1 : 0;
+                    boolean number = digit < whole.length();
+                    for (; digit < whole.length(); digit++) {
+                        number &= whole.charAt(digit) >= '0' && whole.charAt(digit) <= '9';
+                    }
+                    if (!number) {
+                        throw unsupported("INTERVAL '...' FIELD other than of one whole number is");
+                    }
                     value = value + " " + next().text().toLowerCase(Locale.ROOT);
                     if (peek().is("to")) {
                         throw unsupported("INTERVAL ... TO ... is");

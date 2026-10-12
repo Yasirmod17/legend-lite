@@ -146,12 +146,16 @@ public final class SqlToPure {
      * Postgres's numeric computed here as Pure's Float: a quotient of numbers that are not both integers (Pure's
      * divide), an average or a statistic of numbers that are not doubles, a square root, exponential or logarithm of a
      * numeric. It agrees with Postgres's exact value to about 15 significant digits but may fall either side of it
-     * ({@code 0.3 / 0.1} is 2.9999999999999996), so nothing that rounds it or spells it is translated.
+     * ({@code 0.3 / 0.1} is 2.9999999999999996), so nothing that rounds it or spells it is translated. WHOLE is a
+     * sum of integers: Postgres's bigint for a sum of int4 values, its numeric for a sum of int8 ones -- the same
+     * whole number, but the one's division by an integer truncates and the other's does not, and the translator does
+     * not know a column's width. Dividing it by an integer is refused.
      */
-    enum Kind { INTEGER, FLOAT, DECIMAL, NUMBER, INEXACT, STRING, BOOLEAN, DATE, DATETIME, JSON, NULL, OTHER;
+    enum Kind { INTEGER, WHOLE, FLOAT, DECIMAL, NUMBER, INEXACT, STRING, BOOLEAN, DATE, DATETIME, JSON, NULL, OTHER;
 
         boolean numeric() {
-            return this == INTEGER || this == FLOAT || this == DECIMAL || this == NUMBER || this == INEXACT;
+            return this == INTEGER || this == WHOLE || this == FLOAT || this == DECIMAL || this == NUMBER
+                    || this == INEXACT;
         }
     }
 
@@ -194,14 +198,19 @@ public final class SqlToPure {
         if (a == Kind.INTEGER && b == Kind.INTEGER) {
             return Kind.INTEGER;
         }
-        if (a == Kind.FLOAT || b == Kind.FLOAT) {
-            return Kind.FLOAT;
-        }
+        // an inexact numeric stays inexact with a double in it: Postgres's double of the exact value is not this one
         if (a == Kind.INEXACT || b == Kind.INEXACT) {
             return Kind.INEXACT;
         }
+        if (a == Kind.FLOAT || b == Kind.FLOAT) {
+            return Kind.FLOAT;
+        }
         if (a == Kind.NUMBER || b == Kind.NUMBER) {
             return Kind.NUMBER;
+        }
+        if ((a == Kind.WHOLE || b == Kind.WHOLE) && (a == Kind.INTEGER || a == Kind.WHOLE)
+                && (b == Kind.INTEGER || b == Kind.WHOLE)) {
+            return Kind.WHOLE;
         }
         return Kind.DECIMAL;
     }
@@ -1375,7 +1384,8 @@ public final class SqlToPure {
             // INTERSECT's row is in both; EXCEPT's is the left's
             boolean nullable = s.op() == SqlAst.SetOp.UNION ? l.nullable() || r.nullable()
                     : s.op() == SqlAst.SetOp.INTERSECT ? l.nullable() && r.nullable() : l.nullable();
-            columns.add(new OutCol(l.name(), l.kind(), nullable));
+            // a decimal column merged from two queries takes one scale in the database (see common)
+            columns.add(new OutCol(l.name(), l.kind() == Kind.DECIMAL ? Kind.NUMBER : l.kind(), nullable));
         }
         ValueSpecification vs = s.op() == SqlAst.SetOp.UNION ? union(s, left, right, names)
                 : rowsFound(s.op() == SqlAst.SetOp.INTERSECT, left, right);
@@ -1897,7 +1907,7 @@ public final class SqlToPure {
                 String statistic = STATISTICS.get(fn);
                 Kind kind = switch (fn) {
                     case "count" -> Kind.INTEGER;
-                    case "sum" -> argKind == Kind.DECIMAL ? Kind.NUMBER : argKind;
+                    case "sum" -> sumKind(argKind);
                     case "min", "max" -> argKind;
                     default -> statisticKind(argKind);
                 };
@@ -1935,6 +1945,10 @@ public final class SqlToPure {
         } else {
             throw SqlTranslationException.unsupported("a default of " + postgresName(dflt.kind()) + " for "
                     + postgresName(arg.kind()) + " values is not supported yet", d.pos());
+        }
+        if (kind == Kind.DECIMAL) {
+            // the value and the default take one scale in the database (see common)
+            kind = Kind.NUMBER;
         }
         if (kind == Kind.FLOAT && dflt.kind() != Kind.FLOAT) {
             Tx read = dflt;
@@ -2366,6 +2380,12 @@ public final class SqlToPure {
     private static final Set<String> WINDOW_FUNCTIONS = Set.of("row_number", "rank", "dense_rank", "percent_rank",
             "cume_dist", "ntile", "lag", "lead", "first_value", "last_value", "nth_value");
 
+    /** A sum's kind: of integers a bigint or a numeric (WHOLE), of a sum of integers or of numerics a numeric, of
+     *  doubles a double. */
+    private static Kind sumKind(Kind arg) {
+        return arg == Kind.INTEGER ? Kind.WHOLE : arg == Kind.DECIMAL || arg == Kind.WHOLE ? Kind.NUMBER : arg;
+    }
+
     /** An average's or a statistic's kind: double precision of doubles; Postgres's numeric otherwise, a Float here. */
     private static Kind statisticKind(Kind arg) {
         return arg == Kind.FLOAT ? Kind.FLOAT : Kind.INEXACT;
@@ -2500,7 +2520,7 @@ public final class SqlToPure {
                     }
                     case "sum" -> {
                         requireNumeric(arg, f);
-                        kind = arg.kind() == Kind.DECIMAL ? Kind.NUMBER : arg.kind();
+                        kind = sumKind(arg.kind());
                         reduce = call("sum", values);
                     }
                     case "avg" -> {
@@ -2597,11 +2617,11 @@ public final class SqlToPure {
         ValueSpecification reduce = call("percentile", new Variable(group),
                 new com.legend.protocol.spec.CFloat(p.doubleValue()), new CBoolean(!key.descending()),
                 new CBoolean(continuous));
-        if (!continuous && x.kind() == Kind.INTEGER) {
+        if (!continuous && (x.kind() == Kind.INTEGER || x.kind() == Kind.WHOLE)) {
             reduce = call("cast", reduce, typeArg("Integer"));
         }
-        Kind kind = continuous ? Kind.FLOAT : x.kind() == Kind.DECIMAL || x.kind() == Kind.NUMBER ? Kind.INEXACT
-                : x.kind();
+        Kind kind = continuous ? (x.kind() == Kind.INEXACT ? Kind.INEXACT : Kind.FLOAT)
+                : x.kind() == Kind.DECIMAL || x.kind() == Kind.NUMBER ? Kind.INEXACT : x.kind();
         return new Aggregate(new ColSpec(name, lambda(row, each), lambda(group, reduce), null), kind);
     }
 
@@ -2901,7 +2921,7 @@ public final class SqlToPure {
             return Tx.condition(new CBoolean(false), new CBoolean(false), true);
         }
         String type = switch (kind) {
-            case INTEGER -> "Integer";
+            case INTEGER, WHOLE -> "Integer";
             case FLOAT, INEXACT -> "Float";
             case DECIMAL, NUMBER -> "Decimal";
             case STRING, NULL -> "String";
@@ -3058,12 +3078,20 @@ public final class SqlToPure {
                 Tx r = lr.get(1);
                 numericOperand(l, b.left());
                 numericOperand(r, b.right());
+                if (l.kind() == Kind.WHOLE && (r.kind() == Kind.INTEGER || r.kind() == Kind.WHOLE)
+                        || r.kind() == Kind.WHOLE && l.kind() == Kind.INTEGER) {
+                    throw SqlTranslationException.unsupported("dividing a sum of integers by an integer is not supported"
+                            + " yet: Postgres's sum of an integer column is a bigint or a numeric by the column's width,"
+                            + " which divide differently (cast it: sum(x)::bigint / n or sum(x)::numeric / n)", b.pos());
+                }
                 if (l.kind() == Kind.INTEGER && r.kind() == Kind.INTEGER) {
                     return strict(Kind.INTEGER, List.of(l, r), v -> integerQuotient(v.get(0), v.get(1)));
                 }
                 // a double's quotient is a double, in Postgres too; a numeric's is exact there, a Float here
-                return strict(l.kind() == Kind.FLOAT || r.kind() == Kind.FLOAT ? Kind.FLOAT : Kind.INEXACT,
-                        List.of(l, r), v -> call("divide", v.get(0), v.get(1)));
+                boolean doubles = (l.kind() == Kind.FLOAT || r.kind() == Kind.FLOAT) && l.kind() != Kind.INEXACT
+                        && r.kind() != Kind.INEXACT;
+                return strict(doubles ? Kind.FLOAT : Kind.INEXACT, List.of(l, r), v -> call("divide", v.get(0),
+                        v.get(1)));
             }
             case POWER -> {
                 List<Tx> lr = typedOperands(tx(b.left(), scope, row), tx(b.right(), scope, row), "^", b.pos());
@@ -3141,7 +3169,8 @@ public final class SqlToPure {
 
     /** A power's kind: of an inexact numeric, numeric in Postgres (so inexact here) unless a double is in it. */
     private static Kind powerKind(Kind a, Kind b) {
-        return a != Kind.FLOAT && b != Kind.FLOAT && (a == Kind.INEXACT || b == Kind.INEXACT) ? Kind.INEXACT
+        // a sum of integers may be numeric, whose power Postgres computes exactly
+        return a == Kind.INEXACT || b == Kind.INEXACT || a == Kind.WHOLE || b == Kind.WHOLE ? Kind.INEXACT
                 : Kind.FLOAT;
     }
 
@@ -3262,7 +3291,11 @@ public final class SqlToPure {
             return new Common(txs, untyped ? Kind.STRING : Kind.NULL);
         }
         List<Tx> values = new ArrayList<>();
+        int merged = 0;
         for (int i = 0; i < txs.size(); i++) {
+            if (txs.get(i).kind() != Kind.NULL && !isNullConstant(txs.get(i))) {
+                merged++;
+            }
             if (exprs.get(i) instanceof SqlAst.StringLit s && target != Kind.STRING) {
                 if (target == Kind.JSON) {
                     values.add(jsonConstant(s));
@@ -3276,13 +3309,16 @@ public final class SqlToPure {
                 values.add(txs.get(i));
             }
         }
-        return new Common(values, target);
+        // decimals merged into one value take one scale in the database (DuckDB's CASE pads 1.5 to 1.50), each its
+        // own in Postgres: the same number, but its text is refused (a numeric that is no column's)
+        return new Common(values, target == Kind.DECIMAL && merged > 1 ? Kind.NUMBER : target);
     }
 
     /** A kind's Postgres type name, for Postgres's messages. */
     private static String postgresName(Kind k) {
         return switch (k) {
             case INTEGER -> "integer";
+            case WHOLE -> "bigint";
             case FLOAT -> "double precision";
             case DECIMAL, NUMBER, INEXACT -> "numeric";
             case STRING -> "text";
@@ -3322,7 +3358,9 @@ public final class SqlToPure {
             case DECIMAL, FLOAT, INEXACT -> {
                 String n = plainNumber(v.strip(), true);
                 if (n != null) {
-                    return Tx.value(new CDecimal(new BigDecimal(n)), Kind.DECIMAL, false);
+                    // a double precision constant is the double nearest its text (round('2.5'::float8) is rint's 2)
+                    return kind == Kind.FLOAT ? Tx.value(call("toFloat", new CDecimal(new BigDecimal(n))), Kind.FLOAT,
+                            false) : Tx.value(new CDecimal(new BigDecimal(n)), Kind.DECIMAL, false);
                 }
             }
             case BOOLEAN -> {
@@ -3736,7 +3774,8 @@ public final class SqlToPure {
                 arity(f, a, 1);
                 numericOperand(a.get(0), f.args().get(0));
                 Kind k = a.get(0).kind();
-                return strict(numericForm && (exactNumeric(k) || k == Kind.INEXACT) ? Kind.INEXACT : Kind.FLOAT, a,
+                return strict(k == Kind.INEXACT || numericForm && (exactNumeric(k) || k == Kind.WHOLE) ? Kind.INEXACT
+                        : Kind.FLOAT, a,
                         v -> call(pure, v.get(0)));
             });
         }
@@ -3744,12 +3783,14 @@ public final class SqlToPure {
             arity(f, a, 2);
             numericOperand(a.get(0), f.args().get(0));
             numericOperand(a.get(1), f.args().get(1));
-            return strict(Kind.FLOAT, a, v -> call("atan2", v.get(0), v.get(1)));
+            return strict(a.get(0).kind() == Kind.INEXACT || a.get(1).kind() == Kind.INEXACT ? Kind.INEXACT
+                    : Kind.FLOAT, a, v -> call("atan2", v.get(0), v.get(1)));
         });
         m.put("pi", (t, f, a, s, r) -> nullary(f, a, "pi", Kind.FLOAT));
         m.put("sign", (t, f, a, s, r) -> {
             arity(f, a, 1);
             numericOperand(a.get(0), f.args().get(0));
+            inexact(a.get(0), "sign", f.pos());
             return a.get(0).kind() == Kind.INTEGER ? strict(Kind.FLOAT, a, v -> call("toFloat", call("sign", v.get(0))))
                     : wholeNumber(a.get(0), v -> call("sign", v));
         });
@@ -3940,6 +3981,10 @@ public final class SqlToPure {
         }
         if (args.size() == 1) {
             Tx only = args.get(0);
+            if (kind == Kind.FLOAT && only.kind() != Kind.FLOAT && only.kind() != Kind.INEXACT) {
+                // the double of an exact number (coalesce(0.28, x::float8) is the double 0.28)
+                return strict(Kind.FLOAT, List.of(only), v -> call("toFloat", v.get(0)));
+            }
             return kind == Kind.BOOLEAN || only.kind() == kind ? only : Tx.value(valueOf(only), kind, only.nullable());
         }
         boolean nullable = true;
@@ -4128,12 +4173,12 @@ public final class SqlToPure {
             throw SqlTranslationException.unsupported(fn + "(x, n) with n other than a constant (of at most 18) is not"
                     + " supported yet", f.args().get(1).pos());
         }
-        if (x.kind() == Kind.INTEGER && n >= 0) {
-            // an integer to n >= 0 places is itself
-            return Tx.value(x.vs(), Kind.DECIMAL, x.nullable());
-        }
         long places = n;
-        return strict(Kind.DECIMAL, List.of(x), v -> toPlaces(v.get(0), places, halfAway));
+        // an integer is read as Postgres's numeric first: n places of it (round(42, 1) is 42.0), and no overflow of
+        // its own width in the scaling
+        boolean whole = x.kind() == Kind.INTEGER || x.kind() == Kind.WHOLE;
+        return strict(Kind.DECIMAL, List.of(x), v -> toPlaces(whole ? call("toDecimal", v.get(0)) : v.get(0), places,
+                halfAway));
     }
 
     /** Refuses what rounds or spells an inexact numeric (see {@link Kind}): it may fall either side of Postgres's
@@ -4224,7 +4269,7 @@ public final class SqlToPure {
                         thunk(new CString("f")));
                 yield a.nullable() ? call("if", call("isEmpty", v), thunk(empty()), thunk(tf)) : tf;
             }
-            case INTEGER, DATE, DECIMAL -> {
+            case INTEGER, WHOLE, DATE, DECIMAL -> {
                 ValueSpecification v = valueOf(a);
                 yield a.nullable() ? call("if", call("isEmpty", v), thunk(empty()), thunk(call("toString",
                         call("toOne", v)))) : call("toString", v);
@@ -4387,7 +4432,7 @@ public final class SqlToPure {
         if (x.kind() == Kind.NULL) {
             return nullOf(target);
         }
-        if (target == Kind.INTEGER && range != null && x.vs() instanceof CInteger n) {
+        if (target == Kind.INTEGER && range != null && x.kind() == Kind.INTEGER && x.vs() instanceof CInteger n) {
             if (n.value().longValue() > range[1] || n.value().longValue() < range[0]) {
                 throw SqlTranslationException.invalid((SMALL_INTEGERS.contains(type) ? "smallint" : "integer")
                         + " out of range", c.pos());
@@ -4396,6 +4441,11 @@ public final class SqlToPure {
         }
         if (x.kind() == target || target == Kind.DECIMAL && x.kind() == Kind.NUMBER) {
             return range == null ? x : inRange(x, range, type);
+        }
+        if (x.kind() == Kind.WHOLE && target == Kind.INTEGER) {
+            // a sum of integers as a bigint (or narrower): its width now known
+            Tx whole = Tx.value(x.vs(), Kind.INTEGER, x.nullable());
+            return range == null ? whole : inRange(whole, range, type);
         }
         if (x.kind() == Kind.INEXACT) {
             if (target == Kind.DECIMAL || target == Kind.FLOAT) {
@@ -4407,15 +4457,15 @@ public final class SqlToPure {
         }
         String from = x.kind().name().toLowerCase(Locale.ROOT);
         String convert = switch (target) {
-            case STRING -> x.kind() == Kind.INTEGER || x.kind() == Kind.DECIMAL || x.kind() == Kind.BOOLEAN
-                    || x.kind() == Kind.DATE ? "toString" : null;
+            case STRING -> x.kind() == Kind.INTEGER || x.kind() == Kind.WHOLE || x.kind() == Kind.DECIMAL
+                    || x.kind() == Kind.BOOLEAN || x.kind() == Kind.DATE ? "toString" : null;
             // a numeric rounds half away from zero, a double half to even (Pure's round of a Float, measured). Text
             // is not read: a database's cast reads what Postgres's input rejects ('1.5' and '1e3' are 2 and 1000 on
             // DuckDB, errors in Postgres)
             case INTEGER -> x.kind() == Kind.DECIMAL || x.kind() == Kind.NUMBER ? "halfAwayFromZero"
                     : x.kind() == Kind.FLOAT ? "round" : null;
             // text to numeric: Pure's parseDecimal lowers to a fixed DECIMAL(5, 2), not Postgres's unbounded numeric
-            case DECIMAL -> x.kind() == Kind.INTEGER ? "toDecimal" : null;
+            case DECIMAL -> x.kind() == Kind.INTEGER || x.kind() == Kind.WHOLE ? "toDecimal" : null;
             // text likewise: DuckDB reads '1_000' as 1000 and '1e400' as Infinity, Postgres rejects both
             case FLOAT -> x.kind().numeric() ? "toFloat" : null;
             case DATE -> x.kind() == Kind.DATETIME ? "datePart" : null;
@@ -4457,27 +4507,35 @@ public final class SqlToPure {
     private static final Map<String, long[]> INTERVAL_UNITS = intervalUnits();
 
     private static Map<String, long[]> intervalUnits() {
+        // one array per field, shared by its spellings: a field named twice is Postgres's error
         Map<String, long[]> m = new LinkedHashMap<>();
+        long[] year = {12, 0, 0};
         for (String y : List.of("year", "years", "yr", "yrs", "y")) {
-            m.put(y, new long[] {12, 0, 0});
+            m.put(y, year);
         }
+        long[] month = {1, 0, 0};
         for (String mo : List.of("month", "months", "mon", "mons")) {
-            m.put(mo, new long[] {1, 0, 0});
+            m.put(mo, month);
         }
+        long[] week = {0, 7, 0};
         for (String w : List.of("week", "weeks", "w")) {
-            m.put(w, new long[] {0, 7, 0});
+            m.put(w, week);
         }
+        long[] day = {0, 1, 0};
         for (String d : List.of("day", "days", "d")) {
-            m.put(d, new long[] {0, 1, 0});
+            m.put(d, day);
         }
+        long[] hour = {0, 0, 3600};
         for (String h : List.of("hour", "hours", "hr", "hrs", "h")) {
-            m.put(h, new long[] {0, 0, 3600});
+            m.put(h, hour);
         }
+        long[] minute = {0, 0, 60};
         for (String mi : List.of("minute", "minutes", "min", "mins", "m")) {
-            m.put(mi, new long[] {0, 0, 60});
+            m.put(mi, minute);
         }
+        long[] second = {0, 0, 1};
         for (String sec : List.of("second", "seconds", "sec", "secs", "s")) {
-            m.put(sec, new long[] {0, 0, 1});
+            m.put(sec, second);
         }
         return java.util.Collections.unmodifiableMap(m);
     }
@@ -4501,12 +4559,14 @@ public final class SqlToPure {
         long months = 0;
         long days = 0;
         long seconds = 0;
+        List<long[]> fields = new ArrayList<>();
         for (int i = 0; i < words.size(); i += 2) {
             String amount = plainNumber(words.get(i), false);
             long[] unit = INTERVAL_UNITS.get(words.get(i + 1));
-            if (amount == null || unit == null || amount.length() > 9) {
+            if (amount == null || unit == null || amount.length() > 9 || fields.contains(unit)) {
                 return null;
             }
+            fields.add(unit);
             long n = Long.parseLong(amount);
             months += n * unit[0];
             days += n * unit[1];

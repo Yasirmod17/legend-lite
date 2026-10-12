@@ -294,3 +294,22 @@ tests:
     sql: "SELECT id, CASE WHEN id > 5 THEN NULL ELSE NULL END || 'x' AS a, coalesce(CASE WHEN id = 1 THEN NULL END, 'none') AS b FROM persons ORDER BY id"
   - id: ceil_of_a_case_of_only_nulls_does_not_exist
     sql: "SELECT ceil(CASE WHEN id > 5 THEN NULL ELSE NULL END) AS a FROM persons ORDER BY id"
+  # the independent review's findings (2026-10-12), each a wrong answer before
+  - id: an_inexact_numeric_with_a_double_stays_inexact
+    sql: "SELECT floor(0.3 / 0.1 * 1::float8) AS a FROM departments WHERE id = 1"
+  - id: a_double_constant_rounds_as_a_double
+    sql: "SELECT round('2.5'::float8) AS a, '2.5'::float8::integer AS b, ceil('0.28'::float8 * 25) AS c, ceil(coalesce(0.28, 0::float8) * 25) AS d FROM departments WHERE id = 1"
+  - id: a_sum_of_integers_divided_by_an_integer_is_refused
+    sql: "SELECT sum(big_val) / 2 AS a FROM numbers"
+  - id: a_sum_of_integers_cast_then_divided
+    sql: "SELECT sum(int_val)::bigint / 2 AS a, sum(big_val)::numeric / 2 AS b, sum(int_val) * 2 AS c, sum(int_val) || '' AS d FROM numbers WHERE id <> 4"
+  - id: round_of_an_integer_to_places_keeps_them
+    sql: "SELECT id, round(int_val, 1) AS a, round(int_val, 2)::text AS b, round(5, 2)::integer / 2 AS c, trunc(int_val, 1) || '' AS e FROM numbers ORDER BY id"
+  - id: sign_of_a_quotient_of_numerics_is_refused
+    sql: "SELECT sign(0.3 / 0.1 - 3) AS a FROM departments WHERE id = 1"
+  - id: percentile_disc_multiplies_in_double_precision
+    sql: "SELECT percentile_disc(0.28) WITHIN GROUP (ORDER BY x) AS a, percentile_disc(0.28) WITHIN GROUP (ORDER BY x DESC) AS b FROM (SELECT id + 10 * (id % 3) AS x FROM persons UNION ALL SELECT id + 20 FROM orders UNION ALL SELECT id + 40 FROM numbers WHERE id < 6) s"
+  - id: text_of_merged_decimals_is_refused
+    sql: "SELECT id, (CASE WHEN id > 5 THEN salary ELSE 1.5 END) || '' AS a FROM persons ORDER BY id"
+  - id: coalesce_of_decimals_keeps_its_numbers
+    sql: "SELECT id, coalesce(salary, 0) AS a, coalesce(salary, 0) + 1 AS b FROM persons ORDER BY id"
