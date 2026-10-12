@@ -12,7 +12,7 @@ the database's gaps, and no dialect work removes them. A database's **own** pins
 
 | database | pins | of which the platform's (also on DuckDB) | **own** |
 |---|---:|---:|---:|
-| Postgres | 109 | 34 | **75** |
+| Postgres | 109 → **61** | 34 | 75 → **27** (burned down, below) |
 | H2 (Relation suite only) | 26 | 1 | **25** |
 | MySQL | 54 | 34 | **20** |
 | MariaDB | 51 | 34 | **17** |
@@ -23,7 +23,7 @@ the database's gaps, and no dialect work removes them. A database's **own** pins
 | Databricks | 35 | 34 | **1** |
 | Snowflake | 35 | 34 | **1** |
 
-DuckDB itself pins 34. ClickHouse's row was re-measured after its burn-down, later on 2026-10-12. The counts come from the `one("<test>", "<message>")` rows in
+DuckDB itself pins 34. The ClickHouse and Postgres rows were re-measured after their burn-downs, later on 2026-10-12. The counts come from the `one("<test>", "<message>")` rows in
 `pct/src/test/java/org/finos/legend/lite/pct/Test_LegendLite_<Db>_<Suite>Functions_PCT.java`, where DuckDB's ledger is
 `Test_LegendLite_<Suite>Functions_PCT.java`.
 
@@ -66,9 +66,30 @@ lane.
 - **8 stay pinned:** the dates (3), nullable lists (2), the outer join's residual (1) and the absent instances (2).
 - **None of the 34 platform pins is ClickHouse's work.**
 
+## Postgres: its 75 own pins (2026-10-12)
+
+**Outcome: 48 fixed, 27 kept pinned.** Each fix is in `Postgres.java` and was probed on the embedded Postgres 16.15
+first. Both channels are green; channel B's floors rose to 315, 132, 464, 203 and 87.
+
+| pins | what Postgres could not do | the answer | outcome |
+|---:|---|---|---|
+| 13 | **printf**: `format()` has `%s`, `%I` and `%L` only | A literal format unrolled into `\|\|` pieces, Snowflake's shape: `%s` the dialect's own text of the value, `%d` padded after its sign, `%.Nf` as `round(numeric, N)` (half away from zero, as printf), a negative that rounds to zero keeping its `-`. Padding is `lpad` to `greatest(width, length)`, because Postgres' `lpad` cuts a longer text (measured). DuckDB's `%g` date part is `to_char`'s `MS` | fixed |
+| 21 | **The empty collection as a list** (a NULL of no type): Postgres types every array, so `unnest(NULL)` or a reduction over it is refused ("could not determine polymorphic type") | Each call over it is spelled as DuckDB answers over a NULL list: a reduction, an element or a rearrangement is NULL, its explosion no row, a concatenation its other lists, `exists`/`forAll` the empty answer. A projection whose expression is the empty collection is cast to its column's declared type | fixed |
+| 2 | **No `max(boolean)`** | A Boolean list's max is `bool_or`, its min `bool_and` | fixed |
+| 7 | **A struct came back as the driver's jsonb object** (zip's pairs, a new instance) | `normalize` decodes its JSON text into the platform's map, fields in declared order | fixed. Seven more tests then fail as on DuckDB (instance identity) and moved to the platform's pins |
+| 4 | **splitPart** | `(array_remove(string_to_array(s, d), ''))[i]`: the non-empty tokens, 1-based, NULL past either end | fixed |
+| 1 | **hashCode** | The first 64 bits of the MD5 of the values' JSON text, read signed through `bit(64)` (MariaDB's construction) | fixed |
+| 12 | **Maps, a fold into a list, a list reduction, a list aggregate** | The jsonb collection carrier, leg P4 of the Postgres plan (`POSTGRES_BACKEND.md` §5) | kept: the next large piece of work |
+| 5 | **SHA-1, Levenshtein, Jaro-Winkler**: extension functions | The bundled Postgres ships `pgcrypto` (`digest(.., 'sha1')`) and `fuzzystrmatch` (`levenshtein`); neither has Jaro-Winkler | kept: whether the dialect may require an extension on the target database is the user's call |
+| 3 | **An IR typing gap**: two `removeDuplicates` tests unnest a CASE of mixed list encodings (typed Unknown), and `testMixedSortNoComparator` an ordered list aggregate typed VARCHAR | The lowering's typing (AGENTS.md invariant 1), not the dialect | kept |
+| 3 | **jsonb reorders an object's keys** (shorter first), where Pure keeps them as written | None while jsonb is the carrier | kept |
+| 2 | **Postgres's own limits**: no NUL character in text, a timestamp range | None | kept |
+| 2 | **Not yet examined**: `testPairCollectionToString` (an untyped literal in a polymorphic call) and `testConcatenateTypeInference` (a class instance not decoded) | — | kept |
+
+**Found in passing:** Snowflake's printf unroll pads with `LPAD`, which also cuts a longer text. A `%3d` of 12345
+would likely print `123` there. Not yet checked on Snowflake.
+
 ## The other databases
 
-Postgres has the most own pins (75), then H2 (25), MySQL (20), MariaDB (17) and SQLite (15). BigQuery (8) and Trino
-(6) were burned down hardest, and Databricks and Snowflake have 1 each. The next sections, written the same way, are
-to come: the pins by cause, and each cause's workaround probed on the real database. Postgres first: 75 own pins on
-the most-used server database is the largest gap.
+Postgres still has the most own pins (27 after its burn-down), then H2 (25), MySQL (20), MariaDB (17) and SQLite (15).
+BigQuery (8) and Trino (6) were burned down hardest, and Databricks and Snowflake have 1 each.

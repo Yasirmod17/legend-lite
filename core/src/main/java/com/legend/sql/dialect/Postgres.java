@@ -208,6 +208,34 @@ public final class Postgres extends AnsiSqlRenderer {
         return w -> w.expr(list, 0);
     }
 
+    /** Pure's splitPart: the non-empty tokens, 1-based (the lowering's index), NULL past either end, as an array
+     *  index is (measured); the empty delimiter is the lowering's. */
+    @Override
+    protected SqlWriter splitPartCall(SqlWriter writer, List<SqlExpr> a) {
+        return writer.append("(array_remove(string_to_array(").expr(a.get(0), 0).append(", ").expr(a.get(1), 0)
+                .append("), ''))[").expr(a.get(2), 0).append("]");
+    }
+
+    /** The calls over the empty collection whose answer is the empty collection (DuckDB's over a NULL list): a
+     *  reduction, an element, or the list rearranged. */
+    private static final java.util.Set<SqlFn> EMPTY_IN_EMPTY_OUT = java.util.Set.of(SqlFn.LIST_MIN, SqlFn.LIST_MAX,
+            SqlFn.LIST_SUM, SqlFn.LIST_AVG, SqlFn.LIST_MEDIAN, SqlFn.LIST_MODE, SqlFn.LIST_GET, SqlFn.LIST_SLICE,
+            SqlFn.LIST_TAIL, SqlFn.LIST_INIT, SqlFn.LIST_SORT, SqlFn.LIST_SORT_DESC, SqlFn.LIST_REVERSE,
+            SqlFn.LIST_DISTINCT);
+
+    /** The empty collection where a list goes: a NULL of no type (the IR's Bottom), compacted or not, or one of the
+     *  calls above over it, which the IR types Bottom too. */
+    private static boolean emptyCollection(SqlExpr e) {
+        if (e instanceof SqlExpr.CompactList k) {
+            return emptyCollection(k.list());
+        }
+        if (e instanceof SqlExpr.Call c) {
+            return c.type() instanceof com.legend.sql.TypeFact.Bottom && EMPTY_IN_EMPTY_OUT.contains(c.fn())
+                    && !c.args().isEmpty() && emptyCollection(c.args().get(0));
+        }
+        return e instanceof SqlExpr.NullLit && e.type() instanceof com.legend.sql.TypeFact.Bottom;
+    }
+
     /** The element type of {@code list}; refused by name when it is no list of a known element type. */
     private static SqlType elementOf(SqlExpr list, Object what) {
         SqlType element = listElement(list);
@@ -409,8 +437,11 @@ public final class Postgres extends AnsiSqlRenderer {
             case LIST_SLICE -> writer.append("(").piece(xs).append(")[").expr(args.get(1), 0).append(":")
                     .expr(args.get(2), 0).append("]");
             case LIST_SUM -> writer.piece(overReduce(xs, "sum(" + x + ")"));
-            case LIST_MIN -> writer.piece(overReduce(xs, "min(" + x + ")"));
-            case LIST_MAX -> writer.piece(overReduce(xs, "max(" + x + ")"));
+            // a Boolean list's extremes: false < true, and Postgres has no max(boolean) (measured)
+            case LIST_MIN -> writer.piece(overReduce(xs, (first == SqlType.Scalar.BOOLEAN ? "bool_and(" : "min(") + x
+                    + ")"));
+            case LIST_MAX -> writer.piece(overReduce(xs, (first == SqlType.Scalar.BOOLEAN ? "bool_or(" : "max(") + x
+                    + ")"));
             case LIST_AVG -> writer.piece(overReduce(xs, "CAST(avg(" + x + ") AS DOUBLE PRECISION)"));
             case LIST_MEDIAN -> writer.piece(overReduce(xs, "percentile_cont(0.5) WITHIN GROUP (ORDER BY " + x + ")"));
             case LIST_MODE -> writer.piece(overReduce(xs, "mode() WITHIN GROUP (ORDER BY " + x + ")"));
@@ -422,6 +453,23 @@ public final class Postgres extends AnsiSqlRenderer {
 
     @Override
     protected SqlWriter call(SqlWriter writer, SqlExpr.Call c, int parentPrec) {
+        // the empty collection as a list: a reduction, an element or a rearrangement of it is the empty collection
+        // itself, NULL, as DuckDB answers over a NULL list (Postgres types every array: a reduction over an untyped
+        // NULL is refused, "could not determine polymorphic type", measured); a concatenation is its other lists
+        if (emptyCollection(c)) {
+            return writer.append("NULL");
+        }
+        if (c.fn() == SqlFn.LIST_CONCAT && c.args().stream().anyMatch(Postgres::emptyCollection)) {
+            List<SqlExpr> lists = c.args().stream().filter(e -> !emptyCollection(e)).toList();
+            if (lists.isEmpty()) {
+                if (!(c.type() instanceof com.legend.sql.TypeFact.Typed t && t.type() instanceof SqlType.Array arr)) {
+                    return writer.append("NULL");
+                }
+                return writer.append("CAST(NULL AS " + carrier(arr.element()) + "[])");
+            }
+            return lists.size() == 1 ? writer.expr(lists.get(0), parentPrec)
+                    : call(writer, new SqlExpr.Call(SqlFn.LIST_CONCAT, lists), parentPrec);
+        }
         // the list-making calls whose first argument is no list
         return switch (c.fn()) {
             // DuckDB's range: [start, stop) by step (start 0, step 1 by default)
@@ -470,6 +518,9 @@ public final class Postgres extends AnsiSqlRenderer {
     }
 
     private SqlWriter listPredicate(SqlWriter writer, List<SqlExpr> args, String agg, String empty) {
+        if (emptyCollection(args.get(0))) {
+            return writer.append(empty);   // no element: the empty answer, as the coalesce below gives a NULL list
+        }
         SqlType element = elementOf(args.get(0), "exists/forAll");
         SqlWriter.Piece xs = w -> w.expr(args.get(0), 0);
         SqlExpr.Lambda l = bodyOver((SqlExpr.Lambda) args.get(1), element);
@@ -536,6 +587,11 @@ public final class Postgres extends AnsiSqlRenderer {
     /** A list exploded to rows in the select list: unnest keeps the list's order. */
     @Override
     protected SqlWriter unnestProjection(SqlWriter writer, List<SqlExpr> args) {
+        if (emptyCollection(args.get(0))) {
+            // the empty collection exploded: no row, so no value carries its column's type (TEXT: every scalar
+            // casts from it); Postgres refuses to unnest an untyped NULL
+            return writer.append("unnest(CAST(NULL AS TEXT[]))");
+        }
         return writer.append("unnest(").piece(listOf(args.get(0), "UNNEST")).append(")");
     }
 
@@ -614,6 +670,14 @@ public final class Postgres extends AnsiSqlRenderer {
     protected SqlWriter projection(SqlWriter writer, com.legend.sql.SqlSelect.Projection p) {
         if (p.expr() instanceof SqlExpr.NullLit && p.out() != null && p.out().type() instanceof SqlType.Array arr) {
             writer.append("CAST(NULL AS " + carrier(arr.element()) + "[])");
+            String label = p.alias() != null ? aliasIdent(p.alias()) : implicitLabel(p);
+            return label == null ? writer : writer.append(" AS ").append(label);
+        }
+        // the empty collection in a scalar slot is written as an untyped NULL, which Postgres types as text: the
+        // slot's own type, so the column is what the plan declares
+        if (p.out() != null && p.expr().type() instanceof com.legend.sql.TypeFact.Bottom
+                && (p.out().type() instanceof SqlType.Scalar || p.out().type() instanceof SqlType.Decimal)) {
+            writer.append("CAST(").expr(p.expr(), 0).append(" AS " + castTypeName(p.out().type()) + ")");
             String label = p.alias() != null ? aliasIdent(p.alias()) : implicitLabel(p);
             return label == null ? writer : writer.append(" AS ").append(label);
         }
@@ -746,6 +810,9 @@ public final class Postgres extends AnsiSqlRenderer {
      *  JSON null or a non-array is a NULL list, as DuckDB's cast); a list of another element type cast
      *  element-wise. */
     private SqlWriter listCast(SqlWriter writer, SqlExpr.Cast c, SqlType.Array target) {
+        if (emptyCollection(c.value())) {
+            return writer.append("CAST(NULL AS " + carrier(target.element()) + "[])");
+        }
         if (isJson(c.value())) {
             // a Variant array: its elements held as the list holds them
             return writer.piece(decode(w -> w.expr(c.value(), 0), target, 0));
@@ -982,7 +1049,7 @@ public final class Postgres extends AnsiSqlRenderer {
             // ---- walls
             case STRPTIME -> throw wall(c.fn(), "to_timestamp(text, fmt) is lenient and"
                     + " zone-bound; not yet probed against the reference");
-            case FORMAT -> throw wall(c.fn(), "Postgres' format() has no %d/%f");
+            case FORMAT -> writer.piece(format(a));
             case SHA1, LEVENSHTEIN, JARO_WINKLER ->
                     throw wall(c.fn(), "an extension function (pgcrypto/fuzzystrmatch)");
             // ---- variant (jsonb)
@@ -1034,8 +1101,9 @@ public final class Postgres extends AnsiSqlRenderer {
                     .append(") AS e(k, v))");
             // the jsonb carrier for nested lists, structs and mixed lists is the next step
             case STRUCT_INSERT -> throw new IllegalStateException("STRUCT_INSERT is rendered by call");
+            case PURE_SPLIT_PART -> splitPartCall(writer, a);
             case LIST_FLATTEN, MAP_FROM_LISTS, MAP_FROM_ENTRIES, MAP_EMPTY, MAP_EXTRACT,
-                 MAP_CONCAT, PURE_SPLIT_PART, LIST_ZIP, LIST_PRODUCT, LIST_REDUCE, TYPEOF ->
+                 MAP_CONCAT, LIST_ZIP, LIST_PRODUCT, LIST_REDUCE, TYPEOF ->
                     throw wall(c.fn(), "collections over the jsonb carrier are leg P4");
         };
     }
@@ -1088,6 +1156,91 @@ public final class Postgres extends AnsiSqlRenderer {
 
     private static DialectCapability wall(SqlFn fn, String why) {
         return new DialectCapability(fn + " reached Postgres: " + why);
+    }
+
+    // ---- format
+
+    /** A printf directive: {@code %[0][width][.precision](s|d|f)}, or {@code %%}. */
+    private static final java.util.regex.Pattern DIRECTIVE =
+            java.util.regex.Pattern.compile("%(%|(0?)([0-9]*)(?:\\.([0-9]+))?([sdf]))");
+
+    /**
+     * DuckDB's printf over a LITERAL format, unrolled (Postgres' {@code format()} has {@code %s} and {@code %I}/{@code
+     * %L} only): its text and each directive's argument concatenated -- {@code %s} the argument's text (this
+     * dialect's cast to text: a Float keeps its {@code .0}), {@code %d} an integer's digits (padded to a width,
+     * {@code 0} with zeros after the sign), {@code %.Nf} a number at N decimals (6 by default), rounded half away
+     * from zero as printf's ({@code round(numeric, N)}, measured), a negative value that rounds to zero keeping its
+     * sign. The lowering spells %t and %r as %s already. Any other directive is refused by name.
+     */
+    private SqlWriter.Piece format(List<SqlExpr> a) {
+        if (!(a.get(0) instanceof SqlExpr.StringLit f)) {
+            throw new DialectCapability("a computed format reached Postgres, which has no printf: only a literal one"
+                    + " is unrolled");
+        }
+        if (DIRECTIVE.matcher(f.value()).replaceAll("").contains("%")) {
+            throw new DialectCapability("a format directive other than %s, %d and %f reached Postgres: " + f.value());
+        }
+        List<SqlWriter.Piece> parts = new java.util.ArrayList<>();
+        java.util.regex.Matcher m = DIRECTIVE.matcher(f.value());
+        int at = 0;
+        int arg = 1;
+        StringBuilder text = new StringBuilder();
+        while (m.find()) {
+            text.append(f.value(), at, m.start());
+            at = m.end();
+            if (m.group(1).equals("%")) {
+                text.append('%');
+                continue;
+            }
+            if (text.length() > 0) {
+                String t = stringLit(text.toString());
+                parts.add(w -> w.append(t));
+                text.setLength(0);
+            }
+            if (arg >= a.size()) {
+                throw new DialectCapability("a format with more directives than arguments reached Postgres");
+            }
+            SqlExpr x = a.get(arg++);
+            boolean zero = !m.group(2).isEmpty();
+            int width = m.group(3).isEmpty() ? 0 : Integer.parseInt(m.group(3));
+            char conversion = m.group(5).charAt(0);
+            SqlExpr asText = new SqlExpr.Cast(x, SqlType.Scalar.VARCHAR);
+            SqlWriter.Piece value = switch (conversion) {
+                case 's', 'd' -> isText(x) ? w -> w.expr(x, 0) : w -> w.expr(asText, 0);
+                case 'f' -> {
+                    int precision = m.group(4) == null ? 6 : Integer.parseInt(m.group(4));
+                    yield w -> w.append("(CASE WHEN ").expr(x, 0).append(" < 0 AND round(CAST(").expr(x, 0)
+                            .append(" AS NUMERIC), " + precision + ") = 0 THEN '-' ELSE '' END || CAST(round(CAST(")
+                            .expr(x, 0).append(" AS NUMERIC), " + precision + ") AS VARCHAR))");
+                }
+                default -> throw new IllegalStateException("the directive pattern admits s, d, f: " + conversion);
+            };
+            if (width > 0 && conversion == 'd' && zero) {
+                SqlWriter.Piece digits = w -> w.append("CAST(abs(").expr(x, 0).append(") AS VARCHAR)");
+                parts.add(w -> w.append("(CASE WHEN ").expr(x, 0).append(" < 0 THEN '-' || ").piece(padded(digits,
+                        width - 1, '0')).append(" ELSE ").piece(padded(digits, width, '0')).append(" END)"));
+            } else if (width > 0) {
+                parts.add(padded(value, width, ' '));
+            } else {
+                parts.add(value);
+            }
+        }
+        if (arg != a.size()) {
+            throw new DialectCapability("a format with more arguments than directives reached Postgres");
+        }
+        text.append(f.value().substring(at));
+        if (text.length() > 0 || parts.isEmpty()) {
+            String t = stringLit(text.toString());
+            parts.add(w -> w.append(t));
+        }
+        return w -> w.append("(").join(parts, " || ", (v, part) -> v.piece(part)).append(")");
+    }
+
+    /** {@code v} padded on the left to {@code width} with {@code fill}, never cut: Postgres' lpad truncates a longer
+     *  text to the width (measured), printf never does. */
+    private static SqlWriter.Piece padded(SqlWriter.Piece v, int width, char fill) {
+        return w -> w.append("lpad(").piece(v).append(", greatest(" + width + ", length(").piece(v)
+                .append(")), '" + fill + "')");
     }
 
     private static boolean isDouble(SqlExpr e) {
@@ -1205,6 +1358,17 @@ public final class Postgres extends AnsiSqlRenderer {
         }
         m.put("week", "TIMESTAMP '1969-12-29 00:00:00'");
         return java.util.Collections.unmodifiableMap(new java.util.LinkedHashMap<>(m));
+    }
+
+    /** Pure's hashCode, a signed 64-bit integer: the first 64 bits of the MD5 of the values' text as a JSON array (a
+     *  NULL is JSON's null, so the empty collection hashes too), read signed through {@code bit(64)} (measured:
+     *  {@code 'x' || 'ffffffffffffffff'} is -1) -- MariaDB's construction. */
+    @Override
+    protected SqlWriter hashSigned(SqlWriter writer, List<SqlExpr> a) {
+        writer.append("CAST(CAST('x' || left(md5(CAST(json_build_array(");
+        writer.join(a, ", ", (w, x) -> w.expr(isText(x) || x instanceof SqlExpr.NullLit ? x
+                : new SqlExpr.Cast(x, SqlType.Scalar.VARCHAR), 0));
+        return writer.append(") AS TEXT)), 16) AS BIT(64)) AS BIGINT)");
     }
 
     /** Pure round is half-EVEN: Postgres' round(double precision) is rint (probed:
@@ -1486,8 +1650,8 @@ public final class Postgres extends AnsiSqlRenderer {
                     case SEC2 -> "SS";
                     case SUBSEC_MICRO -> "US";
                     case SUBSEC_NANO -> "US\"000\"";
-                    case SUBSEC_MIN -> throw new DialectCapability("a minimal-fraction date"
-                            + " format reached Postgres, whose to_char has no trim-zeros code");
+                    // DuckDB's %g: the milliseconds, three digits (the part's engine convention, as Snowflake's FF3)
+                    case SUBSEC_MIN -> "MS";
                     case MONTH_ABBREV -> "Mon";
                     case MONTH_NAME -> "FMMonth";
                     case WEEKDAY_NAME -> "FMDay";
@@ -1498,6 +1662,48 @@ public final class Postgres extends AnsiSqlRenderer {
             });
         }
         return out.toString();
+    }
+
+    // ==================================================================
+    // Values: what the driver hands back
+    // ==================================================================
+
+    /** A struct is jsonb here, and the driver hands a jsonb cell back as its own object, whose text is the JSON
+     *  (PGobject's toString): decoded to the platform's map, a struct's fields in its declared order (nested ones
+     *  too), a Float field a Double. */
+    @Override
+    public @com.legend.base.Nullable Object normalize(@com.legend.base.Nullable Object jdbcValue,
+            @com.legend.base.Nullable SqlType type) {
+        if (jdbcValue != null && type instanceof SqlType.Struct st && !(jdbcValue instanceof java.util.Map)) {
+            String text = jdbcValue.toString();
+            if (text.startsWith("{")) {
+                return declared(com.legend.sql.Json.parse(text), st);
+            }
+        }
+        return jdbcValue;
+    }
+
+    /** A parsed JSON value as the type declares it: a struct's fields in declared order, a list's elements, a Float a
+     *  Double; anything else as parsed. */
+    private static @com.legend.base.Nullable Object declared(@com.legend.base.Nullable Object v, SqlType t) {
+        if (t instanceof SqlType.Struct st && v instanceof java.util.Map<?, ?> m) {
+            java.util.Map<String, Object> out = new java.util.LinkedHashMap<>();
+            for (SqlType.Struct.Field f : st.fields()) {
+                out.put(f.name(), declared(m.get(f.name()), f.type()));
+            }
+            return out;
+        }
+        if (t instanceof SqlType.Array arr && v instanceof List<?> l) {
+            List<Object> out = new java.util.ArrayList<>(l.size());
+            for (Object e : l) {
+                out.add(declared(e, arr.element()));
+            }
+            return out;
+        }
+        if (t == SqlType.Scalar.DOUBLE && v instanceof Number n) {
+            return n.doubleValue();
+        }
+        return v;
     }
 
     // ==================================================================

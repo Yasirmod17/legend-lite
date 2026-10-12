@@ -901,6 +901,24 @@ no ClickHouse connector yet): the connector the dialect-leak plan's P5 builds ca
 
 `testEqualNonPrimitive` now fails as it does on DuckDB ("Assert failed"), so it moved to the platform's pins.
 
+## 21. Postgres: its own pins burned down (2026-10-12)
+
+The same drill as ClickHouse's (§19.1), on the lane that predates this document (Postgres 16.15, embedded; run as an
+unprivileged user in a root container, `docs/GATES.md`). **109 pins become 61; Postgres's own 75 become 27**, the other
+34 the platform's. Channel B: 315 / 2 / 0, 132 / 3 / 0, 464 / 3 / 1, 203 / 1 / 0, 87 / 0 / 0. Every fix is in
+`Postgres.java`; `docs/PCT_PIN_WORKAROUNDS_2026_10_12.md` has the table, cause by cause:
+
+- printf unrolled, as Snowflake's (13), with DuckDB's `%g` date part as `to_char`'s `MS`;
+- the empty collection spelled as DuckDB answers over a NULL list (21): Postgres types every array, so an untyped NULL
+  cannot be unnested or reduced;
+- a Boolean list's extremes as `bool_or`/`bool_and` (2), splitPart over `string_to_array` (4), hashCode from MD5 (1);
+- a struct decoded from the driver's jsonb object (7), after which seven instance tests fail as they do on DuckDB.
+
+Kept: the jsonb collection carrier for maps and list folds (12, leg P4), extension functions (5, a decision), an IR
+typing gap (3), jsonb's key order (3), Postgres's own limits (2) and two not yet examined. The census ceiling for
+Postgres rose by the by-design class (a struct as jsonb), Essential 13 -> 14 and Grammar 5 -> 6, as tests that stopped
+at their first struct now run their later statements (`PctCensusGate`, dated).
+
 ## 20. The coverage map, and the corpus on every database (2026-10-12)
 
 **The map** (`docs/PRIMITIVE_COVERAGE_2026_10_12.md`, measured; the recipe `tools/census/README.md` section 3): the

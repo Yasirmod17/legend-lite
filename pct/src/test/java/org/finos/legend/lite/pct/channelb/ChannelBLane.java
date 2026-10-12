@@ -46,12 +46,15 @@ final class ChannelBLane {
             "h2", Map.of("Relation", new Pins(429, 14, 12)),
             // Postgres 16: 35 -> 1 (Standard) and 7 -> 3 (Relation) when a Float's text kept its '.0' (Postgres.java,
             // the same day); every Essential and Grammar wire bug is the engine's own frontier on Postgres
+            // 285 -> 315, 128 -> 132, 186 -> 203 and 83 -> 87 (2026-10-12, Postgres's own pins burned down,
+            // docs/PCT_PIN_WORKAROUNDS_2026_10_12.md): printf unrolled, the empty collection spelled, a Boolean list's
+            // extremes, splitPart, hashCode, a struct decoded from its jsonb
             "postgres", Map.of(
-                    "Essential", new Pins(285, 2, 0),
-                    "Grammar", new Pins(128, 3, 0),
+                    "Essential", new Pins(315, 2, 0),
+                    "Grammar", new Pins(132, 3, 0),
                     "Relation", new Pins(464, 3, 1),
-                    "Standard", new Pins(186, 1, 0),
-                    "Unclassified", new Pins(83, 0, 0)),
+                    "Standard", new Pins(203, 1, 0),
+                    "Unclassified", new Pins(87, 0, 0)),
             // no engine manifest for SQLite: every wire bug is a true one (10 of Relation's 12 a regular expression
             // with a non-literal pattern, 2 a pivot's column order)
             "sqlite", Map.of(
