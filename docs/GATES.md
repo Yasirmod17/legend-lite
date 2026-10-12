@@ -9068,3 +9068,55 @@ Announced in `docs/IN_FLIGHT.md` as the semi-structured step's widenings (5cb0ac
 6. **Not done, recorded in the study:** regular expressions (`~`, `regexp_*`); `mode()` (DuckDB breaks ties
    otherwise); `corr` over a window; text cast to a number; intervals as values and timestamp differences; the
    semi-structured step's open findings (DuckDB's JSON numbers as doubles among them, for the user to decide).
+
+## 2026-10-12 — A stored Variant column leaves the statement as JSON, whatever the shape of the query (the Compiler Rewrite line)
+
+The design is `docs/VARIANT_STORAGE_CENSUS_2026_09_27.md` (the user's "go", 2026-09-27), its "Addendum 2026-10-12: the
+star egress" this landing adds. The finding is the DataCube line's (2026-10-12), probed on Python's DuckDB and the tab's
+alike; the Plan Gen / Exec Split line agreed with the placement (lowering only; result typing may assume JSON for a
+Variant output in every shape) and asked for the statement's own column type to be held, which the test does. Branch
+`core/variant-star-egress`; the announcement cbd8f014f on `main` first; rebased onto main 36b72ee13 (PRs #31 and #33 in)
+before landing, the core change byte-identical (the two patches compared line for line), and the judges, the render
+census, the local gate and one CI run re-run on the rebased tree. CI: run 38327604817 on the rebased branch, green on
+all 50 jobs first time (the summary job a dispatched run skips); the first run, 38310588988 on the commit before the
+rebase, green on all 50 too (every lane, every platform; `core` is where the test runs, and the module in `wasm` and
+DataCube's tests plan through the same renderer). `//gates:local` green (348 pass, 2 skipped:
+`//tools/guards:classpath_test` and `markdown_inputs_test`, which depend on the MariaDB lane, incompatible on this Mac
+tests); the lane query empty; the judges against baselines built from main 36b72ee13: every result file the same (0 of
+23 differ; `docs/build-inventory/program/evidence/variant-star-egress/judges_compare.txt`); the render census: 55,016
+entries, 41 differ, every one in the core lane's own unit tests: the new test's renders, and seven `extend` shapes over
+a table holding a Variant column now listing their columns, each with its successor (`render_census_compare.txt` beside
+it; the audit is `AUDIT.md` there).
+
+1. **The cause.** V2 of the census reads a stored Variant column as JSON through the DuckDB dialect's `columnRef`
+   hook, `CAST(col AS JSON)` on a column REFERENCE. A star renders none: a star frame (`SELECT *`, which a bare
+   source, `limit`, `filter`, `sort` and `distinct` keep to the statement's end) and a star projection
+   (`SELECT t0.*, x`: `extend`) alike. So an uploaded JSON file's `customer` column, a STRUCT as DuckDB's `read_json`
+   stores it and a Variant to the model, left the query as `{"name":"A","tier":2}` under `select` and as the
+   STRUCT under `limit`, and each executor rendered the STRUCT its own way (the tab's reader quoted the nested
+   integer). D2 of the census ("a whole column value leaving the query") was removed for projections, not for stars;
+   the census's own test projected and grouped and never took a bare `limit`.
+2. **What landed.** `core/src/main/java/com/legend/sql/dialect/VariantEgress.java`, a DuckDB render pass on the
+   statement root only (the renderer's `rewriteRoot` hook, last of the dialect's passes; `StoredReads` follows):
+   every star standing for a source that holds a stored Variant column is spelled into that source's columns
+   (`Stars.columns`, as `StoredReads` spells a star over a read table), the Variant ones read through the hook
+   (`CAST(t0.V AS JSON) AS V`), every other a bare reference, a join's sides each in place; a UNION's branches and a
+   WITH's body are roots too (`RootNumericTypes`'s precedent). Below the root nothing changes (a star there feeds a
+   reference the hook already reads); no other dialect changes (native nested storage is DuckDB's); the wire wrappers
+   (`_wire0`, the JSON and CSV wires) already read through references and are unchanged. `DuckDb.storedVariant` over
+   an output column; the pass added last in `DuckDb.passes()`.
+3. **How it is held.** `LowerRelationTest.wholeVariantReadsAsJsonInEveryShape` (`//core:core_tests_lowering`, the
+   `core` lane): ten shapes (bare, sort and limit, filter, sort, distinct, select, extend, join, a sorted join,
+   concatenate) over one column held three ways (JSON text in a VARCHAR, DuckDB JSON, a native STRUCT): the read in
+   the SQL (`CAST(t0.V AS JSON) AS V`, and in each UNION branch), the statement's own column type `JSON` as DuckDB's
+   JDBC reports it (what a result decoder sees), identical rows across the storages. Without the pass the JSON-type
+   check and the row comparison fail for the VARCHAR and STRUCT storages. The judges, the render census and the
+   corpora show no other SQL text changed: no pinned text anywhere has a root star over a DuckDB Variant column.
+4. **The audit** (the branch's, before landing): one blocker, the star projections (`extend`'s `SELECT t0.*, x`,
+   `ExistsJoinForm`'s, `Pivots`' `StarExcept`), which the first cut's star-frame-only rule missed; three should-fix:
+   UNION and WITH roots, the first cut's join wrapper dropping the frame's ORDER BY from the outermost statement
+   (gone with the wrapper: a join's sides are listed in place), and the test's coverage; three nits (a comment, line
+   lengths). All taken.
+5. **Not chased.** `Fold.declaredKindEnvelope`'s Float rule still rides a star frame through unchanged (its own
+   2026-09-17 reason: a wire already DOUBLE); it is a different rule and untouched. The tab's reader's JSON rendering
+   of a STRUCT that reaches it by another route (the DataCube line's `toScalar` fix) stands on its own.
