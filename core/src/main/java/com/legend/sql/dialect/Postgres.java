@@ -999,6 +999,10 @@ public final class Postgres extends AnsiSqlRenderer {
         if (a.size() != 1) {
             throw new DialectCapability("toVariant of " + a.size() + " arguments reached Postgres");
         }
+        if (a.get(0) instanceof SqlExpr.StringLit) {
+            // a quoted literal is of no type yet, which to_jsonb refuses (asJsonb)
+            return writer.piece(asJsonb(w -> w.expr(a.get(0), 0), SqlType.Scalar.VARCHAR));
+        }
         return writer.append("to_jsonb(").expr(a.get(0), 0).append(")");
     }
 
@@ -1198,8 +1202,10 @@ public final class Postgres extends AnsiSqlRenderer {
             case STRPTIME -> throw wall(c.fn(), "to_timestamp(text, fmt) is lenient and"
                     + " zone-bound; not yet probed against the reference");
             case FORMAT -> writer.piece(format(a));
-            case SHA1, LEVENSHTEIN, JARO_WINKLER ->
-                    throw wall(c.fn(), "an extension function (pgcrypto/fuzzystrmatch)");
+            // SHA-1 is pgcrypto's digest(): no release has a core sha1 (through 18 and devel, 2026-10-12)
+            case SHA1 -> throw wall(c.fn(), "an extension function (pgcrypto)");
+            case LEVENSHTEIN -> writer.piece(levenshtein(a.get(0), a.get(1)));
+            case JARO_WINKLER -> writer.piece(jaroWinkler(a.get(0), a.get(1)));
             // ---- variant (jsonb)
             case TO_VARIANT, VARIANT_GET -> super.call(writer, c, parentPrec);
             // in DuckDB's json_type vocabulary, which the lowering compares against (NULL, VARCHAR,
@@ -1390,6 +1396,63 @@ public final class Postgres extends AnsiSqlRenderer {
     private static SqlWriter.Piece padded(SqlWriter.Piece v, int width, char fill) {
         return w -> w.append("lpad(").piece(v).append(", greatest(" + width + ", length(").piece(v)
                 .append(")), '" + fill + "')");
+    }
+
+    // ---- string distances (fuzzystrmatch has a Levenshtein of at most 255 characters, no extension a Jaro-Winkler)
+
+    /** The Levenshtein distance of two texts, by characters (SQLite's walk, with arrays): the edit-distance table a
+     *  row at a time, {@code p} the row above, {@code c} the row being built, one cell a step. Equal to DuckDB's on
+     *  1,585 ASCII pairs (2026-10-12); on other text DuckDB counts bytes (2 for 'ä€x' and 'a€x', measured), this
+     *  characters, as the reference and SQLite, MariaDB and Snowflake do. */
+    private static SqlWriter.Piece levenshtein(SqlExpr x, SqlExpr y) {
+        String more = "__lv.j < length(__lv.b)";
+        String cell = "least(__lv.p[__lv.j + 2] + 1, __lv.c[__lv.j + 1] + 1, __lv.p[__lv.j + 1] + CASE WHEN"
+                + " substr(__lv.a, __lv.i, 1) = substr(__lv.b, __lv.j + 1, 1) THEN 0 ELSE 1 END)";
+        return w -> w.append("(WITH RECURSIVE __lv(a, b, i, j, p, c) AS (SELECT __s.a, __s.b, 0, 0, CAST(ARRAY[] AS"
+                + " BIGINT[]), CAST(ARRAY[0] AS BIGINT[]) FROM (SELECT ").expr(x, 0).append(" AS a, ").expr(y, 0)
+                .append(" AS b) AS __s UNION ALL SELECT __lv.a, __lv.b, CASE WHEN " + more + " THEN __lv.i ELSE"
+                + " __lv.i + 1 END, CASE WHEN " + more + " THEN __lv.j + 1 ELSE 0 END, CASE WHEN " + more + " THEN"
+                + " __lv.p ELSE __lv.c END, CASE WHEN " + more + " THEN __lv.c || CASE WHEN __lv.i = 0 THEN"
+                + " CAST(__lv.j + 1 AS BIGINT) ELSE " + cell + " END ELSE ARRAY[CAST(__lv.i + 1 AS BIGINT)] END FROM"
+                + " __lv WHERE NOT (__lv.j = length(__lv.b) AND __lv.i = length(__lv.a))) SELECT c[j + 1] FROM __lv"
+                + " WHERE i = length(a) AND j = length(b))");
+    }
+
+    /**
+     * Jaro-Winkler similarity, exactly DuckDB's (the algorithm and the order of operations are spelled out on
+     * Snowflake's): each character of {@code t} in turn takes the first unmatched equal character of {@code p} in its
+     * window, a recursive walk along {@code t} ({@code f} flags {@code p}'s matched characters, {@code tm} is {@code
+     * t}'s matched ones in order); the transpositions are {@code p}'s matched characters unequal to {@code tm}'s in the
+     * same place; the score in DOUBLE PRECISION, Jaro's division guarded where no character matched (that scores 0).
+     * Bit-equal to DuckDB's on the 1,585 ASCII pairs Snowflake's was measured on (2026-10-12); by characters, where
+     * DuckDB's counts bytes (as {@link #levenshtein}).
+     */
+    private static SqlWriter.Piece jaroWinkler(SqlExpr p, SqlExpr t) {
+        String m = "CAST(length(__jw.tm) AS DOUBLE PRECISION)";
+        String jaro = "((" + m + " / CAST(length(__jw.p) AS DOUBLE PRECISION) + " + m + " / CAST(length(__jw.t) AS"
+                + " DOUBLE PRECISION) + (" + m + " - CAST(__x.n / 2 AS DOUBLE PRECISION)) / NULLIF(" + m + ", 0))"
+                + " / CAST(3 AS DOUBLE PRECISION))";
+        List<String> prefix = new java.util.ArrayList<>();
+        for (int k = 1; k <= 4; k++) {
+            prefix.add("CASE WHEN " + k + " <= least(length(__jw.p), length(__jw.t)) AND left(__jw.p, " + k
+                    + ") = left(__jw.t, " + k + ") THEN 1 ELSE 0 END");
+        }
+        String at = "__jw.j + 1";
+        return w -> w.append("(WITH RECURSIVE __jw(p, t, b, j, f, tm) AS (SELECT __s.p, __s.t, greatest(0,"
+                + " greatest(length(__s.p), length(__s.t)) / 2 - 1), 0, repeat('0', length(__s.p)), CAST('' AS TEXT)"
+                + " FROM (SELECT ").expr(p, 0).append(" AS p, ").expr(t, 0).append(" AS t) AS __s UNION ALL SELECT"
+                + " __jw.p, __jw.t, __jw.b, " + at + ", CASE WHEN __m.i IS NULL THEN __jw.f ELSE overlay(__jw.f placing"
+                + " '1' from __m.i for 1) END, CASE WHEN __m.i IS NULL THEN __jw.tm ELSE __jw.tm || substr(__jw.t, "
+                + at + ", 1) END FROM __jw CROSS JOIN LATERAL (SELECT min(__g.i) AS i FROM generate_series(greatest(1, "
+                + at + " - __jw.b), " + at + " + __jw.b) AS __g(i) WHERE substr(__jw.f, __g.i, 1) = '0' AND"
+                + " substr(__jw.p, __g.i, 1) = substr(__jw.t, " + at + ", 1)) AS __m WHERE __jw.j < length(__jw.t))"
+                + " SELECT CASE WHEN length(__jw.tm) = 0 THEN CAST(0 AS DOUBLE PRECISION) WHEN " + jaro + " > CAST(0.7"
+                + " AS DOUBLE PRECISION) THEN " + jaro + " + CAST(" + String.join(" + ", prefix) + " AS DOUBLE"
+                + " PRECISION) * CAST(0.1 AS DOUBLE PRECISION) * (CAST(1 AS DOUBLE PRECISION) - " + jaro + ") ELSE "
+                + jaro + " END FROM __jw CROSS JOIN LATERAL (SELECT count(*) AS n FROM (SELECT substr(__jw.p, __g.i,"
+                + " 1) AS ch, row_number() OVER (ORDER BY __g.i) AS k FROM generate_series(1, length(__jw.p)) AS"
+                + " __g(i) WHERE substr(__jw.f, __g.i, 1) = '1') AS __o WHERE __o.ch <> substr(__jw.tm, CAST(__o.k AS"
+                + " INTEGER), 1)) AS __x WHERE __jw.j = length(__jw.t) AND __jw.p IS NOT NULL)");
     }
 
     private static boolean isDouble(SqlExpr e) {
@@ -1832,7 +1895,9 @@ public final class Postgres extends AnsiSqlRenderer {
 
     /** A struct is jsonb here, and the driver hands a jsonb cell back as its own object, whose text is the JSON
      *  (PGobject's toString): decoded to the platform's map, a struct's fields in its declared order (nested ones
-     *  too), a Float field a Double. */
+     *  too), a Float field a Double. A Variant cell is its JSON text, as every other driver hands it (DuckDB's
+     *  node through its DriverCells): an instance of a class carried as a Variant (a list of two subclasses'
+     *  instances) otherwise reached the caller as the driver's object. */
     @Override
     public @com.legend.base.Nullable Object normalize(@com.legend.base.Nullable Object jdbcValue,
             @com.legend.base.Nullable SqlType type) {
@@ -1841,6 +1906,9 @@ public final class Postgres extends AnsiSqlRenderer {
             if (text.startsWith("{")) {
                 return declared(com.legend.sql.Json.parse(text), st);
             }
+        }
+        if (jdbcValue != null && type == SqlType.Scalar.JSON && !(jdbcValue instanceof String)) {
+            return jdbcValue.toString();
         }
         return jdbcValue;
     }

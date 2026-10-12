@@ -36,12 +36,8 @@ public class Test_LegendLite_Postgres_UnclassifiedFunctions_PCT extends PCTRepor
     private static final MutableList<ExclusionSpecification> expectedFailures = Lists.mutable.with(
             // Postgres raises differently (its own error, or a different position or wording)
             one("meta::pure::functions::string::tests::char::testEmptyChar_Function_1__Boolean_1_", "ERROR: null character not permitted"),
-            // refused by name: a construct the Postgres dialect does not spell yet
-            one("meta::pure::functions::hash::tests::testSHA1Hash_Function_1__Boolean_1_", "SHA1 reached Postgres: an extension function (pgcrypto/fuzzystrmatch)"),
-            one("meta::pure::functions::string::tests::jaroWinklerSimilarity::testJaroWinklerSimilarityEqual_Function_1__Boolean_1_", "JARO_WINKLER reached Postgres: an extension function (pgcrypto/fuzzystrmatch)"),
-            one("meta::pure::functions::string::tests::jaroWinklerSimilarity::testJaroWinklerSimilarityNotEqual_Function_1__Boolean_1_", "JARO_WINKLER reached Postgres: an extension function (pgcrypto/fuzzystrmatch)"),
-            one("meta::pure::functions::string::tests::levenshteinDistance::testLevenshteinDistanceEqual_Function_1__Boolean_1_", "LEVENSHTEIN reached Postgres: an extension function (pgcrypto/fuzzystrmatch)"),
-            one("meta::pure::functions::string::tests::levenshteinDistance::testLevenshteinDistanceNotEqual_Function_1__Boolean_1_", "LEVENSHTEIN reached Postgres: an extension function (pgcrypto/fuzzystrmatch)")
+            // refused by name: no Postgres release has a core sha1 (18.6 and devel, 2026-10-12); pgcrypto's digest() does
+            one("meta::pure::functions::hash::tests::testSHA1Hash_Function_1__Boolean_1_", "SHA1 reached Postgres: an extension function (pgcrypto)")
     );
 
     public static Test suite() {

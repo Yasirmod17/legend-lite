@@ -50,13 +50,15 @@ final class ChannelBLane {
             // docs/PCT_PIN_WORKAROUNDS_2026_10_12.md): printf unrolled, the empty collection spelled, a Boolean list's
             // extremes, splitPart, hashCode, a struct decoded from its jsonb. 315 -> 326, 464 -> 465 (its wire bugs
             // 3 -> 2, the true one 1 -> 0) and 203 -> 204 (2026-10-12, the user's ask): maps as jsonb entries, a fold
-            // or a reduction into a list, the LIST aggregate, and a raise no plan-time estimate evaluates
+            // or a reduction into a list, the LIST aggregate, and a raise no plan-time estimate evaluates. 326 -> 327
+            // and 87 -> 91 (2026-10-12, the user's ask): a quoted literal typed for to_jsonb, Levenshtein and
+            // Jaro-Winkler as recursive walks (no extension)
             "postgres", Map.of(
-                    "Essential", new Pins(326, 2, 0),
+                    "Essential", new Pins(327, 2, 0),
                     "Grammar", new Pins(132, 3, 0),
                     "Relation", new Pins(465, 2, 0),
                     "Standard", new Pins(204, 1, 0),
-                    "Unclassified", new Pins(87, 0, 0)),
+                    "Unclassified", new Pins(91, 0, 0)),
             // no engine manifest for SQLite: every wire bug is a true one (10 of Relation's 12 a regular expression
             // with a non-literal pattern, 2 a pivot's column order)
             "sqlite", Map.of(
