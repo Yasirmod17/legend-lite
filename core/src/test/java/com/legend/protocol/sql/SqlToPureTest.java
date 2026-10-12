@@ -289,6 +289,33 @@ class SqlToPureTest {
     }
 
     @Test
+    void booleanPercentileAndPairAggregatesAreAGroupsReduce() {
+        assertEquals("#>{s::DB.T}#->groupBy(~[dept], ~[a:r|if($r.age->isNotEmpty() && ($r.age->toOne() > 30), |true,"
+                        + " |if($r.age->isNotEmpty() && !($r.age->toOne() > 30), |false, |[])):y|$y->and(),"
+                        + " m:r|$r.age:y|$y->percentile(0.5, false, false)->cast(@Integer),"
+                        + " c:r|$r.age->rowMapper($r.ID):y|$y->corr()])"
+                        + "->select(~[dept, a, m, c])",
+                pure("select dept, bool_and(age > 30) as a, percentile_disc(0.5) within group (order by age desc) as m,"
+                        + " corr(age, ID) as c from tb('s::DB.T') group by dept"));
+        assertEquals("function bool_and(integer) does not exist",
+                refusal("select bool_and(age) from tb('s::DB.T')").getMessage());
+        assertEquals("percentile value 1.5 is not between 0 and 1",
+                refusal("select percentile_cont(1.5) within group (order by age) from tb('s::DB.T')").getMessage());
+        // DuckDB's mode breaks a tie otherwise than Postgres (which takes the first in the order)
+        assertEquals("WITHIN GROUP is not supported yet",
+                refusal("select mode() within group (order by age) from tb('s::DB.T')").getMessage());
+    }
+
+    @Test
+    void lagWithADefaultTellsAMissingRowFromANullValue() {
+        // the default where there is no previous row; a previous row's NULL stays NULL (the constant 1 tells which)
+        assertEquals("#>{s::DB.T}#->extend(~[_sql_1:r|0, _sql_2:r|1])->extend(over([~ID->ascending("
+                        + "meta::pure::functions::relation::NullOrder.LAST)]), ~l:{p, w, r|if($p->lag($r)._sql_2"
+                        + "->isEmpty(), |$r._sql_1, |$p->lag($r).age)})->select(~[ID, l])",
+                pure("select ID, lag(age, 1, 0) over (order by ID) as l from tb('s::DB.T')"));
+    }
+
+    @Test
     void aQuotientOfNumericsIsInexactSoNothingRoundsOrSpellsIt() {
         // Postgres's numeric quotient is exact, Pure's divide a Float: floor(0.3 / 0.1) is 3 there, 2 here
         assertEquals("floor of a quotient, average or root of numerics (exact in Postgres, a double here) is not"
@@ -540,7 +567,7 @@ class SqlToPureTest {
         assertEquals(SqlTranslationException.Kind.UNSUPPORTED,
                 refusal("select ID from tb('s::DB.T') a, lateral (select 1) b").kind());
         assertEquals(SqlTranslationException.Kind.UNSUPPORTED,
-                refusal("select percentile_cont(0.5) within group (order by age) from tb('s::DB.T')").kind());
+                refusal("select mode() within group (order by age) from tb('s::DB.T')").kind());
         SqlTranslationException grouped = refusal("select dept, age from tb('s::DB.T') group by dept");
         assertEquals(SqlTranslationException.Kind.INVALID, grouped.kind());
         assertEquals("column \"age\" must appear in the GROUP BY clause or be used in an aggregate function",

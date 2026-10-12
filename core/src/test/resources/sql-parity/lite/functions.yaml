@@ -245,3 +245,32 @@ tests:
     sql: "SELECT id, (salary / 4)::numeric AS a, (salary / 4)::float8 AS b FROM persons ORDER BY id"
   - id: power_of_integers_and_doubles
     sql: "SELECT id, power(small_val, 2) AS a, power(float_val, 2) AS b, pow(2, small_val) AS c FROM numbers WHERE small_val BETWEEN -10 AND 10 ORDER BY id"
+  # bool_and, bool_or, every: NULLs skipped, no values NULL; a FILTER keeps a boolean's three values
+  - id: bool_and_bool_or_and_every
+    sql: "SELECT dept_id, bool_and(active) AS a, bool_or(active) AS o, every(age > 25) AS e FROM persons GROUP BY dept_id ORDER BY dept_id"
+  - id: bool_aggregates_with_a_filter
+    sql: "SELECT bool_and(active) FILTER (WHERE id = 8) AS a, bool_or(active) FILTER (WHERE id > 100) AS b, count(active) FILTER (WHERE age > 30) AS c, bool_or(DISTINCT active) AS d FROM persons"
+  - id: bool_and_of_an_integer_does_not_exist
+    sql: "SELECT bool_and(age) AS a FROM persons"
+  # percentile_cont interpolates between doubles; percentile_disc picks a value of its own type
+  - id: percentiles_by_group
+    sql: "SELECT dept_id, percentile_cont(0.5) WITHIN GROUP (ORDER BY salary) AS m, percentile_disc(0.5) WITHIN GROUP (ORDER BY age) AS d, percentile_cont(0.25) WITHIN GROUP (ORDER BY age DESC) AS q FROM persons GROUP BY dept_id ORDER BY dept_id"
+  - id: percentile_disc_at_its_boundaries
+    sql: "SELECT percentile_disc(0) WITHIN GROUP (ORDER BY int_val) AS a, percentile_disc(0.25) WITHIN GROUP (ORDER BY int_val) AS b, percentile_disc(0.3) WITHIN GROUP (ORDER BY int_val) AS c, percentile_disc(1) WITHIN GROUP (ORDER BY int_val) AS d, percentile_disc(0.25) WITHIN GROUP (ORDER BY int_val DESC) AS e, percentile_disc(0.3) WITHIN GROUP (ORDER BY int_val DESC) AS f FROM numbers"
+  - id: percentile_cont_at_its_boundaries
+    sql: "SELECT percentile_cont(0) WITHIN GROUP (ORDER BY float_val) AS a, percentile_cont(1) WITHIN GROUP (ORDER BY float_val) AS b, percentile_cont(0.3) WITHIN GROUP (ORDER BY int_val DESC) AS c, percentile_cont(0.1) WITHIN GROUP (ORDER BY numeric_val) AS d FROM numbers"
+  - id: percentile_disc_of_integers_divides_as_integers
+    sql: "SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY int_val) / 2 AS a, percentile_cont(0.5) WITHIN GROUP (ORDER BY int_val) / 2 AS b, percentile_disc(0.5) WITHIN GROUP (ORDER BY numeric_val) AS c FROM numbers"
+  - id: percentile_with_a_filter
+    sql: "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY int_val) FILTER (WHERE int_val > 0) AS a, percentile_disc(0.5) WITHIN GROUP (ORDER BY big_val) FILTER (WHERE id < 5) AS b FROM numbers"
+  - id: percentile_outside_zero_to_one_is_an_error
+    sql: "SELECT percentile_cont(1.5) WITHIN GROUP (ORDER BY age) AS a FROM persons"
+  - id: percentile_without_within_group_is_an_error
+    sql: "SELECT percentile_cont(0.5) AS a FROM persons"
+  - id: mode_is_refused
+    sql: "SELECT mode() WITHIN GROUP (ORDER BY age) AS a FROM persons"
+  # corr, covar_pop, covar_samp: double precision over the pairs with no NULL
+  - id: correlation_and_covariance_by_group
+    sql: "SELECT dept_id, corr(salary, age) AS c, covar_pop(age, salary) AS p, covar_samp(age, id) AS s FROM persons GROUP BY dept_id ORDER BY dept_id"
+  - id: correlation_and_covariance_with_a_filter
+    sql: "SELECT corr(float_val, int_val) AS c, covar_samp(int_val, small_val) FILTER (WHERE id < 9) AS s, covar_pop(numeric_val, float_val) AS p FROM numbers"

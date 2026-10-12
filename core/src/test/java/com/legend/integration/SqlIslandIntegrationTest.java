@@ -124,7 +124,7 @@ class SqlIslandIntegrationTest {
     @Test
     void sqlNotTranslatedYetIsNotImplemented() {
         com.legend.error.NotImplementedException e = assertThrows(com.legend.error.NotImplementedException.class,
-                () -> run("#SQL{select dept, percentile_cont(0.5) within group (order by age) from tb('store::HR.EMP')"
+                () -> run("#SQL{select dept, mode() within group (order by age) from tb('store::HR.EMP')"
                         + " group by dept}#"));
         assertEquals("#SQL{...}# at line 1, column 19: WITHIN GROUP is not supported yet", e.getMessage());
     }

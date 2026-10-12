@@ -1810,6 +1810,30 @@ public final class SqlToPure {
         Variable p = new Variable(partition);
         Variable w = new Variable(window);
         Variable r = new Variable(row);
+        if (BOOLEAN_AGGREGATES.contains(fn)) {
+            windowArguments(f, 1, 1);
+            Col arg = windowKey(f.args().get(0), scope, present, computed);
+            if (arg.kind() != Kind.BOOLEAN) {
+                throw SqlTranslationException.invalid("function " + fn + "(" + postgresName(arg.kind())
+                        + ") does not exist", f.pos());
+            }
+            return new WindowColumn(windowLambda(property(row, arg.name())), lambda(group,
+                    call(fn.equals("bool_or") ? "or" : "and", new Variable(group))), Kind.BOOLEAN, true);
+        }
+        if (BIVARIATE.containsKey(fn)) {
+            windowArguments(f, 2, 2);
+            Col y = windowKey(f.args().get(0), scope, present, computed);
+            Col x = windowKey(f.args().get(1), scope, present, computed);
+            for (Col c : List.of(y, x)) {
+                if (!c.kind().numeric()) {
+                    throw SqlTranslationException.unsupported(fn + " of " + postgresName(c.kind()) + " values is not"
+                            + " supported yet", f.pos());
+                }
+            }
+            return new WindowColumn(windowLambda(call("rowMapper", property(row, y.name()), property(row,
+                    x.name()))), lambda(group, call(java.util.Objects.requireNonNull(BIVARIATE.get(fn)),
+                    new Variable(group))), Kind.FLOAT, true);
+        }
         switch (fn) {
             case "row_number", "rank", "dense_rank", "percent_rank", "cume_dist" -> {
                 windowArguments(f, 0, 0);
@@ -1825,14 +1849,14 @@ public final class SqlToPure {
             }
             case "lag", "lead" -> {
                 windowArguments(f, 1, 3);
-                if (f.args().size() == 3) {
-                    throw SqlTranslationException.unsupported(fn + "(...) with a default value is not supported yet",
-                            f.pos());
-                }
                 Col arg = windowKey(f.args().get(0), scope, present, computed);
-                long n = f.args().size() == 2 ? windowCount(f.args().get(1), fn, 0) : 1L;
+                long n = f.args().size() >= 2 ? windowCount(f.args().get(1), fn, 0) : 1L;
                 ValueSpecification at = n == 1L ? call(fn, p, r) : call(fn, p, r, new CInteger(n));
-                return new WindowColumn(windowLambda(new AppliedProperty(at, arg.name())), null, arg.kind(), true);
+                ValueSpecification other = new AppliedProperty(at, arg.name());
+                if (f.args().size() < 3 || f.args().get(2) instanceof SqlAst.NullLit) {
+                    return new WindowColumn(windowLambda(other), null, arg.kind(), true);
+                }
+                return lagDefault(f.args().get(2), arg, at, other, scope, present, computed);
             }
             case "first_value", "last_value" -> {
                 windowArguments(f, 1, 1);
@@ -1882,6 +1906,41 @@ public final class SqlToPure {
             default -> throw SqlTranslationException.unsupported("window function " + fn + "(...) is not supported"
                     + " yet", f.pos());
         }
+    }
+
+    /**
+     * {@code lag(x, n, default)}, {@code lead(x, n, default)}: the default (the current row's) where the other row is
+     * outside the partition -- not where that row's value is NULL, which stays NULL. A column that is never NULL (the
+     * constant 1, computed first) tells which. The value and the default resolve to one type, as Postgres's
+     * anycompatible does: an untyped string constant read as the value's type, numbers widening.
+     */
+    private WindowColumn lagDefault(SqlAst.Expr d, Col arg, ValueSpecification at, ValueSpecification other,
+            Scope scope, Set<String> present, List<ColSpec> computed) {
+        Tx dflt = d instanceof SqlAst.StringLit s && arg.kind() != Kind.STRING && readsStrings(arg.kind())
+                ? fromString(s, arg.kind()) : tx(d, scope, row);
+        Kind kind;
+        if (dflt.kind() == arg.kind()) {
+            kind = arg.kind();
+        } else if (dflt.kind().numeric() && arg.kind().numeric()) {
+            kind = arithmetic(arg.kind(), dflt.kind());
+        } else {
+            throw SqlTranslationException.unsupported("a default of " + postgresName(dflt.kind()) + " for "
+                    + postgresName(arg.kind()) + " values is not supported yet", d.pos());
+        }
+        if (kind == Kind.FLOAT && dflt.kind() != Kind.FLOAT) {
+            Tx read = dflt;
+            dflt = strict(Kind.FLOAT, List.of(read), v -> call("toFloat", v.get(0)));
+        }
+        ValueSpecification value = other;
+        if (kind == Kind.FLOAT && arg.kind() != Kind.FLOAT) {
+            value = call("if", call("isEmpty", other), thunk(empty()), thunk(call("toFloat", call("toOne", other))));
+        }
+        String name = fresh(present);
+        computed.add(new ColSpec(name, lambda(row, valueOf(dflt)), null, null));
+        Col one = windowKey(new SqlAst.IntegerLit(java.math.BigInteger.ONE, d.pos()), scope, present, computed);
+        ValueSpecification body = call("if", call("isEmpty", new AppliedProperty(at, one.name())),
+                thunk(property(row, name)), thunk(value));
+        return new WindowColumn(windowLambda(body), null, kind, arg.nullable() || dflt.nullable());
     }
 
     /** Postgres's ranking functions and Pure's. */
@@ -2266,7 +2325,23 @@ public final class SqlToPure {
     // ------------------------------------------------------------------ aggregates
 
     private static final Set<String> AGGREGATES = Set.of("count", "sum", "avg", "min", "max", "stddev", "stddev_samp",
-            "stddev_pop", "variance", "var_samp", "var_pop", "string_agg");
+            "stddev_pop", "variance", "var_samp", "var_pop", "string_agg", "bool_and", "bool_or", "every",
+            "percentile_cont", "percentile_disc", "corr", "covar_pop", "covar_samp");
+
+    /** Postgres's ordered-set aggregates that Pure's percentile computes. */
+    private static final Set<String> PERCENTILES = Set.of("percentile_cont", "percentile_disc");
+
+    /** Postgres's aggregates of pairs and Pure's (over rowMapper pairs): double precision, a pair with a NULL
+     *  skipped. */
+    private static final Map<String, String> BIVARIATE = Map.of("corr", "corr", "covar_pop", "covarPopulation",
+            "covar_samp", "covarSample");
+
+    /** Postgres's boolean aggregates: Pure's and() (bool_and, every) or or() (bool_or) of the group. */
+    private static final Set<String> BOOLEAN_AGGREGATES = Set.of("bool_and", "bool_or", "every");
+
+    /** An aggregate column of the grouped relation: its map and reduce, and its kind. */
+    private record Aggregate(ColSpec spec, Kind kind) {
+    }
 
     /** Postgres's statistical aggregates and Pure's: sample (n - 1) unless named population. */
     private static final Map<String, String> STATISTICS = Map.of("stddev", "stdDevSample", "stddev_samp",
@@ -2339,14 +2414,14 @@ public final class SqlToPure {
                 return;
             }
             String fn = functionName(f.name().get(0));
-            if (fn.equals("string_agg")) {
-                String want = preferred.get(canon);
-                String name = want != null && !names.contains(want) && !want.startsWith(SYNTHETIC) ? want
-                        : fresh(names);
+            String want = preferred.get(canon);
+            String name = want != null && !names.contains(want) && !want.startsWith(SYNTHETIC) ? want : fresh(names);
+            if (fn.equals("string_agg") || PERCENTILES.contains(fn) || BIVARIATE.containsKey(fn)) {
+                Aggregate aggregate = fn.equals("string_agg") ? new Aggregate(stringAgg(f, in, name), Kind.STRING)
+                        : PERCENTILES.contains(fn) ? percentile(f, in, name) : bivariate(f, in, name);
                 names.add(name);
-                Col col = Col.of(name, Kind.STRING, true);
-                byCanon.put(canon, col);
-                aggregates.add(stringAgg(f, in, name));
+                byCanon.put(canon, Col.of(name, aggregate.kind(), true));
+                aggregates.add(aggregate.spec());
                 return;
             }
             Tx arg;
@@ -2381,7 +2456,8 @@ public final class SqlToPure {
                 // the rows the condition holds for only: another row gives no value, as Postgres skips it
                 Tx value = arg;
                 ValueSpecification test = condition(filter, in, "FILTER");
-                arg = Tx.value(call("if", test, thunk(valueOf(value)), thunk(empty())), value.kind(), true);
+                ValueSpecification kept = call("if", test, thunk(valueOf(value)), thunk(empty()));
+                arg = value.kind() == Kind.BOOLEAN ? booleanValue(kept, true) : Tx.value(kept, value.kind(), true);
             }
             ValueSpecification values = new Variable(group);
             if (f.distinct()) {
@@ -2389,41 +2465,51 @@ public final class SqlToPure {
             }
             Kind kind;
             ValueSpecification reduce;
-            switch (fn) {
-                case "count" -> {
-                    kind = Kind.INTEGER;
-                    reduce = call("count", values);
+            if (BOOLEAN_AGGREGATES.contains(fn)) {
+                // Postgres's every is bool_and; NULLs are skipped, and no values is NULL
+                if (arg.kind() != Kind.BOOLEAN) {
+                    throw arg.kind() == Kind.NULL || arg.kind() == Kind.OTHER
+                            ? SqlTranslationException.unsupported(fn + " of this value is not supported yet", f.pos())
+                            : SqlTranslationException.invalid("function " + fn + "(" + postgresName(arg.kind())
+                                    + ") does not exist", f.pos());
                 }
-                case "sum" -> {
-                    requireNumeric(arg, f);
-                    kind = arg.kind() == Kind.DECIMAL ? Kind.NUMBER : arg.kind();
-                    reduce = call("sum", values);
-                }
-                case "avg" -> {
-                    requireNumeric(arg, f);
-                    kind = statisticKind(arg.kind());
-                    reduce = call("average", values);
-                }
-                case "min" -> {
-                    notJsonKey(arg.kind(), fn, f.pos());
-                    kind = arg.kind();
-                    reduce = call("min", values);
-                }
-                case "max" -> {
-                    notJsonKey(arg.kind(), fn, f.pos());
-                    kind = arg.kind();
-                    reduce = call("max", values);
-                }
-                default -> {
-                    // stddev, variance and their sample and population forms
-                    requireNumeric(arg, f);
-                    kind = statisticKind(arg.kind());
-                    reduce = call(java.util.Objects.requireNonNull(STATISTICS.get(fn), fn), values);
+                kind = Kind.BOOLEAN;
+                reduce = call(fn.equals("bool_or") ? "or" : "and", values);
+            } else {
+                switch (fn) {
+                    case "count" -> {
+                        kind = Kind.INTEGER;
+                        reduce = call("count", values);
+                    }
+                    case "sum" -> {
+                        requireNumeric(arg, f);
+                        kind = arg.kind() == Kind.DECIMAL ? Kind.NUMBER : arg.kind();
+                        reduce = call("sum", values);
+                    }
+                    case "avg" -> {
+                        requireNumeric(arg, f);
+                        kind = statisticKind(arg.kind());
+                        reduce = call("average", values);
+                    }
+                    case "min" -> {
+                        notJsonKey(arg.kind(), fn, f.pos());
+                        kind = arg.kind();
+                        reduce = call("min", values);
+                    }
+                    case "max" -> {
+                        notJsonKey(arg.kind(), fn, f.pos());
+                        kind = arg.kind();
+                        reduce = call("max", values);
+                    }
+                    default -> {
+                        // stddev, variance and their sample and population forms
+                        requireNumeric(arg, f);
+                        kind = statisticKind(arg.kind());
+                        reduce = call(java.util.Objects.requireNonNull(STATISTICS.get(fn), fn), values);
+                    }
                 }
             }
             // count is never NULL; every other aggregate is NULL over no values (Postgres)
-            String want = preferred.get(canon);
-            String name = want != null && !names.contains(want) && !want.startsWith(SYNTHETIC) ? want : fresh(names);
             names.add(name);
             Col col = Col.of(name, kind, !fn.equals("count"));
             byCanon.put(canon, col);
@@ -2433,6 +2519,113 @@ public final class SqlToPure {
         for (SqlAst.Expr child : children(e)) {
             collectAggregates(child, in, byCanon, aggregates, names, preferred);
         }
+    }
+
+    /**
+     * {@code percentile_cont(p)} or {@code percentile_disc(p) WITHIN GROUP (ORDER BY x [DESC]) [FILTER (WHERE ...)]}:
+     * Pure's percentile over the group, NULLs skipped as Postgres skips them, {@code p} a constant fraction. The
+     * continuous one interpolates between doubles, as Postgres does (each value read as one: DuckDB would interpolate
+     * a decimal at the decimal's scale). The discrete one picks a value, which the lowering gives as a double: an
+     * integer's is read back as its integer (Postgres's type, whose division truncates), a numeric's is inexact.
+     */
+    private Aggregate percentile(SqlAst.FunctionCall f, Input in, String name) {
+        String fn = functionName(f.name().get(0));
+        boolean continuous = fn.equals("percentile_cont");
+        if (f.withinGroup().isEmpty()) {
+            throw SqlTranslationException.invalid("WITHIN GROUP is required for ordered-set aggregate " + fn,
+                    f.pos());
+        }
+        if (f.distinct()) {
+            throw SqlTranslationException.invalid("cannot use DISTINCT with WITHIN GROUP", f.pos());
+        }
+        if (f.star() || f.args().size() != 1 || f.withinGroup().size() != 1 || !f.orderBy().isEmpty()) {
+            throw SqlTranslationException.unsupported(fn + " of other than one fraction and one value is not"
+                    + " supported yet", f.pos());
+        }
+        SqlAst.SortItem key = f.withinGroup().get(0);
+        for (SqlAst.Expr a : List.of(f.args().get(0), key.expr())) {
+            if (containsAggregate(a)) {
+                throw SqlTranslationException.invalid("aggregate function calls cannot be nested", a.pos());
+            }
+        }
+        SqlAst.Expr fraction = f.args().get(0);
+        BigDecimal p = fraction instanceof SqlAst.NumericLit n ? n.value()
+                : fraction instanceof SqlAst.IntegerLit n ? new BigDecimal(n.value()) : null;
+        if (p == null) {
+            throw SqlTranslationException.unsupported(fn + " of a fraction other than a constant is not supported"
+                    + " yet", fraction.pos());
+        }
+        if (p.signum() < 0 || p.compareTo(BigDecimal.ONE) > 0) {
+            throw SqlTranslationException.invalid("percentile value " + p.toPlainString() + " is not between 0 and 1",
+                    fraction.pos());
+        }
+        Tx x = tx(key.expr(), in, row);
+        if (!x.kind().numeric()) {
+            throw x.kind() == Kind.NULL || x.kind() == Kind.OTHER || !continuous
+                    ? SqlTranslationException.unsupported(fn + " of " + postgresName(x.kind()) + " values is not"
+                            + " supported yet", key.expr().pos())
+                    : SqlTranslationException.invalid("function " + fn + "(numeric, " + postgresName(x.kind())
+                            + ") does not exist", f.pos());
+        }
+        Tx value = continuous && x.kind() != Kind.FLOAT ? strict(Kind.FLOAT, List.of(x), v -> call("toFloat",
+                v.get(0))) : x;
+        ValueSpecification each = valueOf(value);
+        SqlAst.Expr filter = f.filter();
+        if (filter != null) {
+            if (containsAggregate(filter)) {
+                throw SqlTranslationException.invalid("aggregate functions are not allowed in FILTER", filter.pos());
+            }
+            each = call("if", condition(filter, in, "FILTER"), thunk(each), thunk(empty()));
+        }
+        ValueSpecification reduce = call("percentile", new Variable(group),
+                new com.legend.protocol.spec.CFloat(p.doubleValue()), new CBoolean(!key.descending()),
+                new CBoolean(continuous));
+        if (!continuous && x.kind() == Kind.INTEGER) {
+            reduce = call("cast", reduce, typeArg("Integer"));
+        }
+        Kind kind = continuous ? Kind.FLOAT : x.kind() == Kind.DECIMAL || x.kind() == Kind.NUMBER ? Kind.INEXACT
+                : x.kind();
+        return new Aggregate(new ColSpec(name, lambda(row, each), lambda(group, reduce), null), kind);
+    }
+
+    /** {@code corr(y, x)}, {@code covar_pop(y, x)}, {@code covar_samp(y, x)}: Pure's over the group's pairs
+     *  ({@code rowMapper(y, x)}), a pair with a NULL skipped as Postgres skips it; double precision. */
+    private Aggregate bivariate(SqlAst.FunctionCall f, Input in, String name) {
+        String fn = functionName(f.name().get(0));
+        if (!f.withinGroup().isEmpty()) {
+            throw SqlTranslationException.invalid("WITHIN GROUP is required for ordered-set aggregates only; " + fn
+                    + " is not one", f.pos());
+        }
+        if (f.distinct() || f.star() || !f.orderBy().isEmpty() || f.args().size() != 2) {
+            throw SqlTranslationException.unsupported(fn + " other than of two values is not supported yet",
+                    f.pos());
+        }
+        List<Tx> pair = new ArrayList<>();
+        for (SqlAst.Expr a : f.args()) {
+            if (containsAggregate(a)) {
+                throw SqlTranslationException.invalid("aggregate function calls cannot be nested", a.pos());
+            }
+            Tx t = tx(a, in, row);
+            if (!t.kind().numeric()) {
+                throw SqlTranslationException.unsupported(fn + " of " + postgresName(t.kind()) + " values is not"
+                        + " supported yet", a.pos());
+            }
+            pair.add(t);
+        }
+        ValueSpecification y = valueOf(pair.get(0));
+        ValueSpecification x = valueOf(pair.get(1));
+        SqlAst.Expr filter = f.filter();
+        if (filter != null) {
+            if (containsAggregate(filter)) {
+                throw SqlTranslationException.invalid("aggregate functions are not allowed in FILTER", filter.pos());
+            }
+            ValueSpecification test = condition(filter, in, "FILTER");
+            y = call("if", test, thunk(y), thunk(empty()));
+            x = call("if", test, thunk(x), thunk(empty()));
+        }
+        return new Aggregate(new ColSpec(name, lambda(row, call("rowMapper", y, x)),
+                lambda(group, call(java.util.Objects.requireNonNull(BIVARIATE.get(fn)), new Variable(group))), null),
+                Kind.FLOAT);
     }
 
     /** {@code string_agg(text, 'sep' [ORDER BY col [DESC], ...]) [FILTER (WHERE ...)]}: Pure's joinStrings over the
