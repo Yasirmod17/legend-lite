@@ -8995,7 +8995,9 @@ Announced in `docs/IN_FLIGHT.md` as the semi-structured step's widenings (5cb0ac
    - **Casts:** integer and smallint ranges, a numeric rounded half away from zero, a double half to even,
      `varchar(n)`. Text values cast to numbers are refused (DuckDB reads `'1.5'`, `'1e3'`, `'1_000'`).
    - **Inexact numerics:** a quotient, average or root of numerics is a Float here and exact in Postgres; what
-     rounds or spells one is refused (`floor(0.3 / 0.1)` is 3 there, 2 from the double).
+     rounds or spells one is refused (`floor(0.3 / 0.1)` is 3 there, 2 from the double), a double in it or not.
+   - **A sum of integers** is a bigint or a numeric in Postgres by the column's width, which the translator does not
+     know: dividing it by an integer is refused (`sum(x)::bigint / n` and `sum(x)::numeric / n` translate).
    - **Dates:** a date plus or minus days, the days between dates, interval constants (months, then days, then
      time), `make_date`, `make_timestamp`, `date_trunc` of a timestamp.
 2. **Two fixes in `sql/dialect/`,** each announced in IN_FLIGHT, each with a test that fails without it:
@@ -9004,18 +9006,19 @@ Announced in `docs/IN_FLIGHT.md` as the semi-structured step's widenings (5cb0ac
      list").
    - **`QuantileOrder.java`:** DuckDB's descending discrete percentile at `p = 0` read element 0 of a 1-based list
      (NULL); it is the first value, as Pure's percentile and Postgres's `percentile_disc` say.
-     `TypeInferenceIntegrationTest.testPercentile_GroupBy_Discrete_Descending_AtZero` pins it.
+     `TypeInferenceIntegrationTest.testPercentile_GroupBy_Discrete_Descending_AtZero` pins it. Widened by the
+     review (6d5f0e1): both orders compute the element as Postgres does, `ceil(p * N)` in double precision.
 3. **The parity corpus,** identical in both lanes (`//core:sql_parity_test`, `//core:sql_parity_postgres_test`):
 
-   | | upstream's 1,703 | own 369 (244 at the step above) |
+   | | upstream's 1,703 | own 381 (244 at the step above) |
    |---|---|---|
-   | PASS | 1,122 (1,016 at the step above) | 278 |
+   | PASS | 1,122 (1,016 at the step above) | 284 |
    | FAIL, BUG, ERROR | 0 | 0 |
-   | REFUSED by name | 452 | 41 |
-   | BOTH_ERROR | 61 | 50 |
+   | REFUSED by name | 452 | 46 |
+   | BOTH_ERROR | 61 | 51 |
    | SKIP | 68 | 0 |
 
-   New own cases: `lite/functions.yaml` (130 now), `lite/windows.yaml` (51), `lite/dates.yaml` (18, new).
+   New own cases: `lite/functions.yaml` (139 now), `lite/windows.yaml` (51), `lite/dates.yaml` (21, new).
 4. **The randomized check.** A scratch generator (never committed) wrote type-correct Postgres queries over the
    parity schema and ran them through both lanes against Postgres: 13 seeds, about 6,300 queries, growing with each
    feature. Each wrong answer it found is fixed and pinned by a case (the study lists them); the last seeds found
@@ -9030,6 +9033,9 @@ Announced in `docs/IN_FLIGHT.md` as the semi-structured step's widenings (5cb0ac
      `//core:sql_island_postgres_test`, `//core:postgres_arm_test`), through the unprivileged wrapper: 8 of 8 pass.
    - **The six corpus passes,** against a baseline built from main cbd8f01: 0 result files differing (`compare_judges.py`); with the disk cache off both builds executed all six.
    - **The full CI run:** the pull request's; recorded here when it has run.
+   - **The independent review** (an agent that wrote none of it): eight wrong answers traced, each measured, fixed and
+     pinned (the study's §9.3 lists them); three recorded (a constant column's `corr` noise in Postgres, inexact
+     comparisons at the exact boundary, `make_date` of year 0).
 6. **Not done, recorded in the study:** regular expressions (`~`, `regexp_*`); `mode()` (DuckDB breaks ties
    otherwise); `corr` over a window; text cast to a number; intervals as values and timestamp differences; the
    semi-structured step's open findings (DuckDB's JSON numbers as doubles among them, for the user to decide).

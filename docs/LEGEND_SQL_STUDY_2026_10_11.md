@@ -1173,15 +1173,44 @@ Postgres answers: an error, never a wrong answer. The randomized check met it on
 - `RootNumericTypes` (5cb0ac1). Under DISTINCT, an ORDER BY key that is a projection cast to its numeric type is
   ordered by the cast expression. Postgres requires that ("for SELECT DISTINCT, ORDER BY expressions must appear in
   select list"), and the cast changes no value.
-- `QuantileOrder` (aa0c469). DuckDB's descending discrete percentile read element `ceil(p * N)` of the sorted list:
-  element 0 of a 1-based list at `p = 0`, so NULL. Pure's percentile and Postgres's `percentile_disc` both take the
-  first value there; the index is now at least 1. The randomized check found it.
+- `QuantileOrder` (aa0c469, widened 6d5f0e1). DuckDB's descending discrete percentile read element `ceil(p * N)` of
+  the sorted list: element 0 of a 1-based list at `p = 0`, so NULL. Pure's percentile and Postgres's `percentile_disc`
+  both take the first value there; the index is now at least 1. The randomized check found it. The review then found
+  the product computed exactly where Postgres's is float8; both orders now compute it as Postgres does.
+
+**The independent review (2026-10-12)** of the step, by an agent that wrote none of it, traced these wrong answers.
+Each was measured against Postgres and DuckDB, is fixed, and is pinned by a case in `lite/functions.yaml` or
+`lite/dates.yaml`:
+- An inexact numeric met by a double became a double, so it could round: `floor(0.3 / 0.1 * 1::float8)` is 3 in
+  Postgres, 2 here. An inexact numeric now stays inexact through every operator and function, a double in it or not.
+- A double constant's text was read as an exact decimal: `round('2.5'::float8)` is rint's 2, not 3. It is the double
+  nearest the text, and COALESCE's one value is converted to a double, not relabelled one.
+- A sum of integers is Postgres's bigint for int4 values and its numeric for int8 ones. The two divide differently
+  (`sum(b) / 2` is 3.5 for bigints), and a model column's width is not known to the translator. Such a sum is now the
+  kind WHOLE: dividing it by an integer is refused, and `sum(x)::bigint / n` or `sum(x)::numeric / n` says which.
+- `round(int, n)` and `trunc(int, n)` gave the integer itself: they are the numeric with n places (`42.0`).
+- `INTERVAL '1 day 1' MONTH` read the text and the field together; Postgres keeps only the field's part (a month).
+  Only a single whole number takes a trailing field now; a field named twice (`'1 mon 1 month'`) is refused.
+- `sign` of an inexact numeric was not refused.
+- `percentile_disc`: DuckDB picks element `ceil(p * N)` in exact arithmetic, Postgres in float8, and `0.28 * 25` is
+  7 in the one and 8 in the other. `QuantileOrder` (sql/dialect, announced in IN_FLIGHT 6d5f0e1) now computes the
+  element as Postgres does, in both orders.
+- Decimals merged into one value (CASE, COALESCE, GREATEST, LEAST, a lag default, a set operation's column) take one
+  scale in DuckDB (`1.5` reads `1.50`), each its own in Postgres. Their numbers agree; their text is refused.
+
+Recorded, not fixed:
+- `corr` of a column whose values are equal: Postgres's running sums may leave a variance of about 1e-33 where DuckDB's
+  is exactly 0, so Postgres answers with noise where this answers NULL.
+- An inexact numeric's comparisons reach DISTINCT, GROUP BY, IN, BETWEEN and a window's ORDER BY too: at the exact
+  boundary they may fall the other way, as `0.3 / 0.1 = 3` does.
+- `make_date(0, 1, 1)` is Postgres's error and DuckDB's year 0; `-NULL` is Postgres's "not unique" error and a NULL
+  here.
 
 **The ledger after this step,** identical in both lanes:
 - upstream's 1,703 cases: PASS 1,122 (1,016 before), REFUSED 452, BOTH_ERROR 61, SKIP 68. Upstream legend-engine
   passes 1,026 of them, with 36 wrong answers;
-- legend-lite's own 369 (269 before; `lite/functions.yaml` 130, `lite/windows.yaml` 51, `lite/dates.yaml` 18, new):
-  PASS 278, REFUSED 41, BOTH_ERROR 50;
+- legend-lite's own 381 (269 before; `lite/functions.yaml` 139, `lite/windows.yaml` 51, `lite/dates.yaml` 21, new):
+  PASS 284, REFUSED 46, BOTH_ERROR 51;
 - 0 FAIL, 0 BUG, 0 ERROR.
 
 ## 10. Sources
