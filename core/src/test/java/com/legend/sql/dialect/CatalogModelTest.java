@@ -217,8 +217,9 @@ class CatalogModelTest {
                 + "->filter(r|$r.ordered_at >= %2025-01-01T00:00:00)"
                 + "->extend(~[y: r|$r.ordered_at->year(), m: r|$r.ordered_at->monthNumber()])"
                 + "->groupBy(~[y, m], ~n: r|$r.id: c|$c->count())").plan("t::RT").sql();
-        assertTrue(sql.contains("FROM \"sales\".\"orders\""), sql);
-        assertTrue(sql.contains("\"ordered_at\" >= "), sql);
+        // the store's bare names folded to lower case (Postgres.physicalName)
+        assertTrue(sql.contains("FROM sales.orders"), sql);
+        assertTrue(sql.contains(".ordered_at >= "), sql);
         assertTrue(!sql.contains("timezone("), sql);
     }
 

@@ -152,7 +152,8 @@ class StoreTypesTest {
 
     /** {@code CAST(<qualified ref to col> AS VARCHAR)}, however the dialect quotes the reference. */
     private static String textRead(String col) {
-        return "CAST\\(\"?\\w+\"?\\.\"?" + col + "\"?\\s+AS VARCHAR\\)";
+        // the column as the dialect spells it: Postgres folds a store's bare name to lower case (Postgres.physicalName)
+        return "CAST\\(\"?\\w+\"?\\.\"?(?i:" + col + ")\"?\\s+AS VARCHAR\\)";
     }
 
     private static String sql(String model, String query) {
@@ -211,7 +212,8 @@ class StoreTypesTest {
         String duck = sql(MODEL, "#>{s::DB.HOSTS}#->select(~[META])");
         assertFalse(duck.contains("JSONB"), duck);
         String pg = sql(on("Postgres"), "#>{s::DB.HOSTS}#->select(~[META])");
-        assertTrue(java.util.regex.Pattern.compile("CAST\\(\"\\w+\"\\.\"META\" AS JSONB\\)").matcher(pg).find(), pg);
+        // Postgres folds the store's bare META to lower case (Postgres.physicalName)
+        assertTrue(java.util.regex.Pattern.compile("CAST\\(\"\\w+\"\\.meta AS JSONB\\)").matcher(pg).find(), pg);
     }
 
     @Test

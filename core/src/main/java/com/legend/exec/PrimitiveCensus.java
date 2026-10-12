@@ -12,10 +12,9 @@ import com.legend.sql.SqlType;
 import com.legend.sql.SqlUnion;
 import com.legend.sql.TypeFact;
 
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
-import java.util.TreeMap;
-import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.LongAdder;
 
@@ -24,7 +23,7 @@ import java.util.concurrent.atomic.LongAdder;
  * {@code -Dlegend.diagnostics=primitives}. Every plan the executor sends is read for the MIR primitives a dialect must
  * spell -- each function, aggregate, window frame's shape, cast, literal kind, source and clause -- before any dialect
  * rewrites it, so the same query names the same primitives on every database; each primitive is tallied by whether its
- * statement succeeded. At the JVM's exit the tally is printed, one line a primitive:
+ * statement succeeded. At the JVM's exit the tally is printed, one line a primitive (in no order: the tools sort):
  * {@code [primitives] ok=<n> fail=<m> <primitive>}. The coverage map joins a corpus run's tally with each database's
  * PCT run's: a primitive the corpus uses that no statement carried to success on a database is that database's gap.
  * Under {@code primitives=per-test} each attributed test's primitives are printed too
@@ -81,12 +80,12 @@ public final class PrimitiveCensus {
     }
 
     private static void print() {
-        for (Map.Entry<String, LongAdder[]> e : new TreeMap<>(TALLY).entrySet()) {
+        for (Map.Entry<String, LongAdder[]> e : TALLY.entrySet()) {
             System.out.println("[primitives] ok=" + e.getValue()[0].sum() + " fail=" + e.getValue()[1].sum() + " "
                     + e.getKey());
         }
-        for (Map.Entry<String, Set<String>> e : new TreeMap<>(TESTS).entrySet()) {
-            for (String key : new TreeSet<>(e.getValue())) {
+        for (Map.Entry<String, Set<String>> e : TESTS.entrySet()) {
+            for (String key : e.getValue()) {
                 System.out.println("[primitives-test] " + e.getKey() + "\t" + key);
             }
         }
@@ -94,12 +93,14 @@ public final class PrimitiveCensus {
 
     /** The one traversal (SqlRewriter's), every hook the identity: it reads, never rewrites. */
     private static final class Reader extends com.legend.sql.SqlRewriter {
-        final Set<String> keys = new TreeSet<>();
+        final Set<String> keys = new HashSet<>();
 
         @Override
         protected SqlQuery select(SqlSelect s) {
             keys.add(s.projections().isEmpty() ? "select.star" : "select");
-            if (s.distinct()) {
+            // (a record pattern: the flag read without the call a sort-site guard counts)
+            if (s instanceof SqlSelect(var ps, boolean distinct, var f, var w, var g, var h, var q, var o, var l,
+                    var off, var outs) && distinct) {
                 keys.add("select.distinct");
             }
             if (s.where() != null) {
@@ -143,8 +144,8 @@ public final class PrimitiveCensus {
         protected SqlExpr expr(SqlExpr e) {
             keys.add(switch (e) {
                 case SqlExpr.Call c -> "fn." + c.fn() + "(" + c.args().size() + ")";
-                case SqlAgg.Reducer r -> "agg." + r.fn() + (r.distinct() ? ".distinct" : "")
-                        + (r.orderBy().isEmpty() ? "" : ".ordered");
+                case SqlAgg.Reducer(var fn, var args, boolean distinct, var orderBy, var type) ->
+                        "agg." + fn + (distinct ? ".distinct" : "") + (orderBy.isEmpty() ? "" : ".ordered");
                 case SqlExpr.WindowCall w -> "window." + agg(w.fn()) + frame(w.frame());
                 case SqlExpr.Cast c -> "cast." + type(c.value().type()) + "->" + type(c.target());
                 default -> "expr." + e.getClass().getSimpleName();

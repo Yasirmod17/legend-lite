@@ -1163,6 +1163,11 @@ class JavaEvalLedgerTest {
                     // CanonicalDivergence (probes consume a finished
                     // plan and count; nothing here produces a result).
                     "SqlTypeCensus.java",
+                    // the PRIMITIVE CENSUS (2026-10-12, the coverage map, docs/PRIMITIVE_COVERAGE_2026_10_12.md):
+                    // reads each executed plan's MIR primitives and counts them by the statement's outcome, under
+                    // a diagnostics switch only. Pure measurement beside SqlTypeCensus: no JDBC, no value
+                    // computed, nothing a verdict reads.
+                    "PrimitiveCensus.java",
                     // HARNESS-DELETION item 1 slice 2 (2026-08-31): the
                     // assert-verdict OBSERVER interface — one callback
                     // the runner supplies to score (count/attribute)

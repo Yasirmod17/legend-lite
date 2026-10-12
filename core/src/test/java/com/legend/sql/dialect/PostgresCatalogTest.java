@@ -121,9 +121,9 @@ class PostgresCatalogTest {
                 + "->filter(x|$x.ip->toOne()->contains('10.'))->select(~[id, ip, ia, j])").plan("t::RT").sql();
         // every Postgres type has a text form: an inet is searched as text, an array is shown as text,
         // and json is read as jsonb -- never cast an array to jsonb
-        assertTrue(sql.contains("strpos(CAST(\"t0\".\"ip\" AS VARCHAR), '10.')"), sql);
-        assertTrue(sql.contains("CAST(\"t0\".\"ia\" AS VARCHAR)"), sql);
-        assertTrue(sql.contains("CAST(\"t0\".\"j\" AS JSONB)"), sql);
+        assertTrue(sql.contains("strpos(CAST(\"t0\".ip AS VARCHAR), '10.')"), sql);
+        assertTrue(sql.contains("CAST(\"t0\".ia AS VARCHAR)"), sql);
+        assertTrue(sql.contains("CAST(\"t0\".j AS JSONB)"), sql);
     }
 
     @Test

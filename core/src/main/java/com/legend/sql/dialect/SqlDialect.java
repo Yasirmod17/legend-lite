@@ -68,6 +68,12 @@ public interface SqlDialect {
         return false;
     }
 
+    /** Whom the corpus's raw H2 text is translated for (RawSqlBoundary, where the translation lives): DuckDB's
+     *  flavor unless a dialect says otherwise. */
+    default RawSqlBoundary.Target rawTarget() {
+        return RawSqlBoundary.Target.DUCKDB;
+    }
+
     /** An effect segment's statements as ONE script (block-compiler stage 3): the
      *  target decides its transaction bracket INSIDE its dialect — DuckDB brackets
      *  the segment so a failure applies nothing (transactional DDL); H2 cannot roll

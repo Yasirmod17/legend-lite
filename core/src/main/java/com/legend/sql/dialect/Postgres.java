@@ -137,6 +137,12 @@ public final class Postgres extends AnsiSqlRenderer {
         return "ROLLBACK";
     }
 
+    /** The corpus's raw H2 text in DuckDB's flavor, its types Postgres's (DOUBLE PRECISION, no TINYINT). */
+    @Override
+    public RawSqlBoundary.Target rawTarget() {
+        return RawSqlBoundary.Target.POSTGRES;
+    }
+
     /** No native PIVOT: static pivots are emulated by the carrier pass; a dynamic
      * pivot needs a key-discovery round trip the browser planner cannot make. */
     @Override
@@ -599,7 +605,13 @@ public final class Postgres extends AnsiSqlRenderer {
      * columns by name. */
     @Override
     protected @com.legend.base.Nullable String implicitLabel(com.legend.sql.SqlSelect.Projection p) {
-        return p.out() != null ? aliasIdent(p.out().name()) : super.implicitLabel(p);
+        if (p.out() != null) {
+            return aliasIdent(p.out().name());
+        }
+        // a stored column read without an output is labeled as the store declared it (its result column keeps that
+        // case, as on every other dialect), not as Postgres folds the name it reads (physicalName)
+        return p.expr() instanceof SqlExpr.StoredRead r && r.column().origin() == com.legend.sql.OutputCol.Origin.PHYSICAL
+                ? aliasIdent(r.column().name()) : super.implicitLabel(p);
     }
 
     /** A NULL projected under a LIST slot is typed as the list (a bare NULL is text to Postgres, and
@@ -623,6 +635,48 @@ public final class Postgres extends AnsiSqlRenderer {
             return name;
         }
         return delimited(name);
+    }
+
+    /**
+     * A STORE's name as Postgres folds it (2026-10-12, the relational corpus on Postgres,
+     * docs/CLOUD_BACKENDS_PCT_2026_10_11.md §20). A name a store declares bare is case-insensitive -- the engine's
+     * convention, H2's -- and Postgres folds a bare name to lower case, so a physical name is spelled in lower case:
+     * bare where it may be, delimited where it must be (a keyword); it then names the table a bare {@code CREATE
+     * TABLE} made, as the engine's own unquoted SQL does, and the corpus's bare setup text. A name the store declared
+     * quoted ({@code "firstName"}) keeps its case. (Until 2026-10-12 every name was delimited as declared, which
+     * reached only tables made with that exact case.)
+     */
+    @Override
+    public String physicalName(String name) {
+        if (name.length() > 1 && name.charAt(0) == '"' && name.endsWith("\"")
+                && !name.substring(1, name.length() - 1).replace("\"\"", "").contains("\"")) {
+            return name;
+        }
+        String folded = name.toLowerCase(java.util.Locale.ROOT);
+        return BARE.matcher(folded).matches() && !reservedWords().contains(folded) ? folded : delimited(folded);
+    }
+
+    private static final java.util.regex.Pattern BARE = java.util.regex.Pattern.compile("[a-z_][a-z0-9_]*");
+
+    /** A DDL column the store declared bare is a {@link #physicalName} (the queries' spelling of it). */
+    @Override
+    protected String ddlIdentifier(String name, boolean declaredQuoted) {
+        return declaredQuoted ? super.ddlIdentifier(name, true) : physicalName(name);
+    }
+
+    /** A stored table, each part a {@link #physicalName}. */
+    @Override
+    protected String tableName(String name) {
+        int dot = name.indexOf('.');
+        return dot <= 0 ? physicalName(name)
+                : physicalName(name.substring(0, dot)) + "." + physicalName(name.substring(dot + 1));
+    }
+
+    /** A stored column is a {@link #physicalName}; a derived one (the query's own label) and one declared quoted
+     *  keep their spelling. */
+    @Override
+    protected String columnName(SqlExpr.Column c) {
+        return c.origin() == com.legend.sql.OutputCol.Origin.PHYSICAL ? physicalName(c.name()) : super.columnName(c);
     }
 
     @Override

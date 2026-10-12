@@ -901,3 +901,22 @@ What it does not do yet, and what a cloud's 50-300 ms round trip makes decisive 
 
 Postgres first (local, a template database is native, and its PCT lane is green), then the 77 on every lane, then
 the whole corpus on Snowflake, Databricks and BigQuery.
+
+**Postgres, the first step (measured 2026-10-12).** `//spec:corpus_on_postgres` runs the corpus's host pass on
+the embedded Postgres, a database per package (`spec/.../rcorpus/ServerWorkspaces.java`; `MinimalCorpus` names the
+lane, `-Drcorpus.backend=postgres`; `-Drcorpus.tests=<file>` runs a listed subset; a lane is held to its own fail
+roster alone, `MinimalCorpusTest.holdToLaneRoster`). The 77 covering tests: **52 pass, 25 fail**, every failure a
+Postgres gap PCT never reached -- jsonb collections and variants (the dialect's leg P4), a polymorphic `unknown` a
+literal leaves, jsonb delivered as the driver's `PGobject`, a `bit` column read as an integer -- which the next
+slices burn down. Two things it took first:
+
+- **The corpus's raw H2 text, for Postgres** (`RawSqlBoundary.Target`, chosen by `SqlDialect.rawTarget()`, the one
+  call site unchanged): DuckDB's flavor with Postgres's type names (`DOUBLE PRECISION`, no `TINYINT`), its bare
+  column names folded to lower case.
+- **A store's bare names fold to lower case on Postgres** (`Postgres.physicalName`, for tables, columns, schemas and
+  DDL alike): a name a store declares bare is case-insensitive -- the engine's convention, H2's -- and Postgres
+  folds a bare name to lower case, so the dialect spells it `addresstable.id`, bare where it may be. Until now it
+  was delimited as declared (`"addressTable"."ID"`), which reaches only a table made with that exact case: not the
+  corpus's bare setup text, nor a table a bare `CREATE TABLE` made (the engine's own unquoted SQL). A name a store
+  declares quoted keeps its case; a result column keeps its declared label. The Postgres PCT lanes (both channels),
+  `//core:postgres_arm_test` and core's tests stay green; the goldens that pinned the quoted spelling moved with it.
