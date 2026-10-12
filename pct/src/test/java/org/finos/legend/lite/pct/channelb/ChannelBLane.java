@@ -119,11 +119,12 @@ final class ChannelBLane {
             // 445 -> 459 and 201 -> 202 (2026-10-12, ClickHouse's own pins burned down,
             // docs/PCT_PIN_WORKAROUNDS_2026_10_12.md): as-of and one-sided joins, correlated IN and LATERAL
             // decorrelated, Float RANGE offsets, a column's quantile level, the connection's query size, a session for
-            // the system database, typed empty lists and struct fields
+            // the system database, typed empty lists and struct fields. 136 -> 137 and 459 -> 461 (2026-10-12, the
+            // user's ask): an absent instance as a struct field's Variant, a JSON null kept null through a list
             "clickhouse", Map.of(
                     "Essential", new Pins(333, 3, 1),
-                    "Grammar", new Pins(136, 0, 0),
-                    "Relation", new Pins(459, 7, 0),
+                    "Grammar", new Pins(137, 0, 0),
+                    "Relation", new Pins(461, 7, 0),
                     "Standard", new Pins(202, 0, 0),
                     "Unclassified", new Pins(93, 0, 0)));
 

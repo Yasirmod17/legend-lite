@@ -42,11 +42,7 @@ public class Test_LegendLite_ClickHouse_GrammarFunctions_PCT extends PCTReportCo
             one("meta::pure::functions::boolean::tests::equality::eq::testEqPrimitiveExtension_Function_1__Boolean_1_", "\"unknown type 'meta::pure::functions::boolean::tests::equalitymodel::ExtendedInteger' in @meta::pure::functions::boolean::tests::equalitymodel::ExtendedInteger\""),
             one("meta::pure::functions::boolean::tests::equality::equal::testEqualNonPrimitive_Function_1__Boolean_1_", "\"Assert failed\""),
             one("meta::pure::functions::boolean::tests::equality::equal::testEqualPrimitiveExtension_Function_1__Boolean_1_", "\"unknown type 'meta::pure::functions::boolean::tests::equalitymodel::ExtendedInteger' in @meta::pure::functions::boolean::tests::equalitymodel::ExtendedInteger\""),
-            one("meta::pure::functions::collection::tests::map::testMapRelationshipFromOneToOne_Function_1__Boolean_1_", "\"unbound variable '$address'\""),
-            // CLICKHOUSE'S OWN LIMIT: a Tuple is never NULL (Nullable(Tuple) is refused, measured), so an unset
-            // property of a class type has no value there (a Tuple of NULLs would be an instance): refused by name
-            one("meta::pure::functions::collection::tests::map::testMapInstance_Function_1__Boolean_1_", "\"an absent instance as a struct field reached ClickHouse: a Tuple is never NULL (Nullable(Tuple) is refused), and a Tuple of NULLs would be an instance: address\""),
-            one("meta::pure::functions::lang::tests::letFn::testAssignNewInstance_Function_1__Boolean_1_", "\"an absent instance as a struct field reached ClickHouse: a Tuple is never NULL (Nullable(Tuple) is refused), and a Tuple of NULLs would be an instance: address\"")
+            one("meta::pure::functions::collection::tests::map::testMapRelationshipFromOneToOne_Function_1__Boolean_1_", "\"unbound variable '$address'\"")
     );
 
     public static Test suite() {

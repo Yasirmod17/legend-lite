@@ -17,7 +17,7 @@ the database's gaps, and no dialect work removes them. A database's **own** pins
 | MySQL | 54 | 34 | **20** |
 | MariaDB | 51 | 34 | **17** |
 | SQLite | 49 | 34 | **15** |
-| ClickHouse | 65 → **42** | 34 | 31 → **8** (burned down, below) |
+| ClickHouse | 65 → **38** | 34 | 31 → **4** (burned down, below) |
 | BigQuery | 42 | 34 | **8** |
 | Trino | 40 | 34 | **6** |
 | Databricks | 35 | 34 | **1** |
@@ -29,7 +29,7 @@ DuckDB itself pins 34. The ClickHouse and Postgres rows were re-measured after t
 
 ## ClickHouse: its 31 own pins, and a workaround for each
 
-**Outcome (later on 2026-10-12): 23 of the 31 fixed, and 8 kept pinned.** Each fix is in `ClickHouse.java` except two
+**Outcome (later on 2026-10-12): 27 of the 31 fixed, and 4 kept pinned.** Each fix is in `ClickHouse.java` except two
 connection settings, and is recorded in `docs/CLOUD_BACKENDS_PCT_2026_10_11.md` §19.1. The table below is the plan as
 probed. Where the fix took another shape than the probe, its row says so.
 
@@ -40,7 +40,7 @@ lane.
 
 | pins | what ClickHouse cannot do | the workaround, probed | effort | outcome |
 |---:|---|---|---|---|
-| 6 | **A Tuple field of unknown type**, from an unset property: a Tuple's fields are typed, and `Nullable(Tuple)` is refused (probed: "cannot be inside Nullable type"). Tests: `testEqVarIdentity`, `testEqualVarIdentity`, `testContainsNonPrimitive`, `testMapInstance`, `testCoalesceInPreFilter`, `testAssignNewInstance` | Type the unknown field as **`Dynamic`**. Probed: `tuple(1, CAST(NULL AS Dynamic))` is `Tuple(UInt8, Dynamic)`, its NULL field reads as NULL, and `Dynamic = Dynamic` compares. **To check:** that the JDBC driver (0.9.6) decodes a `Dynamic` field. | medium | fixed 4 without `Dynamic`: the field's DECLARED type (`StructLit.Field.declared`), an unset list as the empty list, and two instances compared as one-element arrays (a Tuple's `=` answers NULL on a NULL field). The 2 whose unset property is a class (a NULL Tuple) are refused by name and stay pinned; `testEqualNonPrimitive` now fails as on DuckDB |
+| 6 | **A Tuple field of unknown type**, from an unset property: a Tuple's fields are typed, and `Nullable(Tuple)` is refused (probed: "cannot be inside Nullable type"). Tests: `testEqVarIdentity`, `testEqualVarIdentity`, `testContainsNonPrimitive`, `testMapInstance`, `testCoalesceInPreFilter`, `testAssignNewInstance` | Type the unknown field as **`Dynamic`**. Probed: `tuple(1, CAST(NULL AS Dynamic))` is `Tuple(UInt8, Dynamic)`, its NULL field reads as NULL, and `Dynamic = Dynamic` compares. **To check:** that the JDBC driver (0.9.6) decodes a `Dynamic` field. | medium | fixed, all 6: the field's DECLARED type (`StructLit.Field.declared`), an unset list as the empty list, two instances compared as one-element arrays (a Tuple's `=` answers NULL on a NULL field), and a field that is itself a struct carried as its `Variant(Tuple(...))`, NULL where the instance is absent and read through `variantElement` (the user's ask, measured). `testEqualNonPrimitive` now fails as on DuckDB |
 | 4 | **An empty list of no type** (`Nullable(Nothing)`), which nothing can zip or project into. Tests: `testZip*ListEmpty` ×3, `testSimpleProjectWithEmpty` | An empty list is a **typed empty array**, never a NULL. Probed: `arrayZip([], [])` and `arrayZip(CAST([] AS Array(Nullable(Int64))), ...)` both answer `[]`. The NULL comes from the dialect's emulation, and the failing SQL needs a `dump-sql` look. | small | fixed: the slot's type for the empty list, at the projection's unnest and the ARRAY JOIN |
 | 2 | **An as-of join with no equality**: ClickHouse needs one besides the inequality. Tests: `testSimpleAsOfJoin`, `..._MultipleExpressions` | A **constant key on both sides**: `0 AS k` in each, `ON l.k = r.k AND l.t >= r.t`. Probed: the right answer. A second alternative is the window pick Databricks uses (`AsOfAsPick`). | small | fixed, by another key: a constant is folded away and refused again, so each side's operand hashed times zero |
 | 1 | **An outer join whose ON reads both sides outside an equality**: refused under `join_use_nulls`, even with `allow_experimental_join_condition` (probed). Test: `testNestedJoinArithmeticComparisonExpression` | Join **without** `join_use_nulls` (probed: the condition is accepted), plus a marker column `1 AS __m` on the optional side. A missing row reads `__m = 0`, and each of its columns becomes `if(__m = 1, col, NULL)`. Scope: per statement. | medium | kept pinned |
@@ -51,19 +51,19 @@ lane.
 | 1 | **A quantile's level must be a constant.** Test: `testPercentile` | **`arraySort(groupArray(x))` and linear interpolation** at `(n - 1) * level`. Probed: 3.25, the same as `quantileExactInclusive(0.25)`. | small | fixed as probed |
 | 1 | **A statement over `max_query_size`** (256 KiB), refused before its own SETTINGS clause is read. Test: `testFormatFloat` | Set **`max_query_size` on the connection** (a JDBC/HTTP parameter), not in the statement. | small | fixed as probed, with the AST limits too |
 | 1 | **No session over HTTP**, so no session-private table and nowhere for the system database. Test: getAll `testBasic` | ClickHouse's HTTP interface keeps a session by **`session_id`**, and temporary tables live in it. A session-private scratch database is the alternative. **To check:** how the 0.9.6 driver passes `session_id`. | medium | fixed: the system connection's `clickhouse_setting_session_id` (the driver passes it as an HTTP parameter), a TEMPORARY table in that session |
-| 2 | **A list is never NULL** (`Nullable(Array)` is refused), so a JSON `null` read as a list becomes `[]`. Tests: `testVariantColumn_distinct_removeDuplicates`, `testVariantColumn_slice` | Carry a nullable list as **`Variant(Array(T))`**. Probed: it holds a NULL (`isNull` is 1). Every list function then needs `variantElement`, so this is a wide change for two tests. | hard | kept pinned |
+| 2 | **A list is never NULL** (`Nullable(Array)` is refused), so a JSON `null` read as a list becomes `[]`. Tests: `testVariantColumn_distinct_removeDuplicates`, `testVariantColumn_slice` | Carry a nullable list as **`Variant(Array(T))`**. Probed: it holds a NULL (`isNull` is 1). Every list function then needs `variantElement`, so this is a wide change for two tests. | hard | fixed another way: a list read from a JSON value is NULL exactly where the value is JSON's null, so where it is written back (`toVariant`) through NULL-strict list functions, it is NULL there; a raising branch is kept. The `Variant(Array(T))` carrier was not needed: ClickHouse's list functions refuse a Variant (measured) |
 | 3 | **Dates only from 1900 to 2299.** `Date32` and `DateTime64` clamp silently, so the dialect refuses rather than answer for another date. Tests: `testBetween_{Date,DateTime,StrictDate}` with the year 1032 | **None cheap.** A date would have to be carried as a number (`toDaysSinceYearZero` exists) or as text on every path. Keep them pinned: the refusal is honest. | — | kept pinned |
 
 **Summary for ClickHouse:**
 
 - **The plan:** 9 small and 17 medium, probed shapes that should move 26 of the 31; 5 to stay pinned.
-- **The outcome:** 23 fixed. Of the 26, `testNestedJoinArithmeticComparisonExpression` stayed pinned (no per-join
-  `join_use_nulls`), and 2 unset class-typed properties are refused by name instead (a Tuple is never NULL, and a
-  Tuple of NULLs would be an instance that is not there).
+- **The outcome:** 27 fixed: the 26 planned less `testNestedJoinArithmeticComparisonExpression` (no per-join
+  `join_use_nulls`), plus the two nullable-list pins. An absent instance is a struct field's `Variant(Tuple(...))`,
+  which holds NULL (the user's ask, after a first pass refused it by name).
 - **One experimental setting:** `allow_experimental_correlated_subqueries = 1`, for the IN rewrite's correlated
   EXISTS, written only into the statements that hold it. It answers false for an outer row whose correlated column
   is NULL (measured), so the rewrite is limited to null-rejecting filters. `Dynamic` was not needed.
-- **8 stay pinned:** the dates (3), nullable lists (2), the outer join's residual (1) and the absent instances (2).
+- **4 stay pinned:** the dates (3) and the outer join's residual (1).
 - **None of the 34 platform pins is ClickHouse's work.**
 
 ## Postgres: its 75 own pins (2026-10-12)

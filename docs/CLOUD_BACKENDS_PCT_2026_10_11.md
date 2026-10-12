@@ -863,7 +863,7 @@ x86_64, the one platform with a pinned build. The lanes are `manual`, in `//gate
 
 The user asked for each of ClickHouse's 31 own pins to be worked: why it fails, a workaround probed on the server, then
 the fix (`docs/PCT_PIN_WORKAROUNDS_2026_10_12.md` has the probes). **65 pins become 42; ClickHouse's own 31 become
-8**, and the other 34 are the platform's (pinned on DuckDB too). Channel B: 333 / 3 / 1, 136 / 0 / 0, 459 / 7 / 0,
+8** (then 38 and 4, below), and the other 34 are the platform's (pinned on DuckDB too). Channel B: 333 / 3 / 1, 136 / 0 / 0, 459 / 7 / 0,
 202 / 0 / 0, 93 / 0 / 0. Every fix is in `ClickHouse.java` except two connection settings, and changes no other
 dialect's SQL.
 
@@ -889,13 +889,20 @@ still refused by the server. The LATERAL fix decorrelates into a join, so it nee
 that projects its own columns only (an aggregate or a window would see the source before the filter). The two connection settings are the test harness's (the product has
 no ClickHouse connector yet): the connector the dialect-leak plan's P5 builds carries both.
 
-**What stays pinned (8), each a refusal by name or a measured difference:**
+**Then 4 more, the same day, at the user's ask:**
 
-- an unset property of a class type (2, `testMapInstance`, `testAssignNewInstance`): a Tuple is never NULL, and a Tuple
-  of NULLs would be an instance that is not there, so the dialect refuses it ("an absent instance as a struct field");
+- an absent instance (2, `testMapInstance`, `testAssignNewInstance`): a struct field that is itself a struct is its
+  `Variant(Tuple(...))`, which holds NULL, read through `variantElement` (a NULL instance's fields read NULL). Measured
+  first: a list may mix present and absent instances, array equality, `JSONExtract` and `toJSONString` all take it;
+- a JSON null read as a list (2, `testVariantColumn_slice`, `..._distinct_removeDuplicates`): the list is NULL exactly
+  where its JSON value is null, so where it is written back as JSON through NULL-strict list functions, it is NULL
+  (a raising branch kept). `Variant(Array(T))` itself would not do: every list function refuses a Variant (measured).
+
+Channel B then: 333 / 3 / 1, 137 / 0 / 0, 461 / 7 / 0, 202 / 0 / 0, 93 / 0 / 0.
+
+**What stays pinned (4):**
+
 - dates outside 1900 to 2299 (3): `Date32` and `DateTime64` clamp, silently;
-- a list is never NULL (2): a JSON null read as a list is `[]`; carrying it as `Variant(Array(T))` would touch every
-  list function;
 - an outer join whose ON reads both sides outside an equality (1): refused under `join_use_nulls`, which the missing
   side's NULLs need for the whole statement.
 

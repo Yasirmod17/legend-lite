@@ -606,13 +606,21 @@ public final class ClickHouse extends AnsiSqlRenderer {
         return "Map(" + notNullable(key) + ", " + value + ")";
     }
 
+    /** A Tuple; a field that is itself a struct is its {@code Variant}, which holds NULL (an absent instance: a Tuple
+     *  is never NULL, measured) and is read through {@link #structGet}. */
     @Override
     protected String structTypeName(List<java.util.Map.Entry<String, String>> fields) {
         StringBuilder sb = new StringBuilder("Tuple(");
         for (int i = 0; i < fields.size(); i++) {
-            sb.append(i > 0 ? ", " : "").append(fields.get(i).getKey()).append(" ").append(fields.get(i).getValue());
+            sb.append(i > 0 ? ", " : "").append(fields.get(i).getKey()).append(" ")
+                    .append(fieldTypeName(fields.get(i).getValue()));
         }
         return sb.append(")").toString();
+    }
+
+    /** A struct field's spelled type: a Tuple's is its Variant, anything else itself. */
+    private static String fieldTypeName(String type) {
+        return type.startsWith("Tuple(") ? "Variant(" + type + ")" : type;
     }
 
     private static String notNullable(String type) {
@@ -858,20 +866,18 @@ public final class ClickHouse extends AnsiSqlRenderer {
     protected SqlWriter structLit(SqlWriter writer, SqlExpr.StructLit st) {
         List<String> types = new ArrayList<>();
         for (SqlExpr.StructLit.Field f : st.fields()) {
-            SqlType t = fieldType(f);
-            if (f.value() instanceof SqlExpr.NullLit && t instanceof SqlType.Struct) {
-                throw new DialectCapability("an absent instance as a struct field reached ClickHouse: a Tuple is never"
-                        + " NULL (Nullable(Tuple) is refused), and a Tuple of NULLs would be an instance: " + f.name());
-            }
-            types.add(castTypeName(t));
+            types.add(fieldTypeName(castTypeName(fieldType(f))));
         }
         writer.append("CAST(tuple(");
         for (int i = 0; i < st.fields().size(); i++) {
             SqlExpr.StructLit.Field f = st.fields().get(i);
             writer.append(i > 0 ? ", " : "");
-            // an absent list is the empty one (a list is never NULL here)
             if (f.value() instanceof SqlExpr.NullLit && fieldType(f) instanceof SqlType.Array) {
+                // an absent list is the empty one (a list is never NULL here)
                 writer.append("CAST([] AS " + types.get(i) + ")");
+            } else if (fieldType(f) instanceof SqlType.Struct) {
+                // an instance as its Variant: NULL where it is absent
+                writer.append("CAST(").expr(f.value(), 0).append(" AS " + types.get(i) + ")");
             } else {
                 writer.expr(f.value(), 0);
             }
@@ -898,6 +904,11 @@ public final class ClickHouse extends AnsiSqlRenderer {
     @Override
     protected SqlWriter structGet(SqlWriter writer, SqlExpr.StructGet g) {
         String field = g.field().matches("[0-9]+") ? g.field() : stringLit(g.field());
+        if (typeOf(g) instanceof SqlType.Struct st) {
+            // a struct-typed field is its Variant (structTypeName): read as the Tuple, NULL fields where it is absent
+            return writer.append("variantElement(tupleElement(").expr(g.source(), 0).append(", ").append(field)
+                    .append("), ").append(stringLit(castTypeName(st))).append(")");
+        }
         return writer.append("tupleElement(").expr(g.source(), 0).append(", ").append(field).append(")");
     }
 
@@ -1229,7 +1240,78 @@ public final class ClickHouse extends AnsiSqlRenderer {
         if (typeOf(a.get(0)) == SqlType.Scalar.JSON) {
             return writer.expr(a.get(0), 0);
         }
-        return writer.append("toJSONString(").expr(a.get(0), 0).append(")");
+        SqlExpr origin = nullOrigin(a.get(0));
+        return origin != null ? nullAwareJson(writer, a.get(0), origin)
+                : writer.append("toJSONString(").expr(a.get(0), 0).append(")");
+    }
+
+    /** The list functions that answer NULL for a NULL list (DuckDB's), each over its first argument. */
+    private static final java.util.Set<SqlFn> NULL_STRICT_LISTS = java.util.Set.of(SqlFn.LIST_SLICE, SqlFn.LIST_FILTER,
+            SqlFn.LIST_TRANSFORM, SqlFn.LIST_SORT, SqlFn.LIST_SORT_DESC, SqlFn.LIST_REVERSE, SqlFn.LIST_DISTINCT,
+            SqlFn.LIST_TAIL, SqlFn.LIST_INIT);
+
+    /**
+     * The JSON value a list was read from, when the list is NULL exactly where that value is a JSON null: the
+     * value's own list ({@code CAST(json AS Array)}), a NULL-strict list function of such a list, or a CASE whose
+     * branches that do not raise are such lists of one value. A list is never NULL here ({@code Nullable(Array)} is
+     * refused, measured), so the JSON null became {@code []}, and DuckDB's NULL list is only told from the empty one
+     * by the value it came from. Null when the list is no such list.
+     */
+    private static @com.legend.base.Nullable SqlExpr nullOrigin(SqlExpr e) {
+        if (e instanceof SqlExpr.Cast c && c.target() instanceof SqlType.Array
+                && typeOf(c.value()) == SqlType.Scalar.JSON) {
+            return c.value();
+        }
+        if (e instanceof SqlExpr.Call c && NULL_STRICT_LISTS.contains(c.fn()) && !c.args().isEmpty()) {
+            return nullOrigin(c.args().get(0));
+        }
+        if (e instanceof SqlExpr.Case c) {
+            SqlExpr origin = null;
+            List<SqlExpr> branches = new ArrayList<>();
+            c.whens().forEach(w -> branches.add(w.then()));
+            if (c.otherwise() != null) {
+                branches.add(c.otherwise());
+            }
+            for (SqlExpr b : branches) {
+                if (isRaise(b)) {
+                    continue;
+                }
+                SqlExpr o = nullOrigin(b);
+                if (o == null || origin != null && !origin.equals(o)) {
+                    return null;
+                }
+                origin = o;
+            }
+            return origin;
+        }
+        return null;
+    }
+
+    /** {@code x}'s JSON, NULL where its list is DuckDB's NULL list (its JSON value null): inside a CASE, each branch so,
+     *  a raising branch kept (a raise is a value of any type: Nullable(String) here). */
+    private SqlWriter nullAwareJson(SqlWriter writer, SqlExpr x, SqlExpr origin) {
+        if (x instanceof SqlExpr.Case c) {
+            writer.append("(CASE");
+            for (SqlExpr.Case.When w : c.whens()) {
+                writer.append(" WHEN ").expr(w.condition(), 0).append(" THEN ");
+                branchJson(writer, w.then(), origin);
+            }
+            if (c.otherwise() != null) {
+                writer.append(" ELSE ");
+                branchJson(writer, c.otherwise(), origin);
+            }
+            return writer.append(" END)");
+        }
+        return writer.append("if(coalesce(JSONType(").expr(origin, 0).append("), 'Null') = 'Null', NULL, toJSONString(")
+                .expr(x, 0).append("))");
+    }
+
+    private void branchJson(SqlWriter writer, SqlExpr branch, SqlExpr origin) {
+        if (isRaise(branch)) {
+            writer.append("CAST(").expr(branch, 0).append(" AS Nullable(String))");
+        } else {
+            nullAwareJson(writer, branch, origin);
+        }
     }
 
     /** A key (a member, NULL when absent) or a 0-based index (-1 the last, past the end NULL) of a JSON value's text:
