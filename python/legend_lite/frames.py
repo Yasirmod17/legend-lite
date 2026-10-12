@@ -3,7 +3,7 @@ queries the compiler plans run by DuckDB, answered as Arrow.
 
     frames = Frames()
     trades = frames.register('trades', df)              # Live: every query reads df as it is then
-    trades.execute("->filter(x|$x.desk == 'FX')")       # a pyarrow.Table
+    trades.execute("->filter(x|$x.desk == 'FX')")       # a pyarrow.Table, typed by the plan
 
 A frame is anything Arrow reads: a pandas or polars DataFrame, a pyarrow Table, any object that exports
 Arrow -- or a function returning one, so a Live table follows a frame you rebuild. It is handed to DuckDB
@@ -15,6 +15,15 @@ columns changed, the model is written again. SNAPPED copies it into DuckDB once:
 never changes. Either way the frame is an ordinary DuckDB table or view named as registered, so the
 compiler reads its catalog and writes its model exactly as it does for a DataCube table
 (``table_model``): one writer.
+
+AN ANSWER IS TYPED BY ITS PLAN (docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md §15.3a), as the tab's executor types its
+own (engine-client's ``typedByPlan``): each column carries the compiler's type (its field's ``legend.type``), a column
+the plan does not type is refused, and each value is exact, as the database stored it -- an Integer an int64 (a sum
+DuckDB answers as an exact decimal included), keeping that exact decimal only past 64 bits, never wrong; a Decimal
+exact; a DateTime as stored, in UTC (the session's zone), to the microsecond; a Variant as the planner's SQL answers it
+-- its JSON text, or, a STRUCT or a LIST under ``SELECT *``, as stored, until the planner answers every Variant as JSON
+(§15.3a: the Compiler Rewrite line's egress fix). ``to_pandas`` keeps them so: an Integer or a Boolean with nulls stays an integer or a boolean (pandas'
+nullable types), never a float or an object.
 """
 
 from __future__ import annotations
@@ -42,6 +51,50 @@ _OWN = '__legend_lite_'
 
 # the catalog question's columns, in its order, as the model writer names them (compiler.catalog_columns_sql)
 _CATALOG_FIELDS = ('name', 'dataType', 'logicalType', 'precision', 'scale', 'notNull')
+
+# the field metadata that carries a result column's type, as the compiler typed it
+TYPE_KEY = b'legend.type'
+
+
+def _integer(column: pa.ChunkedArray) -> pa.ChunkedArray:
+    """An Integer column as int64, from any integer the database answers with (a SUM's exact decimal(38, 0)
+    included); one with a value past 64 bits as the database stored it, exact."""
+    kind = column.type
+    if pa.types.is_int64(kind):
+        return column
+    if pa.types.is_integer(kind) or pa.types.is_null(kind) or (pa.types.is_decimal(kind) and kind.scale == 0):
+        try:
+            # a safe cast: one past 64 bits refuses it, never wrapped, and the exact value is kept
+            return column.cast(pa.int64())
+        except pa.ArrowInvalid:
+            return column
+    return column
+
+
+def typed_by_plan(rows: pa.Table, plan: compiler.Plan) -> pa.Table:
+    """A planned query's rows, typed by its plan: each column the compiler's type (``TYPE_KEY``), its values exact (an
+    Integer an int64). A result column the plan does not type is refused: the two disagree about the query's shape, a
+    bug to surface, never a gap to fill (engine-client's ``typedByPlan``)."""
+    types = {c.name: c.type for c in plan.columns}
+    fields, columns = [], []
+    for field, column in zip(rows.schema, rows.columns):
+        typed = types.get(field.name)
+        if typed is None:
+            raise RuntimeError(f"the plan does not type the result column '{field.name}': {plan.sql}")
+        if typed == 'Integer':
+            column = _integer(column)
+        fields.append(pa.field(field.name, column.type, field.nullable, {**(field.metadata or {}), TYPE_KEY: typed}))
+        columns.append(column)
+    return pa.Table.from_arrays(columns, schema=pa.schema(fields, rows.schema.metadata))
+
+
+def to_pandas(rows: pa.Table) -> Any:
+    """Typed rows as a pandas DataFrame, each value kept as it is: an integer an integer and a boolean a boolean, nulls
+    and all (pandas' nullable ``Int64`` and ``boolean``, where its own would make them floats and objects), a Decimal
+    a ``Decimal``, a StrictDate a ``date``."""
+    import pandas as pd
+    nullable = {pa.int64(): pd.Int64Dtype(), pa.bool_(): pd.BooleanDtype()}
+    return rows.to_pandas(types_mapper=nullable.get)
 
 
 def _arrow(frame: Any) -> pa.Table:
@@ -167,11 +220,10 @@ class Table:
             return self._model().plan(self._tree(query), self.runtime)
 
     def execute(self, query: str | dict[str, Any]) -> pa.Table:
-        """Runs a query over this table (as ``plan`` takes it) and answers as an Arrow table."""
+        """Runs a query over this table (as ``plan`` takes it) and answers as an Arrow table, typed by its plan."""
         with self._frames._lock:
             self._ready()
-            planned = self._model().plan(self._tree(query), self.runtime)
-            return self._frames.connection.execute(planned.sql).to_arrow_table()
+            return self._frames.run(self._model().plan(self._tree(query), self.runtime))
 
 
 class Frames:
@@ -236,6 +288,13 @@ class Frames:
                 raise
             self._tables[key] = table
             return table
+
+    def run(self, plan: compiler.Plan) -> pa.Table:
+        """PYTHON'S EXECUTOR: a plan's SQL run on this database, its rows typed by the plan (``typed_by_plan``) --
+        a table's query, a grid's rows, and a page's grid planned and run in Python (the engine's plan-and-run.json).
+        Only SQL a planner wrote for this database comes here."""
+        with self._lock:
+            return typed_by_plan(self.connection.execute(plan.sql).to_arrow_table(), plan)
 
     @contextlib.contextmanager
     def serving(self) -> Iterator[dict[str, str]]:

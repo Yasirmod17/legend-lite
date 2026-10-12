@@ -721,11 +721,40 @@ implementing it in its own language, the conformance suite (15.6) holding them a
 - each Pure type's values follow one rule on every host (an exact decimal stays exact; a timestamp is UTC to the
   microsecond; a Variant is its JSON value).
 
-As it stands: **Java's** execution (core's `exec`, step K) returns an `ExecutionResult` typed by the plan.
-**TypeScript's** executors keep `QueryEngine.execute`'s promise ("every column typed by the plan") through
-`engine-client`'s `typedByPlan`; a grid on Python reads Python's rows with that same reader, since its values become
-the page's. **Python's own** results do not yet: `Frames.execute` and `grid.to_pandas()` give DuckDB's Arrow types, not
-the compiler's. Closing that is part of this work (15.8), the Python executor PlanAndRun adds.
+As it stands (measured 2026-10-12):
+
+- **TypeScript's** executors keep `QueryEngine.execute`'s promise ("every column typed by the plan") through
+  `engine-client`'s `typedByPlan`. Each column carries the plan's type, matched by name, and a column the plan does not
+  type is refused. Each value stays exact, as stored (`values.ts`). A grid on Python reads Python's rows with that same
+  reader, since its values become the page's.
+- **Python's** executor, `Frames.run`, types every result through `frames.typed_by_plan`, under the same rules:
+  - It covers `Table.execute`, `Grid.to_pandas()` (`gridRelation`'s Pure, planned in Python over the frame's held
+    model) and PlanAndRun's rows before they go to the page. So the cube corpus's differential (15.6) runs through it
+    too, then through the page's reader.
+  - Each column carries the plan's type as its Arrow field's `legend.type`.
+  - Values stay as stored, exact, with one exception: an Integer is an int64, a DuckDB SUM's decimal(38, 0) included.
+    A value past 64 bits keeps that exact decimal. That is the column-wide counterpart of TypeScript's "a number while
+    it is one, a bigint beyond".
+  - `frames.to_pandas` (and `GridView.to_pandas`) keeps an Integer and a Boolean with nulls as pandas' nullable
+    `Int64` and `boolean`, never a float or an object.
+- **Java's** execution (core's `exec`, step K) is not yet the contract's reference. Its `ExecutionResult` names its
+  columns by the plan by position, checking only the count. It keeps each value as the driver gives it, decoded by the
+  plan's SQL type:
+  - an INT32 stays an `Integer`, and a DECIMAL(38, 0) becomes a `Long`;
+  - a DateTime is a zone-less `LocalDateTime`, as stored;
+  - a DuckDB Variant is a `JsonNode`, its JSON text;
+  - StrictTime has no case (`exec/Executor.java`).
+  This was told to the Plan Gen line, 2026-10-12.
+- **A Variant is not yet one value.** A Variant stored as a STRUCT or a LIST (a nested JSON file's column) comes back
+  as JSON text only when the planner's SQL projects it (`CAST(t0.customer AS JSON)`). Under `SELECT *` (the bare
+  source, a limit, a filter, a sort) the database answers the STRUCT. The tab's reader renders that as JSON
+  (`toScalar`), which until 2026-10-12 quoted a nested integer (`{"tier":"2"}`, now `{"tier":2}`). Python's own
+  results give a dict.
+  - The fix is the planner's, so that every Variant is answered as the database's JSON and no executor renders JSON.
+  - The Compiler Rewrite line took it (2026-10-12): the variant storage census's V2 hook (DuckDB's `columnRef`
+    renders a stored Variant as `CAST(col AS JSON)`) never fires for a star frame, which names no column. So at the
+    statement's egress, a star frame whose outputs include a stored Variant lists them by name. No other SQL changes.
+  - It lands after PR #31.
 
 Where this moves to (the Plan Gen line, 2026-10-12: "it's the right layer, it's already designed, and I wouldn't wait
 for drift"): the plan already describes each result column as `ExecutionPlan.TdsResult`'s `TdsColumn(name, type,
@@ -784,3 +813,33 @@ identical in their columns, types and values, with the tab's local pair the refe
 
 The plan step's crossing to Python is planner protocol, so it is reviewed by the Plan Gen line and the Compiler
 Rewrite line, then audited before it lands.
+
+### 15.9 As built (2026-10-12, on datacube/one-app-2b, in PR #31)
+
+- **The runner**: `runner.ts`'s `PlanAndRun` runs over a host's `PlanAndRunHost` (its planner, `planAndRun`, `stream`).
+  The tab's host is `localHost(planner, engine)`: plan in the page, run on the connection's engine.
+  - `PlanThenRun` is PlanAndRun over it. The tab's grids run through it: local files, a live warehouse, a snap's copy.
+  - `lite-planner.ts`'s `planRequest` and `readPlan` are the one plan request and the one reading of a plan's answer.
+    Every host uses them.
+- **Python's pages**: each grid's rows come from `pythonRunner` (`services/python-host.ts`).
+  - Planning: the page's own `LitePlanner` over `pythonWorker`. Hold and release are kept in the page, and a held kind
+    sends the model's text, so no handle crosses hosts.
+  - One `POST plan-and-run.json` per grid. Python plans against the model it holds for that frame or file
+    (`Frames.held_for`), runs only that SQL (R4) and types the rows (`Frames.run`).
+  - The answer is Arrow IPC, the planner's answer in its schema's metadata (`legend.plan`). The page reads it as its
+    planner reads its own. A refusal is JSON: the plan, and why.
+  - Every other planner question goes over `planner.json`, answered by the native library from the planner protocol's
+    table (`legend_lite/_planner.py`, moved out of `_headless.py`).
+  - A page's file table and remote view hold their models while kept (`Frames.keep_file`), as a frame does.
+- **Python's own results** are typed by the plan (15.3a). `Grid.to_pandas()` plans `gridRelation` in Python;
+  the bundle's `gridSql` is gone.
+- **Proof** (`python_engine_test`, 34 checks; `frames_test`; `headless_test`):
+  - every cube case answers the same through PlanAndRun on Python and in the tab, SQL included;
+  - six reader files answer the same on Python's page and in the tab, read by `upload.ts` into each host's DuckDB and
+    planned and run on each: a byte-order mark, CRLF and quoting, Latin-1, dates and booleans, JSON Lines, and a
+    BOM'd JSON array of nested values, its JSON pinned;
+  - a nested-JSON example opens on Python's page;
+  - each typing rule (each Pure type, a SUM past 64 bits, an untyped column refused, pandas' nullable types).
+- **Budget**: the grid page's gzipped script grew 390,817 -> 391,138 bytes (PlanAndRun and the shared plan
+  reading), and its budget went 391,000 -> 392,000. Gzip-compressed files are 15.7's encoding follow-up, read by
+  neither host today.

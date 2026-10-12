@@ -76,8 +76,12 @@ function startup(bundle = join(DEMO, 'bundle.js')): string[] {
  *  389,000 -> 391,000 (2026-10-12, DataCube one app, step 2a: Python's pages open the app): what the app does for a host
  *  whose rows are its own -- the frame as a source, a grid's rows in the host's shape, following another editor of the
  *  page and reporting to it (src/app/datacube-app.ts, src/app/sources.ts), the picker's sections as the services offer
- *  them, and the status line's look moved into the app's styles. Measured 390,035, step 1 before it 388,056 (+1,979). */
-const BUDGET = 391_000;
+ *  them, and the status line's look moved into the app's styles. Measured 390,035, step 1 before it 388,056 (+1,979).
+ *  391,000 -> 392,000 (2026-10-12, DataCube one app, PlanAndRun, docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md §15): every
+ *  host's grid through one runner -- PlanAndRun over a host's plan-and-run (runner.ts, the tab's localHost), the plan's
+ *  request and reading shared by every host (lite-planner.ts planRequest, readPlan). Measured 391,138, phase 2 before
+ *  it 390,817 (+321). */
+const BUDGET = 392_000;
 
 /** The engine page's (demo/engine.html: DataCube on Python's engine, which runs its queries) startup download,
  *  gzipped: no DuckDB-WASM and no compiler. Set 2026-10-08 at its first measure (288,876 bytes) and the app's headroom

@@ -580,10 +580,10 @@ class Engine:
             planned = library().call('lite_plan_json_held', held.handle, asked['lambda'], asked['runtime'])
             if not planned.startswith('OK\n'):
                 return _planned({'plan': planned})
-            sql = json.loads(planned[3:])['sql']
             try:
-                rows = self.frames.connection.execute(sql).to_arrow_table()
-            except duckdb.Error as refused:
+                # Python's executor, as Python's own queries are run: the rows typed by the plan (frames.typed_by_plan)
+                rows = self.frames.run(compiler.read_plan(planned[3:]))
+            except (duckdb.Error, RuntimeError) as refused:
                 return _planned({'plan': planned, 'error': f'{type(refused).__name__}: {refused}'}, 422)
         rows = rows.replace_schema_metadata({**(rows.schema.metadata or {}), _PLAN_KEY: planned.encode('utf-8')})
         sink = pa.BufferOutputStream()

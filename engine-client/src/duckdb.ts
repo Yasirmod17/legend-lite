@@ -97,15 +97,36 @@ export function toScalar(v: unknown): Scalar {
     // Struct, list, map: render as JSON rather than "[object Object]",
     // so a nested column is at least legible in the grid.
     try {
-      return JSON.stringify(v, (_k, x) =>
-        typeof x === 'bigint' ? x.toString() : x,
-      );
+      return exactJson(v);
     } catch {
       return String(v);
     }
   }
 
   return String(v);
+}
+
+/**
+ * A nested value as JSON text, every number as the number it is: a 64-bit integer (a bigint
+ * here) its digits, never a string of them -- `{"tier":2}` stays `{"tier":2}`, where
+ * JSON.stringify, which refuses a bigint, had to be told to quote it. Otherwise
+ * JSON.stringify's own rules: a value's `toJSON` first (Arrow's rows and vectors, a Date), an
+ * undefined member left out of an object and null in an array.
+ */
+function exactJson(v: unknown): string {
+  if (typeof v === 'bigint') return v.toString();
+  if (v !== null && typeof v === 'object' && typeof (v as { toJSON?: unknown }).toJSON === 'function') {
+    return exactJson((v as { toJSON(): unknown }).toJSON());
+  }
+  if (Array.isArray(v)) return `[${v.map((x) => (x === undefined ? 'null' : exactJson(x))).join(',')}]`;
+  if (v !== null && typeof v === 'object' && !ArrayBuffer.isView(v)) {
+    const members = Object.entries(v).filter(([, x]) => x !== undefined && typeof x !== 'function');
+    return `{${members.map(([k, x]) => `${JSON.stringify(k)}:${exactJson(x)}`).join(',')}}`;
+  }
+  if (ArrayBuffer.isView(v) && !(v instanceof DataView)) {
+    return exactJson(Array.from(v as unknown as ArrayLike<unknown>));
+  }
+  return JSON.stringify(v) ?? 'null';
 }
 
 /**

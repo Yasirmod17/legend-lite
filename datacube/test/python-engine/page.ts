@@ -19,8 +19,8 @@
 // writes a page of two frames on two sheets with DataCube's own writers, for the harness to have Python serve it and a
 // tab open it (demo/engine.html?page=); `__readPythonPage` reads a page Python wrote with DataCube's own reader.
 
-import { startDuckDbInTab } from '../../../engine-client/src/duckdb-tab.ts';
-import type { DuckDbEngine } from '../../../engine-client/src/duckdb.ts';
+import { DuckDbEngine, type ArrowishConnection } from '../../../engine-client/src/duckdb.ts';
+import * as duckdb from '../../../engine-client/src/duckdb-wasm.ts';
 import { arrowResultTable, LegendEngineExecutor } from '../../../engine-client/src/engine-remote.ts';
 import { arrowIpcStream } from '../../../engine-client/src/pure-v1.ts';
 import type { ResultTable } from '../../../engine-client/src/result.ts';
@@ -35,7 +35,8 @@ import { sourceColumns } from '../../src/source-columns.ts';
 import { TreeState } from '../../src/tree.ts';
 import { LitePlanner } from '../../src/lite-planner.ts';
 import { CASES, queries } from '../wasm-differential/cases.ts';
-import { pythonRunner } from '../../src/services/python-host.ts';
+import { askedOffers, pythonDatabase, pythonRunner, type PythonLink } from '../../src/services/python-host.ts';
+import { ingestFile } from '../../src/upload.ts';
 
 /** What the harness hands the page: the engine, and the frame it serves. */
 interface Served {
@@ -158,7 +159,15 @@ async function run(): Promise<void> {
 
   // the tab: the same compiler in its worker, DuckDB-WASM over the same rows, in a table the frame's model reads
   window.__pythonEngineStage = 'starting the tab\'s DuckDB and the compiler';
-  const local: DuckDbEngine = (await startDuckDbInTab('vendor/')).engine;
+  // as startDuckDbInTab starts it, the database kept too: the tab reads a person's file into it (upload.ts)
+  const asset = (f: string): string => new URL(f, new URL('vendor/', location.href)).href;
+  const bundle = await duckdb.selectBundle({
+    mvp: { mainModule: asset('duckdb-mvp.wasm'), mainWorker: asset('duckdb-browser-mvp.worker.js') },
+    eh: { mainModule: asset('duckdb-eh.wasm'), mainWorker: asset('duckdb-browser-eh.worker.js') },
+  });
+  const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING), new Worker(bundle.mainWorker!));
+  await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+  const local = new DuckDbEngine((await db.connect()) as unknown as ArrowishConnection);
   await local.run(`CREATE TABLE trades (region VARCHAR, desk VARCHAR, book VARCHAR, year INTEGER, qtr VARCHAR,
     notional DOUBLE, pnl DOUBLE, qty INTEGER)`, 0);
   await local.run(`INSERT INTO trades VALUES ${served.rows.map((r) => `(${r.map(sqlValue).join(', ')})`).join(', ')}`, 0);
@@ -206,6 +215,48 @@ async function run(): Promise<void> {
     }
     deepEqual(differ, [], 'PlanAndRun on Python and the tab disagree:');
     equal(CASES.length > 0 && compared === CASES.length, true, `cases compared: ${compared} of ${CASES.length}`);
+  });
+
+  // THE READER'S FILES (§15.6): each read by DataCube's own reader (upload.ts) into the tab's DuckDB and into Python's
+  // (the page hands Python the bytes the tab's DuckDB is given, fileBytes), then every row planned and run on each
+  // host -- the same columns, types and values. A text file is read as the tab has always read it: a byte-order mark
+  // dropped, CRLF lines, a Latin-1 byte the replacement character.
+  await check('every reader file reads the same on Python\'s page and in the tab', async () => {
+    const link: PythonLink = { baseUrl: location.origin, fetch: (i, init) => fetch(i, init), authorization: served.authorization };
+    const python = pythonDatabase(link, await askedOffers(link));
+    if (python.ingestFile === undefined || python.forgetFile === undefined) throw new CheckFailed('Python\'s engine reads no page file');
+    const utf8 = (text: string): Uint8Array => new TextEncoder().encode(text);
+    const files: readonly (readonly [string, Uint8Array])[] = [
+      ['bom.csv', utf8('﻿id,name\r\n1,a\r\n2,b\r\n')],
+      ['quoted.csv', utf8('id,name,amount\r\n1,"x, y",1.50\r\n2,z,\r\n3,"say ""hi""",-0.25\r\n')],
+      ['latin1.csv', new Uint8Array([...utf8('id,name\n1,caf'), 0xe9, ...utf8('\n2,plain\n')])],
+      ['dates.csv', utf8('day,at,flag\n2024-01-02,2024-01-02 03:04:05.123456,true\n0001-01-01,1970-01-01 00:00:00,false\n,,\n')],
+      ['lines.jsonl', utf8('{"id":1,"tags":["a","b"],"at":"2024-01-02T03:04:05.123456"}\n{"id":2,"tags":[],"at":null}\n')],
+      ['nested.json', utf8('﻿[{"id":1,"customer":{"name":"A","tier":2},"amount":12.30},{"id":2,"customer":null,"amount":null}]')],
+    ];
+    // the runner reads only the snapshot's epoch
+    const snapshot = CASES[0]!.snapshot;
+    const all = (source: unknown): Lambda => ({ _type: 'lambda', parameters: [], body: [source] }) as unknown as Lambda;
+    const differ: string[] = [];
+    for (const [i, [name, bytes]] of files.entries()) {
+      const file = new File([bytes as BlobPart], name);
+      const table = `reader_${i + 1}`;
+      const here = await ingestFile(local, db, file, planner, { table });
+      const there = await python.ingestFile(file, { table });
+      const tabRows = await new PlanThenRun(planner.withModel(here.model, here.runtime), local).run(all(here.source), snapshot);
+      const pythonRows = await pythonRunner(link, there.model, there.runtime).run(all(there.source), snapshot);
+      const a = shape(pythonRows.rows, false);
+      const b = shape(tabRows.rows, false);
+      if (a !== b) differ.push(`${name}\n  python: ${a.slice(0, 400)}\n  tab:    ${b.slice(0, 400)}`);
+      if (there.rowCount !== here.rowCount) differ.push(`${name}: ${there.rowCount} rows on Python, ${here.rowCount} in the tab`);
+      // and right, not only alike: a nested value is its JSON, its numbers numbers
+      if (name === 'nested.json') {
+        const customer = pythonRows.rows.columns.find((c) => c.name === 'customer')?.values.find((v) => v !== null);
+        equal(customer, '{"name":"A","tier":2}', 'a nested value\'s JSON:');
+      }
+      await python.forgetFile(name, there.table);
+    }
+    deepEqual(differ, [], 'Python\'s page and the tab read a file differently:');
   });
 
   await check('a query\'s types, parse and print: the same compiler\'s answers', async () => {

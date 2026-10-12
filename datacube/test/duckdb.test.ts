@@ -192,10 +192,13 @@ describe('toScalar', () => {
     assert.equal(toScalar(undefined), null);
   });
 
-  it('renders a nested object as JSON, bigints included', () => {
-    assert.equal(
-      toScalar({ a: 1n, b: 'x' }),
-      '{"a":"1","b":"x"}',
-    );
+  it('renders a nested object as JSON, a bigint the number it is', () => {
+    // a nested BIGINT is a JSON number, past 2^53 too: {"tier":2}, never {"tier":"2"}
+    assert.equal(toScalar({ a: 1n, b: 'x' }), '{"a":1,"b":"x"}');
+    assert.equal(toScalar({ big: 2n ** 63n - 1n, list: [1n, null, 2.5], deep: { s: 'q"' } }),
+      '{"big":9223372036854775807,"list":[1,null,2.5],"deep":{"s":"q\\""}}');
+    assert.equal(toScalar([1n, undefined]), '[1,null]');
+    assert.equal(toScalar({ gone: undefined, d: new Date(0) }), '{"d":"1970-01-01T00:00:00.000Z"}');
+    assert.equal(toScalar({ xs: new BigInt64Array([3n, 4n]) }), '{"xs":[3,4]}');
   });
 });

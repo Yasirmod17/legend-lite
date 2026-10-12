@@ -94,8 +94,8 @@ try {
     console.log(`FAIL the setup: ${verdict.setupError}`);
     failed = true;
   }
-  if (verdict.outcomes.length !== 5) {
-    console.log(`FAIL ${verdict.outcomes.length} checks ran, not 5`);
+  if (verdict.outcomes.length !== 6) {
+    console.log(`FAIL ${verdict.outcomes.length} checks ran, not 6`);
     failed = true;
   }
 

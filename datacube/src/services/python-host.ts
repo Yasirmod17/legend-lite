@@ -287,7 +287,7 @@ async function posted(link: PythonLink, path: string, body: unknown): Promise<st
  * Python's DuckDB as the page's database: its frames, and -- where Python takes them -- a page's file, read there by
  * DataCube's own code into the table the page named (the page's table names are its own: no grid's is replaced).
  */
-function pythonDatabase(link: PythonLink, offers: PythonOffers): DatabaseService {
+export function pythonDatabase(link: PythonLink, offers: PythonOffers): DatabaseService {
   return {
     frame: (name) => frameOf(link, name),
     ...(offers.files ? {

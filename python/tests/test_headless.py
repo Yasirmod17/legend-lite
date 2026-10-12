@@ -71,8 +71,9 @@ class Grids(unittest.TestCase):
         rows = grid.to_pandas().set_index('desk').sort_index()
         emea = TRADES[TRADES.region == 'EMEA'].assign(big=lambda d: d.notional > 50)
         one = lambda d: d.iloc[0] if d.nunique() == 1 else None  # noqa: E731 -- uniqueValueOnly
+        # a Boolean with nulls stays a boolean (pandas' nullable type, frames.to_pandas): its null pandas' NA
         expected = emea.groupby('desk').agg(region=('region', one), notional=('notional', 'sum'), qty=('qty', 'sum'),
-                                            big=('big', one)).sort_index()
+                                            big=('big', one)).sort_index().astype({'big': 'boolean'})
         self.assertEqual(sorted(rows.columns), sorted(expected.columns))
         pd.testing.assert_frame_equal(rows[list(expected.columns)], expected, check_dtype=False)
 
@@ -84,6 +85,16 @@ class Grids(unittest.TestCase):
         self.assertNotIn('groupBy', grid.relation)
         self.assertEqual(view.to_pandas().shape, TRADES.shape)
         pd.testing.assert_frame_equal(grid.to_pandas().sort_values('qty').reset_index(drop=True), TRADES, check_dtype=False)
+
+    def test_its_rows_and_its_view_keep_an_integer_with_nulls_an_integer(self):
+        # typed by the plan (docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md §15.3a): an Integer stays an integer, nulls and
+        # all, in what the grid shows and in its rows -- never 1.0
+        frame = pd.DataFrame({'desk': ['FX', 'EQ'], 'qty': pd.array([1, None], dtype='Int64')})
+        grid = self.page.grid(frame, name='trades_nulls')
+        for out in (grid.view().to_pandas(), grid.to_pandas()):
+            self.assertEqual(str(out.qty.dtype), 'Int64')
+            self.assertEqual(sorted(out.qty.dropna().tolist()), [1])
+            self.assertEqual(int(out.qty.isna().sum()), 1)
 
     def test_a_grid_changed_in_python_is_viewed_as_it_is_now(self):
         grid = self.page.grid(TRADES, name='trades_changing', rows=['desk'], measures={'qty': 'sum'})
