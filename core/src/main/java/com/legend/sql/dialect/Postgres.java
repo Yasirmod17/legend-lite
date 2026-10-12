@@ -850,9 +850,12 @@ public final class Postgres extends AnsiSqlRenderer {
         if (e instanceof SqlExpr.ArrayLit a) {
             return arrayLiteral(writer, a);
         }
-        if (e instanceof SqlExpr.OrderedListAgg) {
-            throw new DialectCapability("an ordered list aggregate reached Postgres before"
-                    + " the jsonb collection carrier (leg P4)");
+        if (e instanceof SqlExpr.OrderedListAgg ola) {
+            // DuckDB's list(value ORDER BY key), as the LIST aggregate: NULL over no row, a list value held as jsonb
+            SqlExpr v = ola.value();
+            return writer.append("array_agg(").piece(typeOf(v) instanceof SqlType.Array
+                    ? w -> w.append("to_jsonb(").expr(v, 0).append(")") : w -> w.expr(v, 0))
+                    .append(" ORDER BY ").expr(ola.orderBy(), 0).append(")");
         }
         return super.expr(writer, e, parentPrec);
     }

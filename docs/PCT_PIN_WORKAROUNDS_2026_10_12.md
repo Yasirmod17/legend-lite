@@ -12,7 +12,7 @@ the database's gaps, and no dialect work removes them. A database's **own** pins
 
 | database | pins | of which the platform's (also on DuckDB) | **own** |
 |---|---:|---:|---:|
-| Postgres | 109 → **49** | 34 | 75 → **15** (burned down, below) |
+| Postgres | 109 → **42** | 34 | 75 → **8** (burned down, below) |
 | H2 (Relation suite only) | 26 | 1 | **25** |
 | MySQL | 54 | 34 | **20** |
 | MariaDB | 51 | 34 | **17** |
@@ -68,9 +68,10 @@ lane.
 
 ## Postgres: its 75 own pins (2026-10-12)
 
-**Outcome: 60 fixed, 15 kept pinned** (48 in the first pass, then the 12 jsonb ones at the user's ask). Each fix is in
-`Postgres.java` and was probed on the embedded Postgres 16.15 first. Both channels are green; channel B's floors rose
-to 326, 132, 465, 204 and 87.
+**Outcome: 67 fixed, 8 kept pinned** (48 in the first pass, then the 12 jsonb ones, then 7 more, each at the user's
+ask). Each Postgres fix is in `Postgres.java` and was probed on the embedded Postgres 16.15 first; the typing gap was
+the shared lowering's, fixed there for the ordered aggregate and re-measured on every lane. Both channels are green; channel B's floors rose to
+329, 132, 465, 204 and 91.
 
 | pins | what Postgres could not do | the answer | outcome |
 |---:|---|---|---|
@@ -81,16 +82,18 @@ to 326, 132, 465, 204 and 87.
 | 4 | **splitPart** | `(array_remove(string_to_array(s, d), ''))[i]`: the non-empty tokens, 1-based, NULL past either end | fixed |
 | 1 | **hashCode** | The first 64 bits of the MD5 of the values' JSON text, read signed through `bit(64)` (MariaDB's construction) | fixed |
 | 12 | **Maps, a fold into a list, a list reduction, a list aggregate** | A map is its entries in order, a `jsonb[]` of `{"key", "value"}` (BigQuery's shape, which the executor already decodes to a map), with DuckDB's semantics: entries keep their order, a NULL or repeated key raises, a concatenation keeps each key's first place with the last value, an extraction is a list. A fold or a reduction into a list of scalars is the recursive walk over a native array; the LIST aggregate is `array_agg`. Found on the way: the dialect's raise (a STABLE cast) fired at PLAN time under `unnest(...)`, whose row estimate pre-evaluates its argument; it now carries an empty volatile term | fixed |
-| 5 | **SHA-1, Levenshtein, Jaro-Winkler**: extension functions | The bundled Postgres ships `pgcrypto` (`digest(.., 'sha1')`) and `fuzzystrmatch` (`levenshtein`); neither has Jaro-Winkler | kept: whether the dialect may require an extension on the target database is the user's call |
-| 3 | **An IR typing gap**: two `removeDuplicates` tests unnest a CASE of mixed list encodings (typed Unknown), and `testMixedSortNoComparator` an ordered list aggregate typed VARCHAR | The lowering's typing (AGENTS.md invariant 1), not the dialect | kept |
+| 4 | **Levenshtein, Jaro-Winkler**: no core function. `fuzzystrmatch` has a Levenshtein of at most 255 characters; no extension has a Jaro-Winkler | Recursive walks in plain SQL, no extension: Levenshtein is SQLite's edit-distance table a row at a time, with arrays; Jaro-Winkler is Snowflake's algorithm as a walk along the second text. Both equal DuckDB's on the 1,585 ASCII pairs Snowflake's was measured on (Jaro-Winkler bit for bit). On other text they count characters, as the reference and SQLite, MariaDB and Snowflake do, where DuckDB counts bytes (2 for `ä€x` and `a€x`, measured) | fixed |
+| 1 | **SHA-1**: no core `sha1` in any release (checked: 18.6, the current one, and the devel docs of 2026-10-10 list md5, sha224 to sha512, crc32 and crc32c) | `pgcrypto`'s `digest(.., 'sha1')`, which the bundled Postgres ships | kept: the dialect requires no extension |
+| 1 | **An IR typing gap**: `testMixedSortNoComparator`'s ordered list aggregate was typed VARCHAR whatever it aggregated | In the shared lowering (AGENTS.md invariant 1), every lane re-measured: it is typed as the LIST reducer types it (a list of its value's type), its columns stamped from the subselect's projections, and Postgres spells it `array_agg(v ORDER BY k)` | fixed |
+| 2 | **A comparator dedup's CASE** (two `removeDuplicates` tests) is typed Unknown: on a list-less backend the shared carrier pass strips the LITERAL label from the list branch but not from the reduction's stamps | An identity transform on the list branch made Postgres pass, but it is a new list emission in the lowering, which the carrier-purity ratchet bans (`CodeShapeGuardrailTest`: lower to a semantic node, CARRIER_REDESIGN.md tenet #1). The fix is a semantic dedup node with strategy rules | kept: reverted, for the carrier lane |
 | 3 | **jsonb reorders an object's keys** (shorter first), where Pure keeps them as written | A Variant as `json` (its text as written), jsonb only where it is compared, grouped or merged; printed minified | kept: Variants stay jsonb (the user's call, 2026-10-12): `json` has no equality, so the switch would reverse the dialect's documented choice and touch every Variant path for these 3 |
 | 2 | **Postgres's own limits**: no NUL character in text, a timestamp range | None | kept |
-| 2 | **Not yet examined**: `testPairCollectionToString` (an untyped literal in a polymorphic call) and `testConcatenateTypeInference` (a class instance not decoded) | — | kept |
+| 2 | `testPairCollectionToString`: `to_jsonb` of a quoted literal, which has no type yet. `testConcatenateTypeInference`: a Variant cell (instances of two subclasses) came back as the driver's jsonb object | The literal cast to text first; a JSON cell delivered as its text, as every other driver hands it | fixed |
 
 **Found in passing:** Snowflake's printf unroll pads with `LPAD`, which also cuts a longer text. A `%3d` of 12345
 would likely print `123` there. Not yet checked on Snowflake.
 
 ## The other databases
 
-H2 has the most own pins (25), then MySQL (20), MariaDB (17), Postgres (15 after its burn-down) and SQLite (15).
+H2 has the most own pins (25), then MySQL (20), MariaDB (17) and SQLite (15); Postgres has 8 after its burn-down.
 BigQuery (8) and Trino (6) were burned down hardest, and Databricks and Snowflake have 1 each.

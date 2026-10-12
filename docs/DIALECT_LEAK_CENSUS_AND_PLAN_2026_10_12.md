@@ -9,7 +9,7 @@ its way to main (listed in the evidence folder's README).**
 1. **The baseline is main.** The ClickHouse and Postgres burn-downs that followed neema2/legend-lite#30 lived on
    `claude/great-wright-p6t5s1`. They land on main first, so "pure moves produce zero rendered-SQL diffs" has one
    fixed baseline. They touch `ClickHouse.java`, `Postgres.java`, `SqlTypeCensus`, `EmbeddedClickHouse`, `PctBackend`,
-   `Scalars`, `Dedup` and `SqlExpr.OrderedListAgg`.
+   `Scalars` and `SqlExpr.OrderedListAgg`.
 2. **Main moves under you.** Other sessions land in `sql/dialect` too: the `#SQL{...}#` line added `QuantileOrder`
    and `RootNumericTypes` (see `docs/IN_FLIGHT.md`). Announce this program there before starting, re-read it before
    each phase, and merge main between phases rather than at the end.

@@ -933,6 +933,18 @@ Variant path), Postgres's limits (2), two not yet examined. Channel B: 326 / 2 /
 Postgres rose by the by-design class (a struct as jsonb), Essential 13 -> 14 and Grammar 5 -> 6, as tests that stopped
 at their first struct now run their later statements (`PctCensusGate`, dated).
 
+Then, at the user's ask, 7 more: **109 pins become 42; the own 8**. Levenshtein and Jaro-Winkler are recursive walks in
+plain SQL, not extension functions (fuzzystrmatch's Levenshtein stops at 255 characters, and no extension has a
+Jaro-Winkler); both equal DuckDB's on 1,585 ASCII pairs, by characters where DuckDB counts bytes. A quoted literal is
+cast before `to_jsonb`, and a Variant cell is delivered as its text, as every other driver hands it. One typing gap was
+the shared lowering's (AGENTS.md invariant 1), so every lane was re-measured: the ordered list aggregate (a mixed sort's)
+is typed as the LIST reducer types it, a list of its value's type, where it had been VARCHAR whatever it aggregated, and
+Postgres spells it `array_agg`. The other, a comparator dedup's CASE typed Unknown, stays pinned: the shared carrier pass
+strips the LITERAL label from the list branch and not from the reduction's stamps, and the workaround tried (an identity
+transform) is a new list emission in the lowering, which the carrier-purity ratchet bans; the fix is a semantic dedup
+node. Kept as well: SHA-1 (no release has a core `sha1`, 18.6 and devel checked; `pgcrypto` has it), jsonb's key order
+(3) and Postgres's limits (2). Channel B: 329 / 1 / 0, 132 / 3 / 0, 465 / 2 / 0, 204 / 1 / 0, 91 / 0 / 0.
+
 ## 20. The coverage map, and the corpus on every database (2026-10-12)
 
 **The map** (`docs/PRIMITIVE_COVERAGE_2026_10_12.md`, measured; the recipe `tools/census/README.md` section 3): the

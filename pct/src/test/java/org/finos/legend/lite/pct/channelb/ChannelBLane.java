@@ -52,9 +52,10 @@ final class ChannelBLane {
             // 3 -> 2, the true one 1 -> 0) and 203 -> 204 (2026-10-12, the user's ask): maps as jsonb entries, a fold
             // or a reduction into a list, the LIST aggregate, and a raise no plan-time estimate evaluates. 326 -> 327
             // and 87 -> 91 (2026-10-12, the user's ask): a quoted literal typed for to_jsonb, Levenshtein and
-            // Jaro-Winkler as recursive walks (no extension)
+            // Jaro-Winkler as recursive walks (no extension). 327 -> 329, its wire bugs 2 -> 1 (2026-10-12, the user's
+            // ask): the ordered list aggregate typed as a list (array_agg here)
             "postgres", Map.of(
-                    "Essential", new Pins(327, 2, 0),
+                    "Essential", new Pins(329, 1, 0),
                     "Grammar", new Pins(132, 3, 0),
                     "Relation", new Pins(465, 2, 0),
                     "Standard", new Pins(204, 1, 0),
