@@ -644,3 +644,113 @@ changes are reviewed by the Compiler Rewrite line, and planner-boundary changes 
   beside the notebook by default, which no browser decision mirrors.
 - **Q2. The order of steps 2 and 3.** The user, 2026-10-11: "i think it should become the app before yes". Step 2
   lands before Python has a model home; the model actions appear on Python's pages when step 3's service answers.
+
+## 15. PlanAndRun: two twin hosts, one path (agreed 2026-10-12)
+
+The user, 2026-10-12: "we have to think of Python and Browser as two compute 'hosts/platforms' with same capabilities
+... these platforms should be twins"; "we need both paths to go through same exact code path - but as single 'atomic'
+call"; "PlanThenRun still can configure what the planner is (local, remote lite, remote engine) and Run can configure
+what runs it ... against what CONNECTION ... Actually the Connection come from the User (file, remote read, example,
+REMOTE DATABASE)"; and, of this section's shape, "yes, please lets do it like this!". It supersedes §4.3's and §4.5's
+`{runner}` shape for a Python host, and with it the Python show design's Python-as-legend-engine for DataCube.
+
+### 15.1 Why
+
+Until this section, the tab planned in the page (its planner over the WebAssembly module) and ran on DuckDB-WASM,
+reading the rows itself, while Python's pages talked to Python as if it were legend-engine: `RemoteRun` over pure/v1's
+execute in upstream's Arrow format. The compiler and DataCube's code were the same, the path was not:
+
+- Python's answer had to match legend-engine's format type by type, and a type whose legend-engine spelling is not yet
+  probed is refused: a Variant column's queries (core's `UpstreamRelationType.relationalSpelling`), which the tab plans.
+- pure/v1 compiles the model again on every request (`PureV1Api`), where the tab plans against a held model.
+- Every "works in the browser, not on Python" difference found in step 2 came from that one layer.
+
+### 15.2 The shape
+
+A grid's rows have three parts. Two are choices, and the third follows from them:
+
+| | Chosen by | Options |
+|---|---|---|
+| **planner** (who writes the SQL) | the person, once per app (R3) | local (the tab's WebAssembly, Python's native library), legend-lite's server, legend-engine |
+| **connection** (where the data is) | the source the person picks | a file, an example, a remote file: the host's DuckDB; a remote database (a warehouse table): that database |
+| **runner** (who executes the SQL) | the host and the connection | DuckDB-WASM: the page; Python's DuckDB: Python; a remote database: its own server |
+
+Every grid on every host is one call:
+
+```
+PlanAndRun(query) = plan   the chosen planner's plan function       (the same Java, Boundary, on every host)
+                  + run    the connection's runner executes the SQL  (rows as the database answers them: Arrow)
+                  + read   the page reads the rows, typed by the plan (the same TypeScript on every host)
+```
+
+- **Each host supplies two small pieces**: its plan step (the same function, compiled to WebAssembly or native) and its
+  run step (this SQL on this connection, the rows as the database gives them). Neither holds logic of DataCube's.
+- **On Python, PlanAndRun is one call** over HTTP or the notebook's channel: the page sends the query and its source;
+  Python plans against the model it holds for that source, runs the SQL on its DuckDB, and answers the plan and the
+  rows. The page reads both with the code the tab uses.
+- **Every other question the compiler answers** (a query's columns, a parse, a print, a table's model) is the planner
+  protocol's request the tab's worker answers, which Python's native library already answers for headless
+  (`_headless.py`'s KINDS), carried over HTTP or the channel.
+- **The warehouse is a connection**, its runner the warehouse's server: Live is PlanAndRun there. **Snap is data in**
+  (R5): rows read from one connection and written into the host's, the grid's connection the host's from then on.
+- **legend-engine's answer format** is used only on the engine plane, by either host.
+
+### 15.3 Models: each host holds its own (model design §9, §10, kept)
+
+`com.legend.HeldModels` over `com.legend.cache.HeldStore` is the one implementation, in core, and each host owns its
+instance: the tab's in its WebAssembly module, Python's in its native library. The server holds none (a request has no
+holder; the Studio line, 2026-10-10). Planning against a held model took 6 to 14 ms at 1 to 200 classes, where a whole
+compile took 54 ms to 3.8 s.
+
+- The tab's planners hold their grid's model while the grid lives. Python's sources hold theirs while registered:
+  a frame does today, and a page's file table and remote view will, in the same way.
+- No handle crosses hosts: the page names its source's model, which Python holds, and Python plans only over the
+  models it serves (R4). A page that vanishes leaks nothing in Python.
+
+### 15.4 Who may send a runner SQL
+
+- **The page's DuckDB-WASM**, in the browser's sandbox: the page.
+- **Python's DuckDB**, which can read this machine's files: only SQL planned in the same PlanAndRun call, so R4 holds
+  by construction. Raw SQL against Python, if it is ever wanted, is a capability of the planner -- a plan that passes
+  the SQL through -- so this rule still holds (the user, 2026-10-12).
+- **A warehouse**: the signed-in person's SQL, under the warehouse's own grants, as today.
+
+### 15.5 What it replaces
+
+- For DataCube's pages, Python's `RemoteRun` over pure/v1, and 2a's Python `rows()`. The engine service's two row shapes
+  (`GridRows`) become one: PlanAndRun with a planner and a connection.
+- 2c's seam moves into the plan step: a remote planner answers it, on either host.
+- Python's pure/v1 API stays, for other clients and the engine plane. `python_engine_test` keeps its check that every
+  cube case answers the same through it as in the tab.
+
+### 15.6 How it is proven
+
+One conformance suite: the cube corpus's cases, and files that test a reader (a byte-order mark, CRLF, Latin-1, gzip,
+JSON Lines, nested values), run over every host, planner and connection the build can reach. The answers must be
+identical in their columns, types and values, with the tab's local pair the reference.
+
+### 15.7 Known differences, and their follow-ups (the user, 2026-10-12)
+
+1. **The two DuckDB versions** (DuckDB-WASM `1.33.1-dev57`, Python's `duckdb 1.5.5`): accepted for now. Follow-up: every
+   DuckDB, the corpus tests' included, bumped to one 1.5 release.
+2. **Python's one DuckDB connection is shared** by every page on its process, so their queries run one at a time:
+   sharing is a feature. Follow-up option: a connection per page, to the same database.
+3. **Large results from Python come back whole.** Follow-up: streamed back in chunks, as the tab's export reads them.
+4. **Python's pure/v1 API loses DataCube as its daily user**: accepted, and still tested.
+5. **A warehouse on Python holds the person's warehouse session**: acceptable, since the credentials are those of the
+   person running that Python.
+6. **No SQL from the page to Python**: if it is ever wanted, it is a planner capability (15.4).
+
+### 15.8 The plan
+
+1. **The runner**: PlanAndRun in `runner.ts`, from `PlanThenRun`. Each host's two pieces sit behind it. `DuckDbEngine`'s
+   execute splits into the run (the database's rows) and the read (typed by the plan), and the read is shared.
+2. **Python**:
+   - one call (`plan-and-run.json`): plan over the held model, run, and answer the plan and the rows;
+   - the planner protocol's requests carried over HTTP and the channel;
+   - a page's file tables and remote views holding their models.
+3. **The app**: every grid's rows through PlanAndRun. The warehouse's Live and Snap become a connection and data in.
+4. **The conformance suite** (15.6).
+
+The plan step's crossing to Python is planner protocol, so it is reviewed by the Plan Gen line and the Compiler
+Rewrite line, then audited before it lands.
