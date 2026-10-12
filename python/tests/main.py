@@ -24,6 +24,10 @@ for name in ('LEGEND_LITE_LIBRARY', 'LEGEND_LITE_CORPUS_MODEL', 'LEGEND_LITE_COR
             sys.exit(f'{name}: {given} is not in the runfiles')
     os.environ[name] = os.pathsep.join(paths)
 
+# this user's legend-lite folder (the pages DataCube saves) a folder of the test's own, never a person's: a test that
+# does not name one still asks where it is (services.json), and a Windows test is given no home to find one in
+os.environ.setdefault('LEGEND_LITE_HOME', str(Path(os.environ.get('TEST_TMPDIR') or '.', 'legend-lite-home').resolve()))
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 suite = unittest.defaultTestLoader.loadTestsFromNames(sys.argv[1:])
 result = unittest.TextTestRunner(verbosity=2).run(suite)

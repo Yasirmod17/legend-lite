@@ -400,7 +400,10 @@ class Remote(unittest.TestCase):
         httpfs = self.frames.connection.execute(
             "SELECT loaded, install_path FROM duckdb_extensions() WHERE extension_name = 'httpfs'").fetchone()
         self.assertTrue(httpfs[0])
-        self.assertTrue(httpfs[1].startswith(os.environ['LEGEND_LITE_DUCKDB_EXTENSIONS']), httpfs[1])
+        # as the system compares paths (Windows: whatever the case of the drive letter, either slash), links not
+        # followed (the runfiles are links on macOS and Linux)
+        carried = os.path.normcase(os.path.abspath(os.environ['LEGEND_LITE_DUCKDB_EXTENSIONS']))
+        self.assertTrue(os.path.normcase(os.path.abspath(httpfs[1])).startswith(carried + os.sep), httpfs[1])
 
     def test_a_url_that_is_not_remote_is_refused_before_anything_runs(self):
         local = Path(self.folder.name, 'desks.csv')
