@@ -8861,7 +8861,10 @@ Announced in `docs/IN_FLIGHT.md` the same day (2aa74a8). Branch `claude/loving-e
    - **The Postgres targets in a root container:** `//core:sql_parity_postgres_test`, `//core:sql_island_postgres_test`
      and `//core:postgres_arm_test` pass through the unprivileged wrapper (`tools/postgres/as_unprivileged.sh`,
      7c21e6d on `claude/great-wright-p6t5s1`).
-   - **The six corpus passes and the full CI run on the branch:** recorded at landing.
+   - **The six corpus passes,** rerun against a baseline built from main 8c8b92d the same day: 22 result files
+     identical, 0 differing (`compare_judges.py`; both builds executed every pass, 31 sandboxed processes each,
+     about 16 minutes).
+   - **The full CI run:** the pull request's, recorded at landing.
 5. **Not done, recorded in the study** (§9.1, "Refused by name" and "Next steps"):
    - `round(x, n)`: Pure's round is half to even, Postgres's numeric round half away from zero.
    - `strpos`: Pure's `indexOf` is lowered one too high; PCT pins it.
