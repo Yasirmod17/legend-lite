@@ -927,7 +927,8 @@ dialect now, by its declared type, not by a database's name); a fold or a reduct
 native array; the LIST aggregate is `array_agg`. On the way, the raise: a STABLE cast, which the planner pre-evaluates
 where it estimates (an argument of `unnest`), so an untaken raise fired at plan time; it carries an empty volatile
 term now. **109 pins become 49; the own 15**: extension functions (5, a decision), an IR typing gap (3), jsonb's key
-order (3, next: a Variant as `json`), Postgres's limits (2), two not yet examined. Channel B: 326 / 2 / 0,
+order (3, kept: Variants stay jsonb, the user's call, since `json` has no equality and the switch would touch every
+Variant path), Postgres's limits (2), two not yet examined. Channel B: 326 / 2 / 0,
 132 / 3 / 0, 465 / 2 / 0, 204 / 1 / 0, 87 / 0 / 0. The census ceiling for
 Postgres rose by the by-design class (a struct as jsonb), Essential 13 -> 14 and Grammar 5 -> 6, as tests that stopped
 at their first struct now run their later statements (`PctCensusGate`, dated).
