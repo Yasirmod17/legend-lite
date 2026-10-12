@@ -1850,6 +1850,8 @@ lite/functions/between_with_a_null_bound	PASS	PASS
 lite/functions/not_between_a_null_bound_in_a_filter	PASS	PASS
 lite/functions/in_a_list_with_a_nullable_column	PASS	PASS
 lite/functions/in_a_list_with_a_nullable_column_in_a_filter	PASS	PASS
+lite/functions/case_of_only_nulls_is_text	PASS	PASS
+lite/functions/ceil_of_a_case_of_only_nulls_does_not_exist	BOTH_ERROR	BOTH_ERROR
 lite/joins/inner_join_on	PASS	PASS
 lite/joins/left_join_keeps_unmatched	PASS	PASS
 lite/joins/right_join_keeps_unmatched	PASS	PASS

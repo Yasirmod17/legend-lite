@@ -3160,8 +3160,9 @@ public final class SqlToPure {
     }
 
     private static void numericOperand(Tx t, SqlAst.Expr e) {
-        if (t.kind() == Kind.NULL || isNullConstant(t)) {
-            // a NULL constant: strict makes the result NULL of the operator's type
+        if (t.kind() == Kind.NULL || isNullConstant(t) && t.kind().numeric()) {
+            // an untyped or a numeric NULL constant: strict makes the result NULL of the operator's type (a NULL of
+            // another type, a text one included, is no number)
             return;
         }
         // Postgres has these operators (an untyped constant takes the other operand's type; date - date, jsonb - key)
@@ -3639,6 +3640,10 @@ public final class SqlToPure {
             vs = call("if", tests.get(i), thunk(valueOf(v)), thunk(vs));
         }
         Kind kind = results.kind();
+        if (kind == Kind.NULL) {
+            // every result a NULL: Postgres resolves the CASE as text (ceil of it is Postgres's error)
+            return nullOf(Kind.NULL);
+        }
         return kind == Kind.BOOLEAN ? booleanValue(vs, nullable) : Tx.value(vs, kind, nullable);
     }
 

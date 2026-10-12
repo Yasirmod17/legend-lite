@@ -289,3 +289,8 @@ tests:
     sql: "SELECT id, 7 IN (small_val, int_val) AS a, int_val IN (small_val, 42) AS b, int_val NOT IN (small_val, 1) AS c FROM numbers ORDER BY id"
   - id: in_a_list_with_a_nullable_column_in_a_filter
     sql: "SELECT p.id FROM persons p WHERE 30 IN (p.age, p.dept_id * 30) ORDER BY 1"
+  # a CASE whose every result is NULL is text in Postgres: ceil of it is Postgres's error, its || is text
+  - id: case_of_only_nulls_is_text
+    sql: "SELECT id, CASE WHEN id > 5 THEN NULL ELSE NULL END || 'x' AS a, coalesce(CASE WHEN id = 1 THEN NULL END, 'none') AS b FROM persons ORDER BY id"
+  - id: ceil_of_a_case_of_only_nulls_does_not_exist
+    sql: "SELECT ceil(CASE WHEN id > 5 THEN NULL ELSE NULL END) AS a FROM persons ORDER BY id"
