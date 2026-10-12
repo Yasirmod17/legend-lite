@@ -1,6 +1,11 @@
 # The dialect-leak census and the plan to close it (2026-10-12)
 
-**Status: PLAN, for review. Nothing below has been implemented.**
+**Status: PLAN, for review. Nothing below has been implemented, except five items that neema2/legend-lite#30 did on
+its way to main (listed in the evidence folder's README).**
+
+**The work behind this plan** is in `docs/dialect-leak-census-2026-10-12/`; start with its README. It holds the
+method, the classification rules, the scanner that re-runs the census, and the nine reviewers' reports in full. The
+census was taken at 7afb645, so line numbers below cite that commit. The code it audits is on main since c03ac6b.
 
 **The ask (the user, 2026-10-12):** *everything SQL-related hidden in the SQL dialect; anything connection- or
 workspace-related behind its own interface; SqlTypeCensus probably behind the dialect too; first a comprehensive
@@ -156,8 +161,9 @@ The cloud lanes (Snowflake, Databricks and BigQuery) run once after Phase 2 and 
 ### Phase 0: the guards see everything (first; no behaviour change)
 
 - **`DialectBoundaryTest`:**
-  - count all 11 dialect constructions (its pin under-counts at 7);
-  - census all 24 `DatabaseType` constants and every driver package;
+  - count all 11 dialect constructions. *Done in #30, 3cd1c81: the pin is now 11.*
+  - name every driver package in its driver census. *Done in #30.*
+  - census all 24 `DatabaseType` constants and every product name (still H2, DuckDB and Postgres only);
   - walk `core/src/main/duckdb`.
 - **Driver-package rules** in `ArchitectureTest`, `JdbcSurfaceCensusTest` and `TenetRatchetTest`: add `org.postgresql`,
   `org.sqlite`, `org.mariadb`, `com.clickhouse`, `io.trino`, `net.snowflake`, `com.databricks`/`com.simba` and BigQuery.
@@ -185,11 +191,19 @@ Size: about 300 lines of tests.
   - Base arms throw `DialectCapability`, as `listCall` already does.
   - Every other dialect that inherits an arm today gets it explicitly or refuses it; see **decision D1**. First, an
     inventory of arm × dialect, read from the code and the PCT pins.
+  - **The proposed shape (2026-10-12, awaiting the user's yes): the base keeps grammar only, and every vocabulary
+    point becomes abstract.** No default spells any database's choice. javac then makes each dialect decide, which
+    turns D1 into compile errors rather than eleven judgment calls.
+    - Spellings shared by several databases become helpers that a dialect calls by name.
+    - Real families keep inheriting: MySql from MariaDb, H2Modern from H2, and the EngineStyle chain.
+    - The measurement behind this, and why fully separate dialects were not chosen, is in the evidence folder's
+      README ("The base-renderer question").
 - **1c. Raw SQL into each dialect.** One hook, `SqlDialect.fromEngineH2(String) → List<String>`, replaces
   `RawSqlBoundary.Target`, `rawTarget()`, `rawH2IsNative()` and the shared `RawSqlAdapt` pass:
   - H2 returns the text unchanged;
   - DuckDB does today's rewrite;
-  - Postgres does today's rewrite plus its types and lower-case folding;
+  - Postgres does today's rewrite plus its type names; its identifier rule follows D8 (it quotes a bare name as
+    written since d973b08);
   - the other eight refuse by name.
 
   A neutral H2-statement lexer stays shared. `RawSqlLedgerTest` and `DialectBoundaryTest.RAW_H2_CALLERS` are re-pinned

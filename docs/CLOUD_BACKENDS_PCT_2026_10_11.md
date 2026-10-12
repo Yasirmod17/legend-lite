@@ -899,6 +899,36 @@ What it does not do yet, and what a cloud's 50-300 ms round trip makes decisive 
 5. **No transactional DDL to lean on**: a writing test's isolation on a cloud is its own copy (or a fresh copy after
    it fails), not a rollback.
 
+**Where each of those lives** (the survey of 2026-10-12, at 7afb645; line numbers drift):
+
+- **One compile of the world:** `MinimalCorpus.java:204-310`. It types each test twice, and that CPU is the dominant
+  cost.
+- **Workspaces:**
+  - `PureTestRunner.java:169-190, 409-413`: a workspace per package session.
+  - `DuckWorkspaces.java:250-311`: `ATTACH ':memory:'`, `duplicate()` and `USE`; the proxy's close DETACHes.
+  - `DuckWorkspaces.java:198-248`: fixture asides, as attached catalogs plus `search_path`.
+  - `PureTestRunner.java:433-458`: inline-CSV tests take a private workspace that re-runs every setup.
+- **The fixture re-seed:** `BLOCK_COMPILER_HOMEWORK_2026_09_21.md:119-127` measures it. The clone design (seed once,
+  `COPY FROM DATABASE`) is at `:611` of that file and in GATES; it was never built.
+- **One script per effect segment:** `BodyCompiler.java:53-150` (DuckDB brackets each in `BEGIN..COMMIT`).
+- **The fused verdict:** `VerdictBatch.java:227-331`.
+- **Effectful tests:** autocommit is off; commit on pass; on fail, roll back and truncate the ledger
+  (`MinimalCorpus.java:615-635`).
+- **The setup re-run on every execution:** `Execution.java:184-199` (`dialectOf`), including the product's name and
+  version.
+- **Single-threaded by static state:** `ReplayOracle.MIRROR`, `H2Verify.CURRENT_TEST` and `DuckWorkspaces`' statics.
+- **DuckDB-only pieces a backend-generic harness replaces:**
+  - `DuckWorkspaces`;
+  - `ReplayOracle.java:492-498` (`duplicate()`);
+  - `CsvSeed.adaptRaw:252-255`;
+  - the overlay's hard-coded DuckDB and H2 (`MinimalCorpus.java:305-307`).
+
+  The census of `docs/dialect-leak-census-2026-10-12/` (slice C1) designs that harness's interface.
+- **Numbers:**
+  - 2,613 tests, about 4.3 executor round trips a test, 11.2k in a pass;
+  - about 32-39 s a pass and about 76 s a lane;
+  - the warehouse (HTTP) lane at about 52 s a pass.
+
 Postgres first (local, a template database is native, and its PCT lane is green), then the 77 on every lane, then
 the whole corpus on Snowflake, Databricks and BigQuery.
 
