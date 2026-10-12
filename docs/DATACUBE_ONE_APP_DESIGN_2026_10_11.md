@@ -710,6 +710,27 @@ compile took 54 ms to 3.8 s.
 - No handle crosses hosts: the page names its source's model, which Python holds, and Python plans only over the
   models it serves (R4). A page that vanishes leaks nothing in Python.
 
+### 15.3a Every host's executor types its results by the plan (the user, 2026-10-12: "for now lets go this way")
+
+Typing a result by its plan is an **execution** capability, not the compiler's: the compiler decides every column's
+type when it plans (the plan carries it), and the executor of the language the values become -- the one that turns the
+database's answer into that language's values -- puts the plan's types on them. One contract, each host's executor
+implementing it in its own language, the conformance suite (15.6) holding them alike:
+
+- a result's columns carry exactly the plan's types; a column the plan does not type is refused;
+- each Pure type's values follow one rule on every host (an exact decimal stays exact; a timestamp is UTC to the
+  microsecond; a Variant is its JSON value).
+
+As it stands: **Java's** execution (core's `exec`, step K) returns an `ExecutionResult` typed by the plan.
+**TypeScript's** executors keep `QueryEngine.execute`'s promise ("every column typed by the plan") through
+`engine-client`'s `typedByPlan`; a grid on Python reads Python's rows with that same reader, since its values become
+the page's. **Python's own** results do not yet: `Frames.execute` and `grid.to_pandas()` give DuckDB's Arrow types, not
+the compiler's. Closing that is part of this work (15.8), the Python executor PlanAndRun adds.
+
+Later, and only if the suite shows the executors drifting: the planner could write each result column's expected
+database type into the plan beside its Pure type, so every executor checks mechanically that the database answered
+what the planner expected (sent to the Plan Gen line, 2026-10-12).
+
 ### 15.4 Who may send a runner SQL
 
 - **The page's DuckDB-WASM**, in the browser's sandbox: the page.
@@ -750,6 +771,7 @@ identical in their columns, types and values, with the tab's local pair the refe
    execute splits into the run (the database's rows) and the read (typed by the plan), and the read is shared.
 2. **Python**:
    - one call (`plan-and-run.json`): plan over the held model, run, and answer the plan and the rows;
+   - Python's own results (`Frames.execute`, `to_pandas`) typed by the plan (15.3a);
    - the planner protocol's requests carried over HTTP and the channel;
    - a page's file tables and remote views holding their models.
 3. **The app**: every grid's rows through PlanAndRun. The warehouse's Live and Snap become a connection and data in.
