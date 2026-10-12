@@ -283,6 +283,9 @@ Size: about 400 lines.
   - `heldRaise(Connection)` for MariaDB and MySQL; the SQL text comes from the dialect;
   - `inMemoryDeclaration()`, used by `StorelessRuntime` and `CreateClass`.
   - H2's private URL and its `H2Settings` suffix are spelled once, in H2's connector.
+  - ClickHouse's connector carries what its burn-down put on the test harness's URL (2026-10-12,
+    `docs/CLOUD_BACKENDS_PCT_2026_10_11.md` §19.1): the raised `max_query_size` and AST limits on every connection,
+    and, on a system connection, an HTTP session of its own (`session_id`), where its temporary tables live.
 - **`Sessions`' five per-concern switches collapse into `Connectors.of(type)`.**
   - `ConnectionResolver`'s `Opening` switch is a capability in disguise (`Named` means H2, `Held` means DuckDB or
     SQLite); it moves onto the connector.

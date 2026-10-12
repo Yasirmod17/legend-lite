@@ -859,6 +859,48 @@ Nullable text (Relation went 389 / 62 / 7 to 445 / 7 / 0).
 The lanes were measured with `bazel test //pct:pct_clickhouse --local_test_jobs=1`, as Trino's. Measured on Linux
 x86_64, the one platform with a pinned build. The lanes are `manual`, in `//gates:heavy`.
 
+### 19.1 Its own pins burned down (2026-10-12, later the same day)
+
+The user asked for each of ClickHouse's 31 own pins to be worked: why it fails, a workaround probed on the server, then
+the fix (`docs/PCT_PIN_WORKAROUNDS_2026_10_12.md` has the probes). **65 pins become 42; ClickHouse's own 31 become
+8**, and the other 34 are the platform's (pinned on DuckDB too). Channel B: 333 / 3 / 1, 136 / 0 / 0, 459 / 7 / 0,
+202 / 0 / 0, 93 / 0 / 0. Every fix is in `ClickHouse.java` except two connection settings, and changes no other
+dialect's SQL.
+
+| Pins | What was refused | The dialect's answer, measured on 25.8 |
+|---:|---|---|
+| 2 | an as-of join with no equality | an equality that holds wherever the inequality can: each side's first inequality operand hashed, times zero (`cityHash64(a) * 0 = cityHash64(b) * 0`; a constant key is folded away and refused again) |
+| 1 | a join condition on one side alone | for an outer join, the condition becomes a key: `if(cond, 0, 1) = coalesce(cityHash64(<a column of the other side>), 0) * 0` |
+| 1 | a correlated subquery as IN's argument | SQL's three-valued IN by correlated EXISTS: true where `EXISTS (.. WHERE w AND c = v)`, else NULL where a row's `c` is NULL or `v` is NULL and a row is there, else false |
+| 4 | LATERAL | a lateral subquery that only filters is decorrelated: its correlated conjuncts move into an INNER or LEFT join's ON, its columns read through the subquery's outputs; any other lateral is still refused by name |
+| 4 | a RANGE frame with a Float offset | the frame computed over the partition's values: `arrayReduce(agg, arrayMap(.., arrayFilter(<key within the offsets>, groupArray(tuple(arg, key)) OVER (PARTITION BY ..))))`, for one sort key and a one-argument aggregate |
+| 1 | a quantile whose level is a column | the partition's values sorted, interpolated at `(n - 1) * level` (a literal level is still `quantileExactInclusive`) |
+| 1 | a statement over `max_query_size` | the limit and the AST limits raised on the connection (`clickhouse_setting_max_query_size`, `..._max_ast_elements`, `..._max_expanded_ast_elements`): a statement's own SETTINGS are read only after the limit has refused it |
+| 1 | the system database (§14): no session | the system connection opens an HTTP session of its own (`clickhouse_setting_session_id`, a new id per connection, an hour idle at most), and the dialect's session table is a TEMPORARY table in it. Another session does not see it; over a connection with no session the table is gone with its request, and the read after it is refused as an unknown table |
+| 4 | an empty list of no type, zipped or exploded | the empty list of the slot's type (`CAST([] AS Array(Tuple(..)))`), unnested or ARRAY-JOINed, where the result's or the exploded column's type is known |
+| 4 | a struct field of no type (an unset property) | the field's declared type; an unset list is the empty list; two instances compare as one-element arrays (`[a] = [b]`: a Tuple's `=` answers NULL where a field is NULL on either side, an array's compares NULL-safe) |
+
+One of these leans on `allow_experimental_correlated_subqueries = 1`: the IN rewrite's correlated EXISTS is
+experimental on 25.8, and it answers **false for an outer row whose correlated column is NULL, whatever the filter**
+(measured: a filter `o.v IS NULL` is false for a NULL `o.v`, and `i.k = o.k OR i.c = o.v` false where `o.v` is NULL).
+So the setting is written only into a statement that holds the rewrite, and the rewrite is made only where the filter
+is null-rejecting: each outer column a bare operand of a comparison, `v` too. Elsewhere a correlated subquery is
+still refused by the server. The LATERAL fix decorrelates into a join, so it needs no setting; it takes a subquery
+that projects its own columns only (an aggregate or a window would see the source before the filter). The two connection settings are the test harness's (the product has
+no ClickHouse connector yet): the connector the dialect-leak plan's P5 builds carries both.
+
+**What stays pinned (8), each a refusal by name or a measured difference:**
+
+- an unset property of a class type (2, `testMapInstance`, `testAssignNewInstance`): a Tuple is never NULL, and a Tuple
+  of NULLs would be an instance that is not there, so the dialect refuses it ("an absent instance as a struct field");
+- dates outside 1900 to 2299 (3): `Date32` and `DateTime64` clamp, silently;
+- a list is never NULL (2): a JSON null read as a list is `[]`; carrying it as `Variant(Array(T))` would touch every
+  list function;
+- an outer join whose ON reads both sides outside an equality (1): refused under `join_use_nulls`, which the missing
+  side's NULLs need for the whole statement.
+
+`testEqualNonPrimitive` now fails as it does on DuckDB ("Assert failed"), so it moved to the platform's pins.
+
 ## 20. The coverage map, and the corpus on every database (2026-10-12)
 
 **The map** (`docs/PRIMITIVE_COVERAGE_2026_10_12.md`, measured; the recipe `tools/census/README.md` section 3): the
