@@ -3,6 +3,60 @@
 **Status: PLAN, for review. Nothing below has been implemented, except five items that neema2/legend-lite#30 did on
 its way to main (listed in the evidence folder's README).**
 
+## 0. Start here: the handoff to the session that implements it (2026-10-12)
+
+**Before Phase 0.**
+1. **The baseline is main.** The ClickHouse and Postgres burn-downs that followed neema2/legend-lite#30 lived on
+   `claude/great-wright-p6t5s1`. They land on main first, so "pure moves produce zero rendered-SQL diffs" has one
+   fixed baseline. They touch `ClickHouse.java`, `Postgres.java`, `SqlTypeCensus`, `EmbeddedClickHouse`, `PctBackend`,
+   `Scalars`, `Dedup` and `SqlExpr.OrderedListAgg`.
+2. **Main moves under you.** Other sessions land in `sql/dialect` too: the `#SQL{...}#` line added `QuantileOrder`
+   and `RootNumericTypes` (see `docs/IN_FLIGHT.md`). Announce this program there before starting, re-read it before
+   each phase, and merge main between phases rather than at the end.
+3. **Re-run the census on the new head** (the evidence README, "To re-run"). The line numbers below cite 7afb645.
+   Since then the dialects have grown: ClickHouse's session table and Variant carriers, and Postgres' printf, maps,
+   string distances and jsonb decoding. One new leak to file is the ClickHouse session URL (`sessionJdbcUrl`) in
+   `testing/`, a P5/P6 item.
+4. **The user decides, before P1:** D1 to D8 (§6), and the base-renderer shape (P1b: the base keeps grammar only,
+   and every vocabulary point is abstract). The recommendations are written; none had been ratified when this was
+   written.
+
+**The proof for every pure move: a whole-lane SQL diff, not only the goldens.**
+- Run each local lane with `--jvmopt=-Dlegend.diagnostics=dump-sql` before the move and after it.
+- Diff the `[sql:statement]` lines of each `test.log` (under `bazel-testlogs/pct/<target>/`).
+- An empty diff on all eight local databases is the evidence a move changed nothing. The dialect unit goldens alone
+  cover a fraction of the arms.
+
+**Running the lanes** (measured in a root cloud container, 4 cores, 15 GB, a ~40 GB disk allowance):
+- **Postgres refuses root.** Run it with
+  `--strategy=TestRunner=standalone --run_under="$PWD/tools/postgres/as_unprivileged.sh ubuntu"`, after
+  `chmod o+x /root` (`docs/GATES.md`). Never export TEST_TMPDIR.
+- **The clouds** read their credentials from the file `LEGENDLITE_PCT_CLOUD_PROPERTIES` names
+  (`~/.legendlite/cloud-pct.properties`, outside the repo). Never print its values.
+- **Disk.** A full run of every lane at once filled the allowance (the embedded servers' data, the test logs, and the
+  disk cache copying both). So run in batches of about 20 targets with `--disk_cache= --local_test_jobs=2`. Keep each
+  `test.log`'s summary, then delete `bazel-testlogs/pct` between batches.
+- **Times** (both channels, five suites): DuckDB, SQLite, H2, MariaDB and MySQL about 10 minutes a batch; ClickHouse
+  and Trino about 25 (Trino's channel B Essential alone about 4); Postgres about 6; the three clouds the longest.
+- **One failing test.** Channel B takes `-Dlegend.diagnostics=dump-sql,chb-only=<test-name-substring>` and prints
+  each statement, the failing ones marked `[sql-fail]`. To read the IR with its types, a throwaway JUnit test in
+  `core/src/test/java/com/legend/sql/dialect/` can print `Compiler.query(ctx, q).lower(runtime, false).plan()` and
+  `.plan(runtime).sql()`. Use the dialect's `renderPasses()` to see what each pass does to a node's type. Delete the
+  test afterwards.
+
+**Guards that a move trips** (each moves only with a dated reason, AGENTS.md):
+- `CodeShapeGuardrailTest`: a method may have at most 250 lines; there may be at most 7 raw `new SqlExpr.Column(`
+  sites; static collections must be immutable.
+- `DialectBoundaryTest`: no new database-name decision outside the dialect.
+- `JdbcSurfaceCensusTest` and `RawSqlLedgerTest`.
+- The census ceilings in `PctCensusGate`, and the channel B floors in `ChannelBLane`.
+
+**Out of scope here; they belong to other lanes:**
+- The platform's 34 pins that every database shares with DuckDB belong to the compiler lane (functions never ported,
+  instance identity); `docs/EXECUTION_PLAN_2026_09_26.md` is parked.
+- MongoDB, Elasticsearch and SingleStore are new targets, not consolidation.
+- The cloud corpus runs.
+
 **The work behind this plan** is in `docs/dialect-leak-census-2026-10-12/`; start with its README. It holds the
 method, the classification rules, the scanner that re-runs the census, and the nine reviewers' reports in full. The
 census was taken at 7afb645, so line numbers below cite that commit. The code it audits is on main since c03ac6b.
