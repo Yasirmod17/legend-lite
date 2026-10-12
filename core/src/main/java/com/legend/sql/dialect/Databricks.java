@@ -70,10 +70,7 @@ public final class Databricks extends AnsiSqlRenderer {
         return List.of(new CarrierStrategies(CarrierStrategies.Caps.DATABRICKS),
                 new UnqualifyPivotArgs(), new CheckedDefectsToLists(),
                 new SubstringClamp(), new AggregatesDeliverDouble(java.util.Set.of(SqlAgg.Fn.AVG)),
-                new ConstantKeysAsExpressions(), new RootNumericTypes(),
-                // a large repeated subexpression written once, a constant only: Spark refuses most correlated
-                // subqueries (2026-10-11: every dialect)
-                new CommonSubexpressions(true));
+                new ConstantKeysAsExpressions(), new RootNumericTypes());
     }
 
     /** Several lists exploded side by side: DuckDB's unnests in one select are ALIGNED (the shorter padded with NULL),

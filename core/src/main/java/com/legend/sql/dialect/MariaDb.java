@@ -173,22 +173,15 @@ public class MariaDb extends AnsiSqlRenderer {
 
     /** The portable carrier strategies, star exclusions spelled out, the substring start clamp, explosions placed as
      *  markers in FROM (a JSON_TABLE), QUALIFY as a wrapping subselect, and a constant GROUP BY or ORDER BY key as an
-     *  expression (an integer one is a position). A repeated subexpression is bound once only when it reads no column
-     *  (CommonSubexpressions' constants, 2026-10-11): a correlated binding would be a table function nested per reuse,
-     *  and MariaDB's planner grew past 11 GB on ten of them (measured, the server killed). MySQL's derived tables read
-     *  the outer row: it binds every one ({@link #bindsCorrelated}). */
+     *  expression (an integer one is a position). A repeated subexpression is NOT bound once here (CommonSubexpressions,
+     *  SQLite's): its binding would be a correlated table function nested per reuse, and MariaDB's planner grew past
+     *  11 GB on ten of them (measured, the server killed). */
     @Override
     protected List<com.legend.sql.SqlRewriter> passes() {
         return List.of(new CarrierStrategies(CarrierStrategies.Caps.MARIADB), new StarExceptToColumns(),
                 new SubstringClamp(), new ExplosionMarkers.LateralUnnestAsMarker(),
                 new ExplosionMarkers.SelectListUnnestAsLateral(), new ExplosionMarkers.StarOverExplosionUnwrapped(),
-                new QualifyToSubselect(true), new ConstantKeysAsExpressions(),
-                new CommonSubexpressions(!bindsCorrelated()));
-    }
-
-    /** Whether a repeated subexpression that reads a column is bound once too (a derived table reading the outer row). */
-    protected boolean bindsCorrelated() {
-        return false;
+                new QualifyToSubselect(true), new ConstantKeysAsExpressions());
     }
 
     @Override

@@ -133,10 +133,7 @@ public final class Snowflake extends AnsiSqlRenderer {
         return List.of(new CarrierStrategies(CarrierStrategies.Caps.SNOWFLAKE), new PivotAsGroupBy(), new CheckedDefectsToLists(),
                 new SubstringClamp(), new ExplosionMarkers.LateralUnnestAsMarker(),
                 new ExplosionMarkers.SelectListUnnestAsLateral(), new ExplosionMarkers.StarOverExplosionUnwrapped(),
-                new ConstantKeysAsExpressions(), new RootNumericTypes(),
-                // a large repeated subexpression written once, a constant only: a correlated subquery is refused here
-                // where it cannot be decorrelated (2026-10-11: every dialect)
-                new CommonSubexpressions(true));
+                new ConstantKeysAsExpressions(), new RootNumericTypes());
     }
 
     @Override

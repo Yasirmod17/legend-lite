@@ -715,10 +715,12 @@ charter's Clause 4 refuses (`docs/TENET_CHARTER.md`), so the database still comp
 - MariaDB and MySQL spell it themselves, the value read once through their one-row JSON_TABLE (the literal 545 KB ->
   2.8 KB, the sort 6.5 MB -> 36 KB on MariaDB, 85 KB on MySQL); SQLite and BigQuery bind the double's text once in a
   one-row derived table (SQLite's sort 1.6 MB -> 258 KB, under its 1 MB cap; BigQuery's 436 KB -> 47 KB);
-- `CommonSubexpressions` on every dialect (the user's call): full on DuckDB, Postgres, MySQL, SQLite and BigQuery;
-  constants only where a derived table reads no outer row (MariaDB, H2, Snowflake, Databricks); never inside a lambda
-  body that names its parameters (DuckDB reads no lambda parameter in a subquery: measured on core's tests); not on the
-  engine-text printer, whose text is legend-engine's.
+- `CommonSubexpressions` stays on SQLite and BigQuery only. It was turned on for every dialect the same day (8837a71)
+  and reverted on 2026-10-12 (the user's call): it bought nothing measured beyond the Float fix above (MariaDB's sort
+  36 KB, MySQL's 85 KB, either way), and it broke six Snowflake tests -- a binding is a one-row subquery around the
+  WHOLE expression (SQL has no let), so an expression that reads its row became a correlated scalar subquery, which
+  Snowflake refuses ("Unsupported subquery type cannot be evaluated") even when the bound node is a constant. Should a
+  dialect ever need a constant bound, the uncorrelated form is a one-row table joined in the select's FROM.
 
 It moved: MariaDB 59 -> 51 (the five statement-memory pins, and 3 windowed modes below), SQLite 50 -> 49 (the mixed
 sort); every other lane unchanged on both channels.

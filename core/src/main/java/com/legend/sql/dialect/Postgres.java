@@ -160,9 +160,7 @@ public final class Postgres extends AnsiSqlRenderer {
                 new StarExceptToColumns(),
                 new WholePartitionOrderedSets(),
                 new SubstringClamp(), new AggregatesDeliverDouble(DOUBLE_AGGREGATES), new QualifyToSubselect(true),
-                new ConstantKeysAsExpressions(), new RootNumericTypes(),
-                // a large repeated subexpression written once (2026-10-11: every dialect)
-                new CommonSubexpressions());
+                new ConstantKeysAsExpressions(), new RootNumericTypes());
     }
 
     /** Postgres 12+ evaluates a {@code MATERIALIZED} CTE once. */

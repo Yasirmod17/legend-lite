@@ -202,11 +202,6 @@ public final class MySql extends MariaDb {
     }
 
     @Override
-    protected boolean bindsCorrelated() {
-        return correlatesDerived();
-    }
-
-    @Override
     protected boolean groupedModesCounted() {
         return true;
     }
