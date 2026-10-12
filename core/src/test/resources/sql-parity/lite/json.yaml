@@ -1,7 +1,7 @@
 # legend-lite's own Postgres-judged cases over upstream's parity schema: jsonb navigation (->, ->>, #>, #>>, subscripts)
 # and the jsonb functions a Variant reads by, at the edges where Postgres's answer is easy to miss: jsonb's null against
 # SQL's NULL, an index past either end, a key or an index that meets the wrong container, quoting in ->>'s text.
-# A Variant is Postgres's jsonb (register S48). Each answer is snapped from Postgres 16 with upstream's
+# A Variant is Postgres's jsonb (register S49). Each answer is snapped from Postgres 16 with upstream's
 # (postgres-answers.jsonl, key lite/json/<id>).
 tests:
   # ->: a member or an element, as jsonb
@@ -70,3 +70,26 @@ tests:
     sql: "SELECT id FROM json_data WHERE jsonb_val @> '{\"a\":1}'"
   - id: a_text_column_has_no_arrow
     sql: "SELECT name -> 'a' AS v FROM persons WHERE id = 1"
+  # set-returning: an array's elements, an object's keys
+  - id: elements_in_from_keep_jsonb_null
+    sql: "SELECT d.id, e.value FROM json_data d, jsonb_array_elements(d.jsonb_arr) e ORDER BY 1"
+  - id: elements_text_in_from
+    sql: "SELECT d.id, t.value FROM json_data d CROSS JOIN LATERAL jsonb_array_elements_text(d.jsonb_arr) AS t ORDER BY 1"
+  - id: member_of_each_element
+    sql: "SELECT d.id, e ->> 'x' AS x FROM json_data d, json_array_elements(d.json_arr) e WHERE d.id = 2 ORDER BY 2"
+  - id: elements_in_the_select_list
+    sql: "SELECT id, jsonb_array_elements(jsonb_arr) AS e FROM json_data WHERE id <= 4 ORDER BY id"
+  - id: elements_text_in_the_select_list
+    sql: "SELECT jsonb_array_elements_text(jsonb_arr) AS t FROM json_data WHERE id = 4 ORDER BY 1"
+  - id: elements_of_a_constant
+    sql: "SELECT value FROM jsonb_array_elements('[1,\"two\",null,{\"x\":3}]'::jsonb)"
+  - id: elements_of_sql_null_are_no_rows
+    sql: "SELECT count(*) AS n FROM json_data d, jsonb_array_elements(d.jsonb_arr) e WHERE d.id = 5"
+  - id: elements_of_an_object_is_an_error
+    sql: "SELECT e.value FROM json_data d, jsonb_array_elements(d.jsonb_val) e WHERE d.id = 1"
+  - id: object_keys
+    sql: "SELECT d.id, k FROM json_data d, jsonb_object_keys(d.jsonb_val) AS k ORDER BY 1, 2"
+  - id: object_keys_of_an_array_is_an_error
+    sql: "SELECT k FROM json_data d, jsonb_object_keys(d.jsonb_arr) AS k WHERE d.id = 1"
+  - id: elements_inside_an_expression_is_refused
+    sql: "SELECT jsonb_array_elements(jsonb_arr) ->> 'x' AS x FROM json_data"

@@ -161,7 +161,7 @@ public final class SqlToPure {
             case "Boolean" -> Kind.BOOLEAN;
             case "StrictDate" -> Kind.DATE;
             case "DateTime" -> Kind.DATETIME;
-            // a Variant is Postgres's jsonb (register S48)
+            // a Variant is Postgres's jsonb (register S49)
             case "Variant", VARIANT -> Kind.JSON;
             default -> Kind.OTHER;
         };
@@ -291,7 +291,12 @@ public final class SqlToPure {
 
     /** A FROM item's columns as the query names them: its qualifier (an alias, a table's or function's name; none
      *  for an unaliased subquery), and its columns. */
-    private record Binding(SqlAst.@com.legend.base.Nullable Ident qualifier, List<BCol> columns) {
+    private record Binding(SqlAst.@com.legend.base.Nullable Ident qualifier, List<BCol> columns, boolean scalar) {
+
+        /** A binding whose name is no value (a table's: its whole row, not supported here). */
+        Binding(SqlAst.@com.legend.base.Nullable Ident qualifier, List<BCol> columns) {
+            this(qualifier, columns, false);
+        }
 
         List<String> names(boolean bareOnly) {
             List<String> names = new ArrayList<>();
@@ -308,7 +313,7 @@ public final class SqlToPure {
             for (BCol c : columns) {
                 cols.add(new BCol(c.col().via(parameter), c.bare()));
             }
-            return new Binding(qualifier, cols);
+            return new Binding(qualifier, cols, scalar);
         }
 
         Binding asNullable() {
@@ -316,7 +321,7 @@ public final class SqlToPure {
             for (BCol c : columns) {
                 cols.add(new BCol(c.col().asNullable(), c.bare()));
             }
-            return new Binding(qualifier, cols);
+            return new Binding(qualifier, cols, scalar);
         }
     }
 
@@ -448,7 +453,12 @@ public final class SqlToPure {
                 throw SqlTranslationException.invalid("missing FROM-clause entry for table \"" + parts.get(0).text()
                         + "\"", parts.get(0).pos());
             }
-            if (binding(name) != null) {
+            Binding named = binding(name);
+            if (named != null && named.scalar() && named.columns().size() == 1) {
+                // a function returning one value: its name is that value (FROM jsonb_array_elements(a) e ... e ->> 'x')
+                return named.columns().get(0).col();
+            }
+            if (named != null) {
                 // Postgres reads a FROM item's name as its whole row (row_to_json(persons))
                 throw SqlTranslationException.unsupported("whole-row references (\"" + name.text() + "\" as a value)"
                         + " are not supported yet", name.pos());
@@ -519,7 +529,82 @@ public final class SqlToPure {
 
     // ------------------------------------------------------------------ the query
 
-    private Rel select(SqlAst.Select s) {
+    /**
+     * A set-returning function as a whole select-list item ({@code SELECT jsonb_array_elements(a) FROM t}): Postgres
+     * reads it after FROM and WHERE, one row per element, the other items repeated; here it is a LATERAL item after
+     * the query's FROM, and the item its column. One such function per select list (two run in lockstep in Postgres),
+     * none with grouping, aggregates, windows or DISTINCT; one inside an expression is refused.
+     */
+    private static SqlAst.Select selectListSetReturning(SqlAst.Select s) {
+        int found = -1;
+        for (int i = 0; i < s.items().size(); i++) {
+            if (s.items().get(i) instanceof SqlAst.SelectExpr x) {
+                if (x.expr() instanceof SqlAst.FunctionCall f && setReturning(f)) {
+                    if (found >= 0) {
+                        throw SqlTranslationException.unsupported("two set-returning functions in one select list are"
+                                + " not supported yet", f.pos());
+                    }
+                    found = i;
+                    for (SqlAst.Expr a : f.args()) {
+                        noSetReturning(a);
+                    }
+                } else {
+                    noSetReturning(x.expr());
+                }
+            }
+        }
+        if (found < 0) {
+            return s;
+        }
+        SqlAst.SelectExpr item = (SqlAst.SelectExpr) s.items().get(found);
+        SqlAst.FunctionCall f = (SqlAst.FunctionCall) item.expr();
+        if (s.distinct() || !s.groupBy().isEmpty() || s.having() != null || hasAggregate(s) || !s.windows().isEmpty()
+                || hasWindow(s)) {
+            throw SqlTranslationException.unsupported("a set-returning function in a select list with grouping,"
+                    + " aggregates, windows or DISTINCT is not supported yet", f.pos());
+        }
+        if (f.distinct() || f.star()) {
+            throw SqlTranslationException.invalid(functionName(f.name().get(f.name().size() - 1)) + " is not an"
+                    + " aggregate", f.pos());
+        }
+        String name = item.alias() != null ? item.alias().quoted() ? item.alias().text() : fold(item.alias().text())
+                : functionName(f.name().get(f.name().size() - 1));
+        SqlAst.Ident table = new SqlAst.Ident(SYNTHETIC + "set", true, f.pos());
+        SqlAst.Ident column = new SqlAst.Ident(name, true, f.pos());
+        List<SqlAst.Arg> args = new ArrayList<>();
+        f.args().forEach(a -> args.add(new SqlAst.Arg(null, a)));
+        List<SqlAst.FromItem> from = new ArrayList<>(s.from());
+        from.add(new SqlAst.TableFunction(f.name(), args, table, List.of(column), f.pos()));
+        List<SqlAst.SelectItem> items = new ArrayList<>(s.items());
+        items.set(found, new SqlAst.SelectExpr(new SqlAst.ColumnRef(List.of(table, column), f.pos()),
+                new SqlAst.Ident(name, true, f.pos()), item.pos()));
+        return new SqlAst.Select(false, items, from, s.where(), s.groupBy(), s.having(), s.windows(), s.orderBy(),
+                s.limit(), s.offset(), s.pos());
+    }
+
+    private static boolean setReturning(SqlAst.FunctionCall f) {
+        return f.name().size() == 1 && SET_RETURNING.contains(functionName(f.name().get(0)));
+    }
+
+    private static void noSetReturning(SqlAst.Expr e) {
+        if (e instanceof SqlAst.FunctionCall f && setReturning(f)) {
+            throw SqlTranslationException.unsupported("a set-returning function inside an expression is not supported"
+                    + " yet", f.pos());
+        }
+        children(e).forEach(SqlToPure::noSetReturning);
+    }
+
+    private static boolean hasWindow(SqlAst.Select s) {
+        for (SqlAst.SelectItem i : s.items()) {
+            if (i instanceof SqlAst.SelectExpr x && containsWindow(x.expr())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private Rel select(SqlAst.Select query) {
+        SqlAst.Select s = selectListSetReturning(query);
 
         if (s.items().isEmpty()) {
             throw SqlTranslationException.unsupported("a select list with no columns is not supported yet", s.pos());
@@ -725,7 +810,7 @@ public final class SqlToPure {
                 cols.add(new BCol(to == null ? col : new Col(to, col.kind(), col.nullable(), col.var(), col.label()),
                         c.bare()));
             }
-            rights.add(new Binding(b.qualifier(), cols));
+            rights.add(new Binding(b.qualifier(), cols, b.scalar()));
         }
         List<Col> rightStar = new ArrayList<>();
         for (Col c : right.star()) {
@@ -781,9 +866,15 @@ public final class SqlToPure {
     private Source functionSource(SqlAst.TableFunction f, Scope scope) {
         String fn = functionName(f.name().get(f.name().size() - 1));
         SqlAst.Ident alias = f.alias();
-        String column = alias != null ? alias.quoted() ? alias.text() : fold(alias.text()) : fn;
+        // a function with an OUT parameter names its column by it (json_array_elements's value); one returning a
+        // plain type by the table alias, else itself
+        String column = OUT_VALUE_FUNCTIONS.contains(fn) ? "value"
+                : alias != null ? alias.quoted() ? alias.text() : fold(alias.text()) : fn;
         Rel rel = setReturning(f, fn, column, scope);
-        return bound(rel, alias != null ? alias : f.name().get(f.name().size() - 1), f.columnAliases(), f.pos());
+        Source source = bound(rel, alias != null ? alias : f.name().get(f.name().size() - 1), f.columnAliases(),
+                f.pos());
+        Binding b = source.bindings().get(0);
+        return new Source(source.relation(), List.of(new Binding(b.qualifier(), b.columns(), true)), source.star());
     }
 
     /** {@code generate_series} and {@code unnest} as Pure's {@code flatten} of a collection: one row per element. */
@@ -799,12 +890,10 @@ public final class SqlToPure {
             }
             argExprs.add(a.value());
         }
-        ValueSpecification collection;
-        Kind kind;
         switch (fn) {
             case "generate_series" -> {
-                collection = series(argExprs, scope, f.pos());
-                kind = Kind.INTEGER;
+                return new Rel(call("flatten", series(argExprs, scope, f.pos()), colSpec(column)),
+                        List.of(new OutCol(column, Kind.INTEGER, false)));
             }
             case "unnest" -> {
                 if (argExprs.size() != 1) {
@@ -812,13 +901,66 @@ public final class SqlToPure {
                             + " supported yet", f.pos());
                 }
                 Tx elements = array(argExprs.get(0), scope);
-                collection = elements.vs();
-                kind = elements.kind();
+                return new Rel(call("flatten", elements.vs(), colSpec(column)),
+                        List.of(new OutCol(column, elements.kind(), false)));
+            }
+            case "json_array_elements", "jsonb_array_elements" -> {
+                // each element as jsonb (jsonb's null an element too); none for SQL's NULL; a value that is not an
+                // array is Postgres's error, and Pure's toMany's
+                ValueSpecification elements = jsonElements(f, fn, argExprs, scope);
+                return new Rel(call("flatten", elements, colSpec(column)),
+                        List.of(new OutCol(column, Kind.JSON, true)));
+            }
+            case "json_array_elements_text", "jsonb_array_elements_text" -> {
+                // each element's text (->> of it: NULL for jsonb's null)
+                String held = SYNTHETIC + "element";
+                ValueSpecification rel = call("select", call("extend", call("flatten",
+                        jsonElements(f, fn, argExprs, scope), colSpec(held)), new ColSpecArray(List.of(
+                                new ColSpec(column, lambda(SYNTHETIC + "e", call("to", property(SYNTHETIC + "e", held),
+                                        typeArg("String"))), null, null)))), new ColSpecArray(List.of(colSpec(column))));
+                return new Rel(rel, List.of(new OutCol(column, Kind.STRING, true)));
+            }
+            case "json_object_keys", "jsonb_object_keys" -> {
+                if (argExprs.size() != 1) {
+                    throw SqlTranslationException.invalid("function " + fn + " takes one argument", f.pos());
+                }
+                constantNavigation(argExprs.get(0), f.pos());
+                Tx x = jsonOperand(tx(argExprs.get(0), scope, row), fn, f.pos());
+                // none for SQL's NULL; a value that is not an object is Postgres's error, and the Map read's
+                // (to reads a Variant[0..1]: the value itself is never toOne'd, whose Postgres guard is text's)
+                ValueSpecification keys = call("keys", call("toOne", call("to", x.vs(), new TypeAnnotation.Named(
+                        new TypeExpression.Generic(MAP, List.of(new TypeExpression.NameRef("String"),
+                                new TypeExpression.NameRef(VARIANT)))))));
+                if (x.nullable()) {
+                    keys = call("if", call("isEmpty", x.vs()), thunk(empty()), thunk(keys));
+                }
+                return new Rel(call("flatten", keys, colSpec(column)),
+                        List.of(new OutCol(column, Kind.STRING, false)));
             }
             default -> throw SqlTranslationException.unsupported("function \"" + fn + "\" in FROM is not supported yet",
                     f.pos());
         }
-        return new Rel(call("flatten", collection, colSpec(column)), List.of(new OutCol(column, kind, false)));
+    }
+
+    /** The set-returning functions whose one column is their OUT parameter's, {@code value}. */
+    private static final Set<String> OUT_VALUE_FUNCTIONS = Set.of("json_array_elements", "jsonb_array_elements",
+            "json_array_elements_text", "jsonb_array_elements_text");
+
+    /** The set-returning functions this step reads, in FROM or as a select-list item. */
+    private static final Set<String> SET_RETURNING = Set.of("generate_series", "unnest", "json_array_elements",
+            "jsonb_array_elements", "json_array_elements_text", "jsonb_array_elements_text", "json_object_keys",
+            "jsonb_object_keys");
+
+    private static final String MAP = "meta::pure::functions::collection::Map";
+
+    /** A jsonb array's elements, Pure's toMany(@Variant). */
+    private ValueSpecification jsonElements(SqlAst.TableFunction f, String fn, List<SqlAst.Expr> args, Scope scope) {
+        if (args.size() != 1) {
+            throw SqlTranslationException.invalid("function " + fn + " takes one argument", f.pos());
+        }
+        constantNavigation(args.get(0), f.pos());
+        Tx x = jsonOperand(tx(args.get(0), scope, row), fn, f.pos());
+        return call("toMany", x.vs(), typeArg(VARIANT));
     }
 
     /** {@code generate_series(start, stop [, step])} of integers, Pure's {@code range} (whose stop is exclusive): no
@@ -1065,7 +1207,7 @@ public final class SqlToPure {
         for (BCol c : b.columns()) {
             cols.add(new BCol(c.col(), c.bare() && !hidden.contains(c.col().name())));
         }
-        return new Binding(b.qualifier(), cols);
+        return new Binding(b.qualifier(), cols, b.scalar());
     }
 
     // ------------------------------------------------------------------ set operations and WITH
@@ -2916,7 +3058,7 @@ public final class SqlToPure {
             return strict(Kind.INTEGER, a, v -> call("rem", v.get(0), v.get(1)));
         });
         m.put("round", (t, f, a, s, r) -> round(f, a));
-        // jsonb (a Variant, register S48): json's functions read it as jsonb's do
+        // jsonb (a Variant, register S49): json's functions read it as jsonb's do
         for (String family : List.of("json", "jsonb")) {
             // an array's length is refused: Pure's toMany(@Variant) drops an array's null elements on DuckDB, and
             // reads a value that is not an array (Postgres's error) as an empty list on Postgres
@@ -3427,7 +3569,7 @@ public final class SqlToPure {
 
     // ------------------------------------------------------------------ jsonb
 
-    /** Pure's semi-structured value: Postgres's jsonb here (register S48). */
+    /** Pure's semi-structured value: Postgres's jsonb here (register S49). */
     private static final String VARIANT = "meta::pure::metamodel::variant::Variant";
     private static final String FROM_JSON = "meta::pure::functions::variant::convert::fromJson";
 

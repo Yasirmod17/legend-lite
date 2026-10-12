@@ -25,6 +25,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * tenet) and its results (the semantics).
  */
 class LowerRelationTest {
+    /** DuckDB's toMany(@Variant) of a stored Variant column (DuckDb.variantElements, 2026-10-12): JSON's null elements
+     *  kept, a value that is not an array toMany's error. */
+    private static final java.util.function.Function<String, String> ELEMENTS = col -> "(CASE WHEN json_type(CAST(t0."
+            + col + " AS JSON)) = 'ARRAY' THEN json_extract(CAST(t0." + col + " AS JSON), '$[*]') WHEN CAST(t0." + col
+            + " AS JSON) IS NULL OR json_type(CAST(t0." + col + " AS JSON)) = 'NULL' THEN NULL ELSE error('Expect"
+            + " variant that contains an ''ARRAY'', but got ''' || json_type(CAST(t0." + col + " AS JSON)) || '''')"
+            + " END)";
+
 
     private static final String MODEL = """
             ###Mapping
@@ -666,7 +674,8 @@ class LowerRelationTest {
         SqlQuery q = new Lowerer(com.legend.lowering.PlatformRegistrations.catalogTable()).lower(Compiler.query(Compiler.compileModel(model), "#>{test::DB.T_ORDERS}#->flatten(~ITEMS)").expression());
         String sql = new DuckDb().render(q);
         assertEquals(1, count(sql, "SELECT"), "flatten folds: " + sql);
-        assertTrue(sql.contains("UNNEST(CAST(t0.ITEMS AS JSON[])) AS ITEMS"), sql);
+        // the elements keep JSON's null (a JSON[] cast made it SQL's NULL), and a non-array is toMany's error
+        assertTrue(sql.contains("UNNEST(" + ELEMENTS.apply("ITEMS") + ") AS ITEMS"), sql);
         assertEquals(List.of("1|10", "1|20", "2|30"), exec(sql + "\nORDER BY ID, ITEMS"),
                 "rows explode per element; NULL list yields no rows");
     }
@@ -793,12 +802,12 @@ class LowerRelationTest {
                         + "->fold({e, a | $e + $a}, 0))").expression());
         String sql = new DuckDb().render(q);
         // The composition's SHAPE is pinned, not just its results: elements
-        // via JSON[] cast, per-element CAST inside list_transform, reduced
+        // via toMany's elements, per-element CAST inside list_transform, reduced
         // with the swapped (acc, elem) lambda — all in ONE flat SELECT.
         assertEquals(1, count(sql, "SELECT"), sql);
         // the NULL-list guard (fold over empty = init) wraps the source
         assertTrue(sql.contains("list_reduce(coalesce(list_transform("
-                        + "CAST(t0.NUMS AS JSON[]), i -> CAST(i AS BIGINT)), []), "),
+                        + ELEMENTS.apply("NUMS") + ", i -> CAST(i AS BIGINT)), []), "),
                 "composition shape: " + sql);
         assertEquals(List.of("1|6", "2|10"),
                 exec("SELECT ID, total FROM (" + sql + ")\nORDER BY ID"),

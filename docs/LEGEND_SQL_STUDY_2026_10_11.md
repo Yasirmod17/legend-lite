@@ -970,13 +970,79 @@ as an unprivileged user. It needs `chmod o+x /root` once, then
 `//core:postgres_arm_test` pass. The full local gate on this branch's head otherwise fails only the same 13
 container-bound browser and timeout targets as on the base commit.
 
-**Next steps, by size:**
-1. LATERAL (Pure has `lateral`), queries without FROM, `func(...)` sources (`generate_series`).
-2. Intervals and date arithmetic.
-3. Core: lower `indexOf` 0-based (then `strpos`), a half-away-from-zero `round(x, n)`.
-4. Regular expressions, judged per pattern feature.
+**Next steps, by size** (the semi-structured step came first, at the user's ask: JSON and Variant are what lite's
+DuckDB users do; §9.2):
+1. Intervals and date arithmetic.
+2. Core: lower `indexOf` 0-based (then `strpos`), a half-away-from-zero `round(x, n)`, `parseDecimal`'s precision.
+3. Regular expressions, judged per pattern feature.
+4. jsonb's remaining operators (`@>`, `?`, `||`, `-`), `json_each`, `jsonb_typeof`, an array's length: each waits on
+   a Pure spelling or a platform fix (§9.2's findings).
 
 Then the HTTP routes (`/api/sql/v1/...`), then the wire.
+
+### 9.2 Semi-structured: jsonb, LATERAL, set-returning functions (built 2026-10-12, on the branch)
+
+The user's correction (2026-10-12): upstream passes 13 of its 133 JSON cases, but that is upstream's gap, not the
+feature's worth. Lite's DuckDB users navigate JSON with Pure's `get`, and unnest it with `lateral` and `flatten`. So
+the semi-structured step came before the cheap parity batch.
+
+**What a Variant is in SQL: Postgres's `jsonb`** (register S49). A Legend model has one semi-structured type, so a
+Variant column cannot be both. `jsonb` is the one whose meaning is Pure's: keys without order, no duplicates. `json`'s
+operators and functions read a Variant as `jsonb`'s do.
+
+**What reads now:**
+- **Navigation:** `->` and subscripts are `get` (a constant key's member; an integer's element from 0, negative from the
+  end; past either end NULL); `->>` is its text (`to(@String)`: a string's own characters, NULL for jsonb's null);
+  `#>` and `#>>` walk a constant `text[]` path; `json(b)_extract_path(_text)` the same.
+- **Constants and casts:** `'...'::jsonb`, `jsonb '...'` and `text::jsonb` parse with `fromJson`; `to_jsonb` of text,
+  numbers and booleans is `toVariant`.
+- **Set-returning functions,** in FROM, after a LATERAL, or as a whole select-list item:
+  - `json(b)_array_elements(_text)` (`toMany(@Variant)`, jsonb's null an element), `json(b)_object_keys`;
+  - `generate_series` of integers (`range`), `unnest(ARRAY[...])` and `unnest(string_to_array(...))` (`flatten`).
+  A function in FROM reads the items before it, as in Postgres. Its alias is its value
+  (`FROM jsonb_array_elements(a) e ... e ->> 'x'`).
+- **LATERAL subqueries:** by comma, `CROSS JOIN` or `[INNER] JOIN ... ON`, each Pure's `lateral`.
+- **A query without FROM:** one row (a TDS literal of one hidden column).
+
+**The judge.** A `json` or `jsonb` cell is its JSON value: keys unordered, numbers by value. A JSON value equals only a
+JSON value (a `jsonb` 42 is not the integer 42). The text of an object or array (`->>` of one) compares as JSON: the
+same JSON, written compactly on DuckDB and with `jsonb`'s spaces on Postgres (register S49).
+
+**Refused by name, each where lite would answer otherwise than Postgres:**
+- `jsonb`'s own order and equality: a `jsonb` value as a sort, group, DISTINCT, set-operation or window key, or
+  compared.
+- A `jsonb` value read out of a `jsonb` constant (`->`, `#>`, subscripts, `jsonb_array_elements`): see finding 1.
+- A path element that is a number (an array's index or an object's key, by the value it meets); a key starting with
+  `$` or `/` (finding 3); a member key that is not a constant.
+- `json(b)_array_length`, `json_each`, `jsonb`'s `-`, `||`, `@>`, `?` and the rest of its operators; `LEFT JOIN
+  LATERAL`; `WITH ORDINALITY`; an array element that may be NULL (a Pure collection holds none); a subquery without
+  FROM (finding 6).
+
+**Platform findings** (the database owner's; the first two fixed on the branch, in `sql/dialect/`):
+1. **Fixed: DuckDB's `toMany(@Variant)` turned jsonb's null elements into SQL's NULL.** A cast to `JSON[]` does this,
+   so a list read them as missing: an array's length dropped them, and `flatten` gave SQL's NULL. It now reads an
+   array's elements with `json_extract(x, '$[*]')`, which keeps them. A value that is not an array is still Pure's
+   `toMany` error (PCT `testToManyFromNonArray`).
+2. **Fixed: Postgres's `toMany(@Variant)` and `to(@Map)` read a value of the wrong shape as an empty list or no map.**
+   Postgres, Pure and DuckDB raise an error there. They now raise Postgres's own (`jsonb_array_elements`,
+   `jsonb_object_keys`).
+3. **Open: the literal-Variant fold.** `CarrierStrategies` folds the navigation of a literal Variant on the list-less
+   dialects (Postgres, H2, the engine text). It re-emits a picked string, number or boolean as a plain SQL literal, so
+   `fromJson('{"a":"x"}')->get('a')` is the text `x` on Postgres, not a Variant. The SQL front end refuses navigating a
+   jsonb constant to a jsonb value.
+4. **Open: DuckDB's arrow reads a key that starts with `$` or `/` as a path.** So Pure's `get('$ref')` misreads a
+   member named `$ref`.
+5. **Open: Postgres's `toOne` of a jsonb value.** Its empty-collection guard is text, so `CASE` cannot match it with
+   the jsonb.
+6. **Open: `toVariant` of a string constant on Postgres** is `to_jsonb('...')`, whose type Postgres cannot resolve.
+7. **Open: a lateral over a correlated one-row relation** (a subquery without FROM reading the enclosing row) does not
+   lower.
+
+**The ledger after this step,** identical in both lanes:
+- upstream's 1,703 cases: PASS 1,016 (951 before), REFUSED 558, BOTH_ERROR 61, SKIP 68. Upstream legend-engine passes
+  1,026 of them, with 36 wrong answers and 61 accepted invalid queries;
+- legend-lite's own 244 (177 before; `lite/json.yaml` 41, `lite/lateral.yaml` 26): PASS 192, REFUSED 30, BOTH_ERROR 22;
+- 0 FAIL, 0 BUG, 0 ERROR.
 
 ## 10. Sources
 

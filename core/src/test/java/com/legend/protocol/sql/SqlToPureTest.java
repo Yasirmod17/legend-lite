@@ -372,6 +372,17 @@ class SqlToPureTest {
     }
 
     @Test
+    void jsonbSetReturningFunctionsAreToManyAndKeysAndTheSelectListFormIsALateral() {
+        assertEquals("#>{s::DB.T}#->lateral(r|$r.j->toMany(@meta::pure::metamodel::variant::Variant)->flatten(~value))->extend(~[x:r|$r.value->get('x')->to(@String)])->select(~[ID, x])",
+                pure("select ID, e ->> 'x' as x from tb('s::DB.T') t, jsonb_array_elements(t.j) e",
+                JSON_COLUMNS));
+        assertEquals("#>{s::DB.T}#->lateral(r|if($r.j->isEmpty(), |[], |$r.j->to(@meta::pure::functions::collection::Map<String, meta::pure::metamodel::variant::Variant>)->toOne()->keys())->flatten(~_sql_set)->rename(~_sql_set, ~k))->select(~[ID, k])",
+                pure("select ID, jsonb_object_keys(j) as k from tb('s::DB.T')", JSON_COLUMNS));
+        assertEquals("a set-returning function inside an expression is not supported yet",
+                refusal("select jsonb_array_elements(j) ->> 'x' from tb('s::DB.T')", JSON_COLUMNS).getMessage());
+    }
+
+    @Test
     void isDistinctFromIsPureEquality() {
         assertEquals("#>{s::DB.T}#->filter(r|$r.firstName != $r.dept)->select(~[ID])",
                 pure("select ID from tb('s::DB.T') where firstName is distinct from dept"));

@@ -643,7 +643,7 @@ public final class SqlParity {
         if (expected instanceof JsonValue || actual instanceof JsonValue) {
             return expected.equals(actual);
         }
-        // the text of a JSON object or array (->> of one, register S48): the same JSON, in DuckDB's compact spelling or
+        // the text of a JSON object or array (->> of one, register S49): the same JSON, in DuckDB's compact spelling or
         // jsonb's (a space after each ',' and ':')
         if (expected instanceof String es && actual instanceof String as && jsonContainerText(es)
                 && jsonContainerText(as)) {
