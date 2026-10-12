@@ -12,9 +12,10 @@
 //   follows their versions (`version.json`, or the widget's), and it says what it is now, for `page.read()`
 //   (`page.json`, with the version it opened: what it says of a page Python has replaced is refused).
 //
-// - A PAGE'S FILE (an upload, an example) goes into Python's DuckDB (step 2b): its bytes to Python (`file.json`), read
-//   there by DataCube's own code (upload.ts, run headless), which writes its model; the grid's rows are then Python's
-//   over that model, as a frame's are. Offered where Python says it takes files (`services.json`: the datacube extra).
+// - A PAGE'S FILE (an upload, an example) goes into Python's DuckDB (step 2b): its bytes to Python a part at a time
+//   (`file-part.json`), read there as one file by DataCube's own code (upload.ts, run headless: `file.json`), which
+//   writes its model; the grid's rows are then Python's over that model, as a frame's are. Offered where Python says it
+//   takes files (`services.json`: the datacube extra).
 //
 // What Python does not answer yet is a service it does not give, and the app does not offer what reads it (§3.4): its
 // page store (Save, Open…: step 2d), a remote file (2b's second part), the other planes (2c), its model home and saved
@@ -36,7 +37,7 @@ import { pageToJson, readPage, type PageDocument } from '../page-document.ts';
 import { PlanAndRun, QueryFailure } from '../runner.ts';
 import type { InferredModel } from '../infer.ts';
 import type { S3Credentials } from '../remote.ts';
-import { fileBytes, type UploadResult } from '../upload.ts';
+import { fileParts, type UploadResult } from '../upload.ts';
 import type {
   BrowserService, DatabaseService, FrameModel, LivePage, PageService, Plane, PlaneService, PlaneWord, Services, Versions,
 } from '../app/services.ts';
@@ -296,10 +297,23 @@ export function pythonDatabase(link: PythonLink, offers: PythonOffers): Database
   return {
     frame: (name) => frameOf(link, name),
     ...(offers.files ? {
-      ingestFile: async (file: File, options: { readonly table: string }) => JSON.parse(await posted(link, 'file.json', {
-        // the bytes the tab's DuckDB is given (upload.ts fileBytes): a text file decoded as the tab always has
-        name: file.name, bytes: base64(await fileBytes(file)), table: options.table,
-      })) as UploadResult,
+      ingestFile: async (file: File, options: { readonly table: string }) => {
+        // the bytes the tab's DuckDB is given (upload.ts fileParts: a text file decoded as the tab always has), sent a
+        // part at a time as they are read (file-part.json, each saying where it starts), so no file is too big to send
+        // and none is ever whole in the page; then read there, as one file (file.json)
+        let upload: string | undefined;
+        let at = 0;
+        const send = async (part: Uint8Array): Promise<void> => {
+          const said = JSON.parse(await posted(link, 'file-part.json', { ...(upload ? { upload } : {}), at, bytes: base64(part) })) as
+            { upload: string };
+          upload = said.upload;
+          at += part.length;
+        };
+        for await (const part of fileParts(file)) await send(part);
+        // an empty file is an upload too: Python reads it, and says what an empty file is
+        if (upload === undefined) await send(new Uint8Array(0));
+        return JSON.parse(await posted(link, 'file.json', { upload, name: file.name, table: options.table })) as UploadResult;
+      },
       forgetFile: async (fileName: string, table: string) => { await posted(link, 'forget.json', { name: fileName, table }); },
     } : {}),
     // a remote file, read by Python's DuckDB through the httpfs extension Python carries; Python reads it only from a

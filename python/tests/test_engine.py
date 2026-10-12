@@ -381,9 +381,10 @@ class NoFiles(Served):
     def test_it_says_it_takes_no_file_and_refuses_one(self):
         answer = self.server.engine.answer('GET', '/services.json', '', None)
         self.assertFalse(json.loads(answer.body)['files'])
-        status, _, body = self.post('/file.json', json.dumps({'name': 'a.csv', 'bytes': 'YQoxCg==', 'table': 'a'}))
-        self.assertEqual(status, 404)
-        self.assertIn(b'datacube extra', body)
+        for path, asked in (('/file-part.json', {'at': 0, 'bytes': 'YQoxCg=='}), ('/file.json', {'upload': 'u', 'name': 'a.csv', 'table': 'a'})):
+            status, _, body = self.post(path, json.dumps(asked))
+            self.assertEqual(status, 404, path)
+            self.assertIn(b'datacube extra', body)
 
 
 class OnlyItsOwnPage(Served):

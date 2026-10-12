@@ -220,19 +220,21 @@ async function run(): Promise<void> {
   // THE READER'S FILES (§15.6): each read by DataCube's own reader (upload.ts) into the tab's DuckDB and into Python's
   // (the page hands Python the bytes the tab's DuckDB is given, fileBytes), then every row planned and run on each
   // host -- the same columns, types and values. A text file is read as the tab has always read it: a byte-order mark
-  // dropped, CRLF lines, a Latin-1 byte the replacement character.
+  // dropped, CRLF lines, a Latin-1 byte the replacement character; and a file larger than one part.
   await check('every reader file reads the same on Python\'s page and in the tab', async () => {
     const link: PythonLink = { baseUrl: location.origin, fetch: (i, init) => fetch(i, init), authorization: served.authorization };
     const python = pythonDatabase(link, await askedOffers(link));
     if (python.ingestFile === undefined || python.forgetFile === undefined) throw new CheckFailed('Python\'s engine reads no page file');
     const utf8 = (text: string): Uint8Array => new TextEncoder().encode(text);
     const files: readonly (readonly [string, Uint8Array])[] = [
-      ['bom.csv', utf8('﻿id,name\r\n1,a\r\n2,b\r\n')],
+      ['bom.csv', utf8('\uFEFFid,name\r\n1,a\r\n2,b\r\n')],
       ['quoted.csv', utf8('id,name,amount\r\n1,"x, y",1.50\r\n2,z,\r\n3,"say ""hi""",-0.25\r\n')],
       ['latin1.csv', new Uint8Array([...utf8('id,name\n1,caf'), 0xe9, ...utf8('\n2,plain\n')])],
       ['dates.csv', utf8('day,at,flag\n2024-01-02,2024-01-02 03:04:05.123456,true\n0001-01-01,1970-01-01 00:00:00,false\n,,\n')],
       ['lines.jsonl', utf8('{"id":1,"tags":["a","b"],"at":"2024-01-02T03:04:05.123456"}\n{"id":2,"tags":[],"at":null}\n')],
-      ['nested.json', utf8('﻿[{"id":1,"customer":{"name":"A","tier":2},"amount":12.30},{"id":2,"customer":null,"amount":null}]')],
+      ['nested.json', utf8('\uFEFF[{"id":1,"customer":{"name":"A","tier":2},"amount":12.30},{"id":2,"customer":null,"amount":null}]')],
+      // over 4 MiB: sent to Python in two parts (upload.ts PART_BYTES)
+      ['parts.csv', utf8(`id,name\n${Array.from({ length: 400_000 }, (_, i) => `${i},José ${i}`).join('\n')}\n`)],
     ];
     // the runner reads only the snapshot's epoch
     const snapshot = CASES[0]!.snapshot;

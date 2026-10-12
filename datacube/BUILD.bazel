@@ -369,7 +369,6 @@ _HEADLESS_TESTS = [
     "tree",
     "treeview",
     "type-columns",
-    "upload",
     "values",
     "warehouse-session",
     "window",
@@ -388,6 +387,9 @@ _HEADLESS_LEFT_OUT = {
     "warehouse-session-http": "the warehouse sign-in's HTTP",
     # the chart renderer (ECharts) draws on a DOM canvas: a screen test, though it imports no jsdom itself
     "chart-echarts": "ECharts draws on a DOM canvas",
+    # a picked File read as a stream (Blob, TextDecoderStream: upload.ts fileParts) is the page's: headless reads a file
+    # by its path (readFileInto, run by //python:headless_test's Files)
+    "upload": "a picked File, read as the page's stream",
     # the lane's own stand-ins and web layer, held to Node's built-ins: they need the Node they compare against
     "headless-assert": "node:assert/strict, its reference",
     "headless-test-runner": "node:test's own run, its reference",

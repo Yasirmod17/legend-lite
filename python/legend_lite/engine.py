@@ -58,18 +58,14 @@ from ._home import SavedPages
 
 _API = '/api/pure/v1/'
 _EXECUTE = _API + 'execution/execute'
-# a request body larger than this is refused: a query and its model are kilobytes
+# a request body larger than this is refused: a query and its model are kilobytes, and a page's file comes a part at a
+# time (file-part.json: 4 MiB each, as base64 in JSON, datacube/src/upload.ts PART_BYTES), so no file is too big
 _MAX_BODY = 16 * 1024 * 1024
-# a page's file, its bytes as base64 in its call (file.json): a file a little under 192 MiB (base64 makes it a third
-# larger, and the call wraps it in JSON). Measured 2026-10-12 (Apple
-# M-series, the session's engine; Python writes the bytes and only their path reaches DataCube's code): a 192 MB CSV,
-# 256 MB as base64, read in 0.8 s, the process peaking at 1.8 GB (a 64 MB one 0.4 s and 0.75 GB), the measuring
-# script's own copies included; the frames are held still meanwhile. A larger file is read in Python itself
-# (ll.show(pd.read_csv(...)))
-_MAX_FILE_BODY = 256 * 1024 * 1024
 # the calls that bring a page's data in and let it go (each changes the engine's data), and what Python's host offers
 # the page (docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md §3.4, §4.3): each the engine's own page's, so each carries the token
 _FILE_IN, _FILE_OUT, _REMOTE, _SERVICES = '/file.json', '/forget.json', '/remote.json', '/services.json'
+# a page's file's bytes, a part at a time, before file.json reads them
+_FILE_PART = '/file-part.json'
 # the page's saved pages, as the browser keeps its records (step 2d): all, one, put, remove
 _SAVED = '/saved-pages.json'
 # PLANANDRUN (docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md §15): a page's grid planned against the model Python holds and
@@ -208,7 +204,7 @@ def _duckdb_platform() -> str:
 def private(path: str) -> bool:
     """Whether a call reads the engine's data -- the API, a frame's cube, its version -- and so, over HTTP, carries the
     token. The site's files are the page's own and carry no secret."""
-    return path.startswith(_API) or path in ('/cube.json', '/version.json', '/page.json', _FILE_IN, _FILE_OUT, _REMOTE,
+    return path.startswith(_API) or path in ('/cube.json', '/version.json', '/page.json', _FILE_IN, _FILE_PART, _FILE_OUT, _REMOTE,
                                              _SAVED, _SERVICES, _PLAN_AND_RUN, _PLANNER)
 
 
@@ -290,6 +286,10 @@ class Engine:
         self._headless = headless
         # where the frames' DuckDB was pointed for its extensions (a remote file's httpfs), once it was
         self._extensions: Path | None = None
+        # the page files coming in a part at a time (file-part.json), each by the name Python gave it: where its bytes
+        # are written so far; one part is written at a time
+        self._uploads: dict[str, Path] = {}
+        self._uploads_lock = threading.Lock()
         self.planner = planner if planner is not None else NativePlanner()
         self._saved_pages = pages
         self.site = Path(site).resolve() if site is not None else None
@@ -318,6 +318,8 @@ class Engine:
         if method == 'POST':
             if path == '/page.json':
                 return self._page_said(query, body or '')
+            if path == _FILE_PART:
+                return self._file_part(body or '')
             if path == _FILE_IN:
                 return self._file_in(body or '')
             if path == _FILE_OUT:
@@ -476,20 +478,22 @@ class Engine:
             self.frames.connection.execute(statement)
         self._extensions = folder
 
-    def _file_in(self, body: str) -> Answer:
-        """A page's file read into a table of its own in the frames' database (docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md
-        §4.3): ``{"name", "bytes", "table"}``, its bytes base64. Python writes the bytes, once, where its DuckDB reads
-        them (the headless engine's folder, under a name of Python's), and DataCube's own code reads that file into the
-        table (upload.ts's readFileInto, run headless): only the path crosses into the engine, and Python and the tab
-        read a file the same way. The table is a copy, so the file goes at once. Its model is served beside the frames'
-        from then on (the only models a query may be over), and the answer is what arrived, as upload.ts says it. The
-        page sends no SQL."""
+    def _file_part(self, body: str) -> Answer:
+        """A part of a page's file, in order (``{"upload"?, "at", "bytes"}``, its bytes base64): the bytes the tab's DuckDB
+        would be given (upload.ts ``fileParts``), sent as the page reads them, so no file is too big to send. The first
+        part, with no ``upload``, begins one, named by Python (``{"upload"}`` answers it); each next names it and starts
+        where the bytes so far end (``at``), so a part sent twice or out of order is refused, never written twice. The
+        bytes are written where Python's DuckDB reads them (the headless engine's folder, under a name of Python's, gone
+        with that folder if no file.json ever reads them); file.json reads them as one file."""
         try:
             asked = json.loads(body)
         except ValueError:
-            return _said(400, 'a file is {"name", "bytes", "table"}, as JSON')
-        if not (isinstance(asked, dict) and all(isinstance(asked.get(k), str) for k in ('name', 'bytes', 'table'))):
-            return _said(400, 'a file is {"name", "bytes", "table"}, each a string')
+            return _said(400, 'a part of a file is {"upload"?, "at", "bytes"}, as JSON')
+        upload, at = (asked.get('upload'), asked.get('at')) if isinstance(asked, dict) else (None, None)
+        if not (isinstance(asked, dict) and isinstance(asked.get('bytes'), str) and (upload is None or isinstance(upload, str))
+                and isinstance(at, int) and not isinstance(at, bool) and at >= 0):
+            return _said(400, 'a part of a file is {"upload"?, "at", "bytes"}: its upload a string, at a count of bytes, '
+                              'its bytes base64')
         if not self.takes_files():
             return _said(404, 'this engine reads no file: legend-lite reads one with DataCube\'s own code, which its '
                               'datacube extra installs (pip install "legend-lite[datacube]")')
@@ -498,21 +502,53 @@ class Engine:
             data = base64.b64decode(asked['bytes'], validate=True)
         except binascii.Error:
             return _said(400, "a file's bytes are base64")
+        folder = self._headless().folder
+        with self._uploads_lock:
+            if upload is None:
+                if at != 0:
+                    return _said(400, 'an upload begins at its first byte (at 0)')
+                upload = secrets.token_hex(16)
+                path = folder / f'page_upload_{upload}'
+                path.write_bytes(b'')
+                self._uploads[upload] = path
+            else:
+                path = self._uploads.get(upload)
+                if path is None:
+                    return _said(404, f'no file is coming in as {upload!r}: begin it with its first part')
+            size = path.stat().st_size
+            if at != size:
+                return _said(409, f'the part starts at byte {at}, and the file so far ends at byte {size}')
+            with path.open('ab') as file:
+                file.write(data)
+        return Answer(200, 'application/json', json.dumps({'upload': upload, 'size': size + len(data)}).encode('utf-8'))
+
+    def _file_in(self, body: str) -> Answer:
+        """A page's file read into a table of its own in the frames' database (docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md
+        §4.3): ``{"upload", "name", "table"}``, its bytes the parts that upload brought (file-part.json), written where
+        Python's DuckDB reads them. DataCube's own code reads that file into the table (upload.ts's readFileInto, run
+        headless): only the path crosses into the engine, and Python and the tab read a file the same way. The table is
+        a copy, so the file goes at once, read or not. Its model is served beside the frames' from then on (the only
+        models a query may be over), and the answer is what arrived, as upload.ts says it. The page sends no SQL."""
+        try:
+            asked = json.loads(body)
+        except ValueError:
+            return _said(400, 'a file is {"upload", "name", "table"}, as JSON')
+        if not (isinstance(asked, dict) and all(isinstance(asked.get(k), str) for k in ('upload', 'name', 'table'))):
+            return _said(400, 'a file is {"upload", "name", "table"}, each a string')
+        if not self.takes_files():
+            return _said(404, 'this engine reads no file: legend-lite reads one with DataCube\'s own code, which its '
+                              'datacube extra installs (pip install "legend-lite[datacube]")')
+        assert self._headless is not None
+        with self._uploads_lock:
+            path = self._uploads.pop(asked['upload'], None)
+        if path is None:
+            return _said(404, f'no file came in as {asked["upload"]!r}: send its parts first (file-part.json)')
         try:
             # asked for before the frames are held: the session takes its own lock first, then the frames' (register)
             headless = self._headless()
             # the table the page asked for when it is free, else the next free name: the answer says which
             with self.frames.reading_file(asked['table']) as table:
-                # a name of Python's own, by the table (a plain identifier): nothing of the page's names a path
-                path = headless.folder / f'page_file_{table}'
-                try:
-                    path.write_bytes(data)
-                    said = headless.call('ingest', json.dumps({'path': str(path), 'name': asked['name'], 'table': table}))
-                finally:
-                    # the table is a copy: the file is not needed. One Windows still holds open is left for the headless
-                    # engine's folder, which goes with it -- never a read that worked turned into a refusal
-                    with contextlib.suppress(OSError):
-                        path.unlink(missing_ok=True)
+                said = headless.call('ingest', json.dumps({'path': str(path), 'name': asked['name'], 'table': table}))
                 read = json.loads(said)
                 self.frames.keep_file(table, read['model'])
         except ValueError as refused:
@@ -520,6 +556,11 @@ class Engine:
         except Exception as failure:
             # the file not read (DuckDB could not, a column no model holds): said, as the tab says it
             return _said(422, f'{type(failure).__name__}: {failure}')
+        finally:
+            # the table is a copy: the file is not needed. One Windows still holds open is left for the headless
+            # engine's folder, which goes with it -- never a read that worked turned into a refusal
+            with contextlib.suppress(OSError):
+                path.unlink(missing_ok=True)
         return Answer(200, 'application/json', said.encode('utf-8'))
 
     def _file_out(self, body: str) -> Answer:
@@ -906,7 +947,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         """A refusal before the body is wanted: the body is read first (when it is within the limit), so the
         client reads the answer rather than a reset connection."""
         length = self._length()
-        if length is not None and length <= (_MAX_FILE_BODY if urlsplit(self.path).path == _FILE_IN else _MAX_BODY):
+        if length is not None and length <= _MAX_BODY:
             # in pieces, each dropped: a refused request holds no more than one piece
             with contextlib.suppress(OSError):
                 while length > 0:
@@ -934,7 +975,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         url = urlsplit(self.path)
         # the API, an open page saying what it is now (page.json: Python's page.read()), a page's file in or out, the
         # saved pages, and PlanAndRun's calls
-        if not (url.path.startswith(_API) or url.path in ('/page.json', _FILE_IN, _FILE_OUT, _REMOTE, _SAVED,
+        if not (url.path.startswith(_API) or url.path in ('/page.json', _FILE_IN, _FILE_PART, _FILE_OUT, _REMOTE, _SAVED,
                                                           _PLAN_AND_RUN, _PLANNER)):
             self._refuse_unread(404, f'no such path: {url.path}')
             return
@@ -944,9 +985,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if length is None:
             self._send(_said(411, 'a request body needs its Content-Length, in digits'))
             return
-        most = _MAX_FILE_BODY if url.path == _FILE_IN else _MAX_BODY
-        if length > most:
-            self._send(_said(413, f'a request body is at most {most} bytes'))
+        if length > _MAX_BODY:
+            self._send(_said(413, f'a request body is at most {_MAX_BODY} bytes'))
             return
         try:
             raw = self.rfile.read(length)

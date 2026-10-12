@@ -479,8 +479,8 @@ Python's in-process services.
    **2b, first part, as built (2026-10-12, branch `datacube/one-app-2b`): a page's file and the examples.**
    - **The page's side**: Python's database service gives `ingestFile` and `forgetFile` where Python says it takes files
      (`services.json`, asked once as the page starts: the `datacube` extra installed, its bundle where it is read). The
-     bytes go as base64 in JSON (`file.json`), the same call over HTTP and over the widget's channel, which carries
-     text. The app is unchanged: its Files and Examples sections appear because the service is there (§3.4), and the
+     bytes go as base64 in JSON (`file.json`; a part at a time since, `file-part.json`: "Any size" below), the same
+     call over HTTP and over the widget's channel, which carries text. The app is unchanged: its Files and Examples sections appear because the service is there (§3.4), and the
      grid's rows come from `rows()` as a frame's do.
    - **Python's side**: Python writes the file's bytes, once, in the headless engine's folder under a name of its own,
      and hands DataCube's own code only that path (`src/headless/data-in.ts`). `upload.ts`'s `readFileInto` -- the one
@@ -504,11 +504,20 @@ Python's in-process services.
      page drops only a table one of its files was read into, by the name Frames gave it. The drop comes before the model
      stops being served, so a drop that fails leaves the table served, for the page to let go of again; a file DuckDB
      cannot read leaves nothing under its name.
-   - **How large**: measured 2026-10-12, a 192 MB CSV (256 MB as base64) is read in 0.8 s, the process peaking at 1.8 GB,
-     the measuring script's own copies included (64 MB: 0.4 s, 0.75 GB). When the bytes went through V8, 64 MB took
-     4.2 s and 3.5 GB. So `file.json` takes a body of up to 256 MB; a larger file is read in Python itself. The frames
-     are held still while a file is read. Over a notebook's channel, a file is also bounded by the notebook's own
-     message size, which is not tested here.
+   - **How large**: first measured 2026-10-12: a 192 MB CSV (256 MB as base64) was read in 0.8 s, the process peaking
+     at 1.8 GB, the measuring script's own copies included (64 MB: 0.4 s, 0.75 GB). When the bytes went through V8,
+     64 MB took 4.2 s and 3.5 GB. `file.json` then took a body of up to 256 MB.
+   - **Any size, a part at a time** (the user, 2026-10-12: "do the chunking"):
+     - The page sends the bytes as `upload.ts`'s `fileParts` reads them, in 4 MiB parts (`file-part.json`), each saying
+       where it starts. Python appends each part to one file of its own; a part sent twice or out of order is refused,
+       never written twice. `file.json` then names the upload and reads that file, as before.
+     - No call carries more than one part, so no body limit binds a file, and over a notebook's channel no message is
+       larger than a part. No file is ever one string in the page either: the text decoding streams.
+     - Both hosts take their bytes from `fileParts`. The tab registers them whole (`fileBytes`). The decoding is the
+       tab's own, as a stream: the same bytes as a `File`'s `text()`, a character split between two of the stream's
+       chunks included (`upload_test`).
+     - Measured 2026-10-12 in the pinned Chromium: a 359 MB CSV (9,000,000 rows) was sent and read on Python's page in
+       21 s. The frames are held still while a file is read.
    - **Where this goes next (proposed to the dialect program, its D5)**: `readFileInto`'s statements -- read a file into
      a table, the conversions' rewrite -- are SQL a TypeScript app writes for a database that is not only the tab's.
      They belong in the dialect, as IR it renders (a create-table-as-select, a file-reading source), beside the
@@ -848,6 +857,8 @@ Rewrite line, then audited before it lands.
     BOM'd JSON array of nested values, its JSON pinned;
   - a nested-JSON example opens on Python's page;
   - each typing rule (each Pure type, a SUM past 64 bits, an untyped column refused, pandas' nullable types).
+- **A page's file, a part at a time** (§4.3's "Any size"): `file-part.json`, then `file.json` names the upload; the
+  256 MB body limit is gone.
 - **Budget**: the grid page's gzipped script grew 390,817 -> 391,138 bytes (PlanAndRun and the shared plan
   reading), and its budget went 391,000 -> 392,000. Gzip-compressed files are 15.7's encoding follow-up, read by
   neither host today.

@@ -186,8 +186,20 @@ class Files(unittest.TestCase):
     def send(self, path, body):
         return self.engine.answer('POST', path, '', json.dumps(body))
 
-    def file(self, name, text, table):
-        return self.send('/file.json', {'name': name, 'bytes': base64.b64encode(text.encode()).decode(), 'table': table})
+    def upload(self, data, size=4 * 1024 * 1024):
+        """A file's bytes sent as the page sends them (file-part.json): a part at a time, each saying where it starts."""
+        upload, at = None, 0
+        for start in range(0, max(len(data), 1), size):
+            part = data[start:start + size]
+            answer = self.send('/file-part.json', {**({'upload': upload} if upload else {}), 'at': at,
+                                                   'bytes': base64.b64encode(part).decode()})
+            self.assertEqual(answer.status, 200, answer.body[:300])
+            upload, at = json.loads(answer.body)['upload'], at + len(part)
+            self.assertEqual(json.loads(answer.body)['size'], at)
+        return upload
+
+    def file(self, name, text, table, size=4 * 1024 * 1024):
+        return self.send('/file.json', {'upload': self.upload(text.encode(), size), 'name': name, 'table': table})
 
     def read(self, name, text, table):
         """A file read: what arrived, as upload.ts says it; let go of when the test ends."""
@@ -229,6 +241,41 @@ class Files(unittest.TestCase):
         self.assertEqual(self.frames.connection.execute('SELECT count(*) FROM files_data_2').fetchone()[0], 2)
         with self.frames.serving() as models:
             self.assertIn('files_data_2', models)
+
+    def test_a_file_comes_a_part_at_a_time_however_large(self):
+        # a CSV larger than any one call may be (16 MiB), in the page's 4 MiB parts; and one in parts of three bytes,
+        # a character split between two of them
+        rows = 700_000
+        big = 'id,name\n' + ''.join(f'{i},row number {i:08d}\n' for i in range(rows))
+        self.assertGreater(len(big), 16 * 1024 * 1024)
+        said = self.read('big.csv', big, 'files_big')
+        self.assertEqual(said['rowCount'], rows)
+        small = self.send('/file.json', {'upload': self.upload('w\nJosé\nZoë\n'.encode(), 3), 'name': 'w.csv',
+                                         'table': 'files_parts'})
+        self.assertEqual(small.status, 200, small.body[:300])
+        self.addCleanup(self.send, '/forget.json', {'name': 'w.csv', 'table': 'files_parts'})
+        self.assertEqual(self.frames.connection.execute('SELECT w FROM files_parts ORDER BY w').fetchall(),
+                         [('José',), ('Zoë',)])
+
+    def test_a_part_out_of_order_or_of_no_upload_is_refused_never_written(self):
+        first = json.loads(self.send('/file-part.json', {'at': 0, 'bytes': base64.b64encode(b'a\n1\n').decode()}).body)
+        upload = first['upload']
+        # sent again, or skipping ahead: refused, the file as it was
+        for at in (0, 2, 9):
+            self.assertEqual(self.send('/file-part.json', {'upload': upload, 'at': at, 'bytes': 'Mgo='}).status, 409, at)
+        self.assertEqual(json.loads(self.send('/file-part.json', {'upload': upload, 'at': 4, 'bytes': 'Mgo='}).body)['size'], 6)
+        self.assertEqual(self.send('/file-part.json', {'upload': 'nope', 'at': 0, 'bytes': 'Mgo='}).status, 404)
+        # an upload begins at its first byte; a part's bytes are base64; its position a count of bytes
+        for body in ({'at': 3, 'bytes': 'Mgo='}, {'at': 0, 'bytes': '%%%'}, {'at': -1, 'bytes': ''}, {'at': True, 'bytes': ''},
+                     {'at': 0}):
+            self.assertEqual(self.send('/file-part.json', body).status, 400, body)
+        # read once: its parts are gone, and the upload with them
+        answer = self.send('/file.json', {'upload': upload, 'name': 'p.csv', 'table': 'files_once'})
+        self.assertEqual(answer.status, 200, answer.body[:300])
+        self.addCleanup(self.send, '/forget.json', {'name': 'p.csv', 'table': 'files_once'})
+        self.assertEqual(self.frames.connection.execute('SELECT a FROM files_once ORDER BY a').fetchall(), [(1,), (2,)])
+        self.assertEqual(self.send('/file.json', {'upload': upload, 'name': 'p.csv', 'table': 'files_again'}).status, 404)
+        self.assertEqual(self.send('/file-part.json', {'upload': upload, 'at': 6, 'bytes': ''}).status, 404)
 
     def test_a_name_held_by_a_frame_or_another_table_is_not_taken(self):
         self.frames.register('files_frame', pd.DataFrame({'a': [1]}))
@@ -294,7 +341,9 @@ class Files(unittest.TestCase):
         from unittest import mock
         with mock.patch.dict(os.environ, {'LEGEND_LITE_DATACUBE': os.path.join(os.sep, 'no', 'such', 'bundle.js')}):
             self.assertFalse(json.loads(self.engine.answer('GET', '/services.json', '', None).body)['files'])
-            self.assertEqual(self.file('a.csv', 'a\n1\n', 'files_none').status, 404)
+            # neither a part nor the file it would make is taken
+            self.assertEqual(self.send('/file-part.json', {'at': 0, 'bytes': 'YQoxCg=='}).status, 404)
+            self.assertEqual(self.send('/file.json', {'upload': 'u', 'name': 'a.csv', 'table': 'files_none'}).status, 404)
 
 
 
