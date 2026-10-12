@@ -108,6 +108,16 @@ final class ChannelBLane {
                     "Grammar", new Pins(131, 0, 0),
                     "Relation", new Pins(463, 6, 5),
                     "Standard", new Pins(205, 0, 0),
+                    "Unclassified", new Pins(93, 0, 0)),
+            // ClickHouse 25.8 (2026-10-12, §19), judged against the engine's ClickHouse manifest: Essential's 1 true
+            // wire bug is a date past 2299, outside ClickHouse's dates (the dialect refuses it); Relation's 7, each the
+            // engine's frontier too, are 5 JSON values whose text keeps its spaces (ClickHouse stores a JSON value's
+            // text as written, DuckDB re-writes it) and a pivot's column order twice
+            "clickhouse", Map.of(
+                    "Essential", new Pins(328, 3, 1),
+                    "Grammar", new Pins(131, 0, 0),
+                    "Relation", new Pins(445, 7, 0),
+                    "Standard", new Pins(201, 0, 0),
                     "Unclassified", new Pins(93, 0, 0)));
 
     /** Whether this JVM runs the reference lane, DuckDB, whose pins are each suite's own. */

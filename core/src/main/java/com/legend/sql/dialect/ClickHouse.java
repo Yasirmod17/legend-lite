@@ -46,9 +46,11 @@ public final class ClickHouse extends AnsiSqlRenderer {
     /** The settings every statement carries: SQL's NULLs for an outer join's missing side, a bare UNION distinct, a cast
      *  keeping its value's NULL, the zone UTC (the platform's naive-UTC contract). An aggregate's NULL over no row is
      *  each aggregate's own {@code OrNull} form ({@link #aggregateName}): {@code aggregate_functions_null_for_empty}
-     *  makes {@code groupArray} a NULLABLE array, which ClickHouse refuses (measured). */
+     *  makes {@code groupArray} a NULLABLE array, which ClickHouse refuses (measured). And a CASE's branch runs only
+     *  where its guard holds: the planner's merge of a subquery's expressions into its reader's drops that (a guarded
+     *  raise read through an outer {@code if} raised on every row, measured on 25.8), so the merge is off. */
     static final String SETTINGS = "SETTINGS join_use_nulls = 1, union_default_mode = 'DISTINCT',"
-            + " cast_keep_nullable = 1, session_timezone = 'UTC'";
+            + " cast_keep_nullable = 1, session_timezone = 'UTC', query_plan_merge_expressions = 0";
 
     /** How deep the writer is in {@link #query}: the root query (depth 0 on entry) writes the SETTINGS clause. */
     private final int[] nesting = {0};
@@ -80,9 +82,107 @@ public final class ClickHouse extends AnsiSqlRenderer {
     @Override
     protected List<com.legend.sql.SqlRewriter> passes() {
         return List.of(new CarrierStrategies(CarrierStrategies.Caps.CLICKHOUSE), new PivotAsGroupBy(),
-                new CheckedDefectsToLists(), new SubstringClamp(),
+                new ExplosionMarkers.LateralUnnestAsMarker(), new ExplosionMarkers.StarOverExplosionUnwrapped(),
+                new ArrayJoinColumnsNamed(), new CheckedDefectsToLists(), new SubstringClamp(),
                 new AggregatesDeliverDouble(java.util.Set.of(SqlAgg.Fn.AVG)), new ConstantKeysAsExpressions(),
                 new RootNumericTypes());
+    }
+
+    /**
+     * A lateral explosion MARKER (ExplosionMarkers; ClickHouse has no LATERAL join) is an {@code ARRAY JOIN} of its
+     * lists ({@code LEFT ARRAY JOIN} keeping an empty list's row, its columns NULL), each exploded column named
+     * {@code "alias.column"}, which a reference {@code "alias"."column"} reads (measured; a star names them,
+     * {@link ArrayJoinColumnsNamed}). Several lists are padded with
+     * NULL to the longest: ARRAY JOIN aligns lists of one size only.
+     */
+    @Override
+    protected SqlWriter source(SqlWriter writer, com.legend.sql.SqlSource src, int depth) {
+        if (src instanceof com.legend.sql.SqlSource.Join j && j.right() instanceof com.legend.sql.SqlSource.Subselect sub
+                && ExplosionMarkers.isMarker(sub.inner())
+                && (j.kind() == com.legend.sql.SqlSource.Join.Kind.CROSS_LATERAL
+                        || j.kind() == com.legend.sql.SqlSource.Join.Kind.LEFT_LATERAL)) {
+            if (j.on() != null && !(j.on() instanceof SqlExpr.BoolLit b && b.value())) {
+                throw new DialectCapability("a lateral explosion with a join condition reached ClickHouse");
+            }
+            List<SqlSelect.Projection> ps = ((SqlSelect) sub.inner()).projections();
+            List<SqlExpr> lists = ps.stream().map(p -> ((SqlExpr.Call) p.expr()).args().get(0)).toList();
+            source(writer, j.left(), depth);
+            nl(writer, depth).append(j.kind() == com.legend.sql.SqlSource.Join.Kind.LEFT_LATERAL ? "LEFT ARRAY JOIN "
+                    : "ARRAY JOIN ");
+            SqlWriter.Piece n = w -> w.append("greatest(").join(lists, ", ",
+                    (v, l) -> v.append("length(").piece(list(l)).append(")")).append(")");
+            for (int i = 0; i < ps.size(); i++) {
+                SqlExpr l = lists.get(i);
+                writer.append(i > 0 ? ", " : "");
+                if (lists.size() == 1) {
+                    writer.piece(list(l));
+                } else {
+                    writer.append("arrayResize(arrayMap(\"__z\" -> toNullable(\"__z\"), ").piece(list(l))
+                            .append("), ").piece(n).append(", NULL)");
+                }
+                writer.append(" AS ").append(aliasIdent(sub.alias() + "." + ExplosionMarkers.markerColumn(ps.get(i))));
+            }
+            return writer;
+        }
+        if (src instanceof com.legend.sql.SqlSource.Join j && (j.kind() == com.legend.sql.SqlSource.Join.Kind.CROSS_LATERAL
+                || j.kind() == com.legend.sql.SqlSource.Join.Kind.LEFT_LATERAL)) {
+            throw new DialectCapability("a LATERAL join reached ClickHouse, which has none (a source correlated with"
+                    + " the one before it)");
+        }
+        return super.source(writer, src, depth);
+    }
+
+    /**
+     * ClickHouse's {@code *} does not include an ARRAY JOIN's columns (measured), so a select over a lateral explosion
+     * names them after its star, each labeled with its own name: an enclosing select reads {@code "_pct0"."key"}. (Within
+     * the select an exploded column is {@code "t1.key"}, which {@code "t1"."key"} reads, {@link #source}: two
+     * explosions in one select may name their columns alike.)
+     */
+    static final class ArrayJoinColumnsNamed extends com.legend.sql.SqlRewriter {
+        @Override
+        protected SqlQuery select(SqlSelect s) {
+            java.util.Map<String, List<SqlSelect.Projection>> named = new java.util.LinkedHashMap<>();
+            markerAliases(s.from(), named);
+            if (named.isEmpty()) {
+                return s;
+            }
+            named.replaceAll((alias, ps) -> ps.stream().map(p -> new SqlSelect.Projection(
+                    SqlExpr.Column.derived(alias, ExplosionMarkers.markerColumn(p)), ExplosionMarkers.markerColumn(p),
+                    p.out())).toList());
+            List<SqlSelect.Projection> all = named.values().stream().flatMap(List::stream).toList();
+            List<SqlSelect.Projection> ps = new ArrayList<>();
+            if (s.projections().isEmpty()) {
+                ps.add(new SqlSelect.Projection(new SqlExpr.Star(null), null, null));
+                ps.addAll(all);
+            }
+            for (SqlSelect.Projection p : s.projections()) {
+                if (p.expr() instanceof SqlExpr.Star st && st.table() != null && named.containsKey(st.table())) {
+                    ps.addAll(named.get(st.table()));
+                } else if (p.expr() instanceof SqlExpr.Star st && st.table() == null) {
+                    ps.add(p);
+                    ps.addAll(all);
+                } else if (p.expr() instanceof SqlExpr.StarExcept se) {
+                    throw new DialectCapability("a star exclusion over a lateral explosion reached ClickHouse: " + se);
+                } else {
+                    ps.add(p);
+                }
+            }
+            return new SqlSelect(ps, s.distinct(), s.from(), s.where(), s.groupBy(), s.having(), s.qualify(),
+                    s.orderBy(), s.limit(), s.offset(), s.outputs());
+        }
+
+        private static void markerAliases(SqlSource src, java.util.Map<String, List<SqlSelect.Projection>> into) {
+            if (src instanceof SqlSource.Join j) {
+                markerAliases(j.left(), into);
+                if (j.right() instanceof SqlSource.Subselect sub && ExplosionMarkers.isMarker(sub.inner())
+                        && (j.kind() == SqlSource.Join.Kind.CROSS_LATERAL
+                                || j.kind() == SqlSource.Join.Kind.LEFT_LATERAL)) {
+                    into.put(sub.alias(), ((SqlSelect) sub.inner()).projections());
+                } else {
+                    markerAliases(j.right(), into);
+                }
+            }
+        }
     }
 
     /** The root statement closes with its SETTINGS clause (the writer's one statement). */
@@ -123,13 +223,30 @@ public final class ClickHouse extends AnsiSqlRenderer {
         StringBuilder structure = new StringBuilder();
         for (int i = 0; i < v.columns().size(); i++) {
             structure.append(i > 0 ? ", " : "").append('`').append(v.columns().get(i).replace("`", "\\`"))
-                    .append("` ").append(castTypeName(v.outputs().get(i).type()));
+                    .append("` ").append(castTypeName(valuesType(v, i)));
         }
         writer.append("values(").append(stringLit(structure.toString()));
         for (List<SqlExpr> row : v.rows()) {
             writer.append(", (").list(row).append(")");
         }
         return writer.append(") AS ").append(aliasIdent(v.alias()));
+    }
+
+    /** A VALUES column's type, declared here (DuckDB's VALUES types a column by its rows): a Decimal widened to its
+     *  literals' largest scale (a Number column is labeled DECIMAL(38,0) and holds 101.101, which the declared type
+     *  would truncate, measured). */
+    private static SqlType valuesType(com.legend.sql.SqlSource.Values v, int column) {
+        SqlType t = v.outputs().get(column).type();
+        if (!(t instanceof SqlType.Decimal d)) {
+            return t;
+        }
+        int scale = d.scale();
+        for (List<SqlExpr> row : v.rows()) {
+            if (typeOf(row.get(column)) instanceof SqlType.Decimal cell) {
+                scale = Math.max(scale, cell.scale());
+            }
+        }
+        return scale == d.scale() ? t : new SqlType.Decimal(38, scale);
     }
 
     @Override
@@ -181,7 +298,24 @@ public final class ClickHouse extends AnsiSqlRenderer {
 
     @Override
     protected String dateLit(String iso) {
-        return "toDate32('" + iso + "')";
+        return "toDate32('" + inRange(iso) + "')";
+    }
+
+    private static final java.util.regex.Pattern YEAR = java.util.regex.Pattern.compile("^(-?\\d+)-");
+
+    /** A date's text, refused outside ClickHouse's dates (Date32 and DateTime64 hold 1900 to 2299; a date past either
+     *  end is clamped to it, silently, measured). */
+    private static String inRange(String iso) {
+        java.util.regex.Matcher m = YEAR.matcher(iso);
+        if (!m.find()) {
+            throw new IllegalStateException("a date literal with no year reached ClickHouse: " + iso);
+        }
+        int year = Integer.parseInt(m.group(1));
+        if (year < 1900 || year > 2299) {
+            throw new DialectCapability("the date " + iso + " reached ClickHouse, whose dates are 1900 to 2299 (it"
+                    + " clamps a date past either end)");
+        }
+        return iso;
     }
 
     /** A naive UTC date-time of six digits (finer ones cut, as DuckDB's TIMESTAMP does); a {@code T} is a space. */
@@ -198,7 +332,7 @@ public final class ClickHouse extends AnsiSqlRenderer {
                 t = t.substring(0, dot + 7) + t.substring(end);
             }
         }
-        return "toDateTime64('" + t + "', 6, 'UTC')";
+        return "toDateTime64('" + inRange(t) + "', 6, 'UTC')";
     }
 
     /** NUMERIC CHARTER Rule 1: a Float literal is an exact Decimal of its own digits ({@code 1.5} alone is a Float64
@@ -313,10 +447,33 @@ public final class ClickHouse extends AnsiSqlRenderer {
         return switch (e) {
             // an Int64: a bare literal is typed by its magnitude (1 is UInt8)
             case SqlExpr.IntLit i -> writer.append("toInt64(" + i.value() + ")");
+            // a quantified comparison over no rows is SQL's ALL true and ANY false; ClickHouse answers NULL there
+            // when the subquery's column is Nullable (measured: 100 > ALL (an empty Nullable(Int64)) is NULL), so the
+            // empty case is answered first
+            case SqlExpr.Quantified q -> {
+                writer.append("(CASE WHEN (SELECT count() FROM (");
+                inline(writer, q.subquery());
+                writer.append(") AS \"__qa\") = 0 THEN ").append(q.quantifier() == SqlExpr.Quantifier.ALL ? "true"
+                        : "false").append(" ELSE ");
+                super.expr(writer, q, 0);
+                yield writer.append(" END)");
+            }
+            // EXISTS over a select of constants answers 0 where its filter keeps a row (ClickHouse 25.8, measured:
+            // EXISTS (SELECT 1 FROM numbers(5) WHERE number > 3) is 0, with the column selected 1): the rows' own
+            // columns are selected instead
+            case SqlExpr.Exists ex when ex.subquery() instanceof SqlSelect q && q.groupBy().isEmpty()
+                    && q.having() == null && !q.distinct() && !(q.from() instanceof com.legend.sql.SqlSource.Dual)
+                    && !q.projections().isEmpty() && q.projections().stream().allMatch(p -> p.expr() instanceof SqlExpr.IntLit
+                            || p.expr() instanceof SqlExpr.BoolLit) -> {
+                writer.append("EXISTS (");
+                inline(writer, new SqlSelect(List.of(), false, q.from(), q.where(), q.groupBy(), q.having(), q.qualify(),
+                        q.orderBy(), q.limit(), q.offset(), List.of()));
+                yield writer.append(")");
+            }
             case SqlExpr.DecimalLit d when !(d.type() instanceof com.legend.sql.TypeFact.Typed t
                     && t.type() == SqlType.Scalar.HUGEINT) -> writer.append(decimal(d.value()));
             case SqlExpr.OrderedListAgg ola -> writer.piece(collected(w -> w.expr(ola.value(), 0),
-                    List.of(new SortKey(w -> w.expr(ola.orderBy(), 0), true, false))));
+                    List.of(new SortKey(w -> w.expr(ola.orderBy(), 0), true, false, typeOf(ola.orderBy())))));
             default -> super.expr(writer, e, parentPrec);
         };
     }
@@ -378,7 +535,27 @@ public final class ClickHouse extends AnsiSqlRenderer {
         if (elements.isEmpty()) {
             return writer.append(EMPTY_UNTYPED);
         }
-        return writer.append("[").list(elements).append("]");
+        return writer.append("[").join(elements, ", ", unified(elements)).append("]");
+    }
+
+    /**
+     * Members written to share a type: a Float literal is a Decimal by its digits (the numeric charter's Rule 1) and a
+     * computed Float a Float64, and ClickHouse has no supertype of the two ("There is no supertype for types Float64,
+     * Decimal(3, 2)", measured), so where both meet, each Decimal member is its Float64.
+     */
+    private java.util.function.BiConsumer<SqlWriter, SqlExpr> unified(List<SqlExpr> members) {
+        boolean dbl = members.stream().anyMatch(e -> typeOf(e) == SqlType.Scalar.DOUBLE);
+        boolean dec = members.stream().anyMatch(e -> typeOf(e) instanceof SqlType.Decimal);
+        if (!(dbl && dec)) {
+            return (w, e) -> w.expr(e, 0);
+        }
+        return (w, e) -> {
+            if (typeOf(e) instanceof SqlType.Decimal) {
+                w.append("toFloat64(").expr(e, 0).append(")");
+            } else {
+                w.expr(e, 0);
+            }
+        };
     }
 
     @Override
@@ -430,8 +607,10 @@ public final class ClickHouse extends AnsiSqlRenderer {
                     .piece(lambdaArrays(xs, (SqlExpr.Lambda) args.get(1))).append(")");
             case LIST_CONCAT -> writer.append("arrayConcat(").join(args, ", ", (w, a) -> w.piece(list(a))).append(")");
             // 1-based, negative from the end, out of range NULL (DuckDB's list_extract; arrayElement answers the
-            // type's default there)
-            case LIST_GET -> writer.append("(CASE WHEN ").expr(args.get(1), 0).append(" = 0 OR abs(")
+            // type's default there). A Tuple is never NULL: out of range, a struct is its default, every field NULL
+            case LIST_GET -> typeOf(xs) instanceof SqlType.Array arr && arr.element() instanceof SqlType.Struct
+                    ? writer.append("arrayElement(").piece(list(xs)).append(", ").expr(args.get(1), 0).append(")")
+                    : writer.append("(CASE WHEN ").expr(args.get(1), 0).append(" = 0 OR abs(")
                     .expr(args.get(1), 0).append(") > length(").piece(list(xs)).append(") THEN NULL ELSE arrayElement(")
                     .piece(list(xs)).append(", ").expr(args.get(1), 0).append(") END)");
             case LIST_POSITION -> writer.append("nullIf(toInt64(indexOf(").piece(list(xs)).append(", ")
@@ -474,8 +653,16 @@ public final class ClickHouse extends AnsiSqlRenderer {
                         .append(")");
             }
             // DuckDB's list_reduce: the first element is the accumulator's start, the lambda (acc, x) over the rest
-            case LIST_REDUCE -> writer.append("arrayFold(").expr(args.get(1), 0).append(", arraySlice(").piece(list(xs))
-                    .append(", 2), arrayElement(").piece(list(xs)).append(", 1))");
+            // the accumulator starts as the list's element type spells it: arrayFold refuses a step whose type is not
+            // the start's (Array(Int64) against the step's Array(Nullable(Int64)), measured)
+            case LIST_REDUCE -> {
+                SqlType element = listElement(xs);
+                writer.append("arrayFold(").expr(args.get(1), 0).append(", arraySlice(").piece(list(xs)).append(", 2), ");
+                if (element == null) {
+                    yield writer.append("arrayElement(").piece(list(xs)).append(", 1))");
+                }
+                yield writer.append("CAST(arrayElement(").piece(list(xs)).append(", 1) AS " + castTypeName(element) + "))");
+            }
             case TYPEOF -> throw new DialectCapability("typeof reached ClickHouse: its type names are ClickHouse's");
             case RANGE_FN, REPEAT_VALUE -> throw new IllegalStateException(fnName + " is rendered by call");
             default -> throw new IllegalStateException("not a list call: " + fnName);
@@ -650,8 +837,9 @@ public final class ClickHouse extends AnsiSqlRenderer {
     @Override
     protected SqlWriter splitPartCall(SqlWriter writer, List<SqlExpr> a) {
         // Pure's splitPart: the non-empty tokens, 1-based, NULL past the end
+        // splitByString takes no Nullable text (measured): NULL's tokens are the empty string's, none
         SqlWriter.Piece tokens = w -> w.append("arrayFilter(\"__t\" -> \"__t\" != '', splitByString(").expr(a.get(1), 0)
-                .append(", ").expr(a.get(0), 0).append("))");
+                .append(", ifNull(").expr(a.get(0), 0).append(", '')))");
         return writer.append("(CASE WHEN ").expr(a.get(2), 0).append(" < 1 OR ").expr(a.get(2), 0).append(" > length(")
                 .piece(tokens).append(") THEN NULL ELSE arrayElement(").piece(tokens).append(", ").expr(a.get(2), 0)
                 .append(") END)");
@@ -659,7 +847,22 @@ public final class ClickHouse extends AnsiSqlRenderer {
 
     @Override
     protected SqlWriter structInsert(SqlWriter writer, List<SqlExpr> args) {
-        throw new DialectCapability("struct_insert reached ClickHouse");
+        // a Tuple of the struct's other fields and the new one, named (Trino's ROW, the same shape)
+        if (!(typeOf(args.get(0)) instanceof SqlType.Struct struct) || !(args.get(1) instanceof SqlExpr.StringLit name)) {
+            throw new DialectCapability("struct_insert over an untyped struct reached ClickHouse");
+        }
+        SqlType added = typeOf(args.get(2));
+        if (added == null) {
+            throw new DialectCapability("struct_insert of a value of unknown type reached ClickHouse");
+        }
+        List<SqlType.Struct.Field> kept = struct.fields().stream().filter(f -> !f.name().equals(name.value())).toList();
+        List<SqlType.Struct.Field> all = new ArrayList<>(kept);
+        all.add(new SqlType.Struct.Field(name.value(), added));
+        writer.append("CAST(tuple(");
+        for (SqlType.Struct.Field f : kept) {
+            writer.append("tupleElement(").expr(args.get(0), 0).append(", ").append(stringLit(f.name())).append("), ");
+        }
+        return writer.expr(args.get(2), 0).append(") AS ").append(castTypeName(new SqlType.Struct(all))).append(")");
     }
 
     // ==================================================================
@@ -670,6 +873,10 @@ public final class ClickHouse extends AnsiSqlRenderer {
     protected SqlWriter variantConstruct(SqlWriter writer, List<SqlExpr> a) {
         if (a.size() != 1) {
             throw new DialectCapability("toVariant of " + a.size() + " arguments reached ClickHouse");
+        }
+        // a JSON value is its own (DuckDB's to_json of JSON); a NULL stays SQL's NULL, as DuckDB's to_json
+        if (typeOf(a.get(0)) == SqlType.Scalar.JSON) {
+            return writer.expr(a.get(0), 0);
         }
         return writer.append("toJSONString(").expr(a.get(0), 0).append(")");
     }
@@ -697,7 +904,8 @@ public final class ClickHouse extends AnsiSqlRenderer {
         if (listElement(args.get(0)) != null) {
             return writer.expr(args.get(0), 0);
         }
-        return writer.append("JSONExtractArrayRaw(").expr(args.get(0), 0).append(")");
+        // from the JSON null where there is no value: over a Nullable it would be a Nullable(Array), refused (measured)
+        return writer.append("JSONExtractArrayRaw(coalesce(").expr(args.get(0), 0).append(", 'null'))");
     }
 
     /** Every cast names the nullable type ({@code CAST(NULL AS Int64)} is refused); a Decimal's too. */
@@ -707,25 +915,48 @@ public final class ClickHouse extends AnsiSqlRenderer {
         if (c.value() instanceof SqlExpr.NullLit && c.target() instanceof SqlType.Array) {
             return writer.append("CAST([] AS " + castTypeName(c.target()) + ")");
         }
+        // a zoned timestamp from text: ISO 8601's T, Z and offsets, which a cast reads as NULL (measured)
+        if (c.target() == SqlType.Scalar.TIMESTAMPTZ && typeOf(c.value()) == SqlType.Scalar.VARCHAR) {
+            return writer.append("parseDateTime64BestEffort(").expr(c.value(), 0).append(", 6, 'UTC')");
+        }
+        // text to a decimal rounds at the scale, as DuckDB's (a cast truncates: '123.126' is 123.12, measured)
+        if (c.target() instanceof SqlType.Decimal d && typeOf(c.value()) == SqlType.Scalar.VARCHAR) {
+            return writer.append("CAST(round(toDecimal128(").expr(c.value(), 0).append(", 18), " + d.scale()
+                    + ") AS Nullable(Decimal(" + d.precision() + ", " + d.scale() + ")))");
+        }
         if (c.target() instanceof SqlType.Decimal d) {
             return writer.append("CAST(").expr(c.value(), 0).append(" AS Nullable(Decimal(" + d.precision() + ", "
                     + d.scale() + ")))");
         }
-        // a Decimal's text at its scale (toString drops the trailing zeros: 3.0 is '3', measured)
-        if (c.target() == SqlType.Scalar.VARCHAR && typeOf(c.value()) instanceof SqlType.Decimal d) {
-            return writer.append("toDecimalString(").expr(c.value(), 0).append(", " + d.scale() + ")");
-        }
+        // (a Float literal is a Decimal by its digits, so before the Decimal's text below)
         if (c.target() == SqlType.Scalar.VARCHAR && c.value() instanceof SqlExpr.FloatLit f
                 && com.legend.sql.SqlTyping.floatDecimal(f.value()) instanceof java.math.BigDecimal b) {
             // a Float literal's text: its shortest digits, one fraction digit at least (Pure's 3.0, 0.00000001)
             return writer.append("toDecimalString(").expr(c.value(), 0)
                     .append(", " + Math.max(b.stripTrailingZeros().scale(), 1) + ")");
         }
-        if (c.target() == SqlType.Scalar.VARCHAR && typeOf(c.value()) == SqlType.Scalar.DOUBLE) {
-            return writer.append("toString(").expr(c.value(), 0).append(")");
+        // a Decimal's text at its scale (toString drops the trailing zeros: 3.0 is '3', measured): the value's own
+        // scale, read from its type name (a constant), which the plan's may undercount (a Number column's DECIMAL(38,0)
+        // holds 101.101: its sum printed '101.', measured)
+        if (c.target() == SqlType.Scalar.VARCHAR && typeOf(c.value()) instanceof SqlType.Decimal d) {
+            if (c.value() instanceof SqlExpr.FloatLit || c.value() instanceof SqlExpr.DecimalLit) {
+                // a literal's scale is its own (one of an extreme magnitude is a Float64, whose type has none)
+                return writer.append("toDecimalString(").expr(c.value(), 0).append(", " + d.scale() + ")");
+            }
+            return writer.append("toDecimalString(").expr(c.value(), 0).append(", toUInt8(extract(toTypeName(")
+                    .expr(c.value(), 0).append("), ', (\\\\d+)\\\\)')))");
         }
-        // a Variant's member as text: a JSON string unquoted, any other value its JSON
+        // a double's text: its shortest digits, and a fraction digit where it has none (DuckDB's -1.0 is ClickHouse's
+        // '-1', measured), the value read once
+        if (c.target() == SqlType.Scalar.VARCHAR && typeOf(c.value()) == SqlType.Scalar.DOUBLE) {
+            return writer.append("replaceRegexpOne(toString(").expr(c.value(), 0).append("), '^(-?[0-9]+)$', '\\\\1.0')");
+        }
+        // a Variant's member as text: a JSON string unquoted, any other value its JSON; the whole value as text is its
+        // JSON (DuckDB's cast, Trino's)
         if (typeOf(c.value()) == SqlType.Scalar.JSON && c.target() == SqlType.Scalar.VARCHAR) {
+            if (!(c.value() instanceof SqlExpr.Call call && call.fn() == SqlFn.VARIANT_GET)) {
+                return writer.expr(c.value(), 0);
+            }
             return writer.append("if(JSONType(").expr(c.value(), 0).append(") = 'String', JSONExtractString(")
                     .expr(c.value(), 0).append("), ").expr(c.value(), 0).append(")");
         }
@@ -736,11 +967,13 @@ public final class ClickHouse extends AnsiSqlRenderer {
             return writer.append("JSONExtract(").expr(c.value(), 0).append(", ").append(stringLit(castTypeName(c.target())))
                     .append(")");
         }
-        // a Variant (its JSON text) as a list or a map: extracted to the type
+        // a Variant (its JSON text) as a list or a map: extracted to the type, from the JSON null where there is no
+        // value (a list or a map is never NULL here: extracting from a NULL would be a Nullable(Array), refused,
+        // measured; the empty one is its NULL)
         if (typeOf(c.value()) == SqlType.Scalar.JSON
                 && (c.target() instanceof SqlType.Array || c.target() instanceof SqlType.Map)) {
-            return writer.append("JSONExtract(").expr(c.value(), 0).append(", ").append(stringLit(castTypeName(c.target())))
-                    .append(")");
+            return writer.append("JSONExtract(coalesce(").expr(c.value(), 0).append(", 'null'), ")
+                    .append(stringLit(castTypeName(c.target()))).append(")");
         }
         return super.variantAwareCast(writer, c);
     }
@@ -759,8 +992,8 @@ public final class ClickHouse extends AnsiSqlRenderer {
                  LPAD, RPAD, TODAY, DIVIDE, ROUND, HASH, BIT_AND, BIT_OR, BIT_XOR, BIT_SHIFT_LEFT,
                  BIT_SHIFT_RIGHT, XOR,
                  // Spellings.CLICKHOUSE rows
-                 ABS, ACOS, ASIN, ATAN, ATAN2, CBRT, COALESCE, COS, COSH, DEGREES, EXP, GREATEST, LEAST, LN, LOG10,
-                 POW, RADIANS, SIN, SINH, SQRT, TAN, TANH, LIST_FLATTEN, MAP_KEYS, MAP_VALUES,
+                 ACOS, ASIN, ATAN, ATAN2, CBRT, COALESCE, COS, COSH, DEGREES, LOG10,
+                 POW, RADIANS, SIN, SINH, SQRT, TAN, LIST_FLATTEN, MAP_KEYS, MAP_VALUES,
                  STARTS_WITH, ENDS_WITH, LIST_REVERSE, JARO_WINKLER, CHR,
                  // the base's idiom points, overridden above
                  UNNEST, LIST_FILTER, LIST_TRANSFORM, LIST_CONCAT, LIST_GET, LIST_POSITION, STRUCT_INSERT,
@@ -769,6 +1002,11 @@ public final class ClickHouse extends AnsiSqlRenderer {
                  LIST_SORT, LIST_SORT_DESC, LIST_TAIL, LIST_INIT, LIST_PRODUCT, LIST_REDUCE, LIST_SLICE,
                  LIST_BOOL_AND, LIST_BOOL_OR, TYPEOF, FLOAT_CANON -> super.call(writer, c, parentPrec);
 
+            // an integer's abs is a UInt64 here: back to an Int64, raising where it does not fit (abs of Int64's least,
+            // as DuckDB's overflow)
+            case ABS -> typeOf(a.get(0)) == SqlType.Scalar.BIGINT || typeOf(a.get(0)) == SqlType.Scalar.INTEGER
+                    ? writer.append("accurateCast(abs(").expr(a.get(0), 0).append("), 'Int64')")
+                    : writer.append("abs(").expr(a.get(0), 0).append(")");
             // a raise: no function raises a computed message, so its text cast to an integer raises it, the
             // platform's markers around it, verbatim in the server's message
             // (materialize: a constant one would raise at analysis, in a branch not taken -- measured)
@@ -777,7 +1015,9 @@ public final class ClickHouse extends AnsiSqlRenderer {
                 if (a.size() > 1) {
                     writer.expr(a.get(1), 0).append(", char(30), ");
                 }
-                yield writer.append("toString(").expr(a.get(0), 0).append("), char(31))))");
+                // the server's error text quotes the message as a string literal, a quote in it escaped (\', measured):
+                // each quote travels as the envelope's quote mark (RaisedErrors.QUOTE_MARK), as SQLite's
+                yield writer.append("replaceAll(toString(").expr(a.get(0), 0).append("), '\\'', char(29)), char(31))))");
             }
             case IS_DISTINCT_FROM, NULL_SAFE_NOT_EQUAL -> writer.append("NOT coalesce(").expr(a.get(0), 4).append(" = ")
                     .expr(a.get(1), 4).append(", isNull(").expr(a.get(0), 0).append(") AND isNull(").expr(a.get(1), 0)
@@ -791,11 +1031,12 @@ public final class ClickHouse extends AnsiSqlRenderer {
             // not taken and raises its own (measured), so each is its non-raising form, the guard's message the one
             // a zero divisor raises; unguarded, a zero divisor is NULL, as DuckDB's (the OrZero forms answer 0). Pure's
             // mod takes the divisor's sign: ((a rem b) + b) rem b
-            case REM -> writer.append("(CASE WHEN ").expr(a.get(1), 0).append(" = 0 THEN NULL ELSE moduloOrZero(")
-                    .expr(a.get(0), 0).append(", ").expr(a.get(1), 0).append(") END)");
-            case MOD -> writer.append("(CASE WHEN ").expr(a.get(1), 0).append(" = 0 THEN NULL ELSE moduloOrZero(")
-                    .append("moduloOrZero(").expr(a.get(0), 0).append(", ").expr(a.get(1), 0).append(") + ")
-                    .expr(a.get(1), 0).append(", ").expr(a.get(1), 0).append(") END)");
+            // (moduloOrZero takes no Decimal, measured; a Decimal's is plain modulo, under the same guard)
+            case REM -> writer.append("(CASE WHEN ").expr(a.get(1), 0).append(" = 0 THEN NULL ELSE ")
+                    .append(modulo(a)).append("(").piece(operand(a, 0)).append(", ").piece(operand(a, 1)).append(") END)");
+            case MOD -> writer.append("(CASE WHEN ").expr(a.get(1), 0).append(" = 0 THEN NULL ELSE ").append(modulo(a))
+                    .append("(").append(modulo(a)).append("(").piece(operand(a, 0)).append(", ").piece(operand(a, 1))
+                    .append(") + ").piece(operand(a, 1)).append(", ").piece(operand(a, 1)).append(") END)");
             case INT_DIVIDE -> writer.append("(CASE WHEN ").expr(a.get(1), 0).append(" = 0 THEN NULL ELSE intDivOrZero(")
                     .expr(a.get(0), 0).append(", ").expr(a.get(1), 0).append(") END)");
             case BOOL_TO_TEXT -> writer.append("toString(").expr(a.get(0), 0).append(")");
@@ -810,6 +1051,15 @@ public final class ClickHouse extends AnsiSqlRenderer {
                 yield writer.append(")");
             }
 
+            // exp and log are approximations here (exp(1) is 2.718281828460626, log(e()) 0.9999999987491066, measured);
+            // pow and log2 are exact, DuckDB's bits
+            case EXP -> writer.append("pow(e(), toFloat64(").expr(a.get(0), 0).append("))");
+            case LN -> writer.append("(log2(toFloat64(").expr(a.get(0), 0).append(")) / log2(e()))");
+            // tanh too (tanh(3.14) is 1.2e-8 off, measured): 1 - 2 / (e^2x + 1), +-1 where e^2x overflows
+            case TANH -> writer.append("(1 - 2 / (pow(e(), 2 * toFloat64(").expr(a.get(0), 0).append(")) + 1))");
+            // a Decimal and a Float64 have no supertype here: unified (arrayLit's rule)
+            case GREATEST, LEAST -> writer.append(c.fn() == SqlFn.GREATEST ? "greatest(" : "least(")
+                    .join(a, ", ", unified(a)).append(")");
             // ---- strings (UTF-8: the plain ones count bytes)
             // (an unsigned answer is an Int64: a CASE of UInt64 and Int64 has no common type, measured)
             case LENGTH -> writer.append("toInt64(lengthUTF8(").expr(a.get(0), 0).append("))");
@@ -830,8 +1080,11 @@ public final class ClickHouse extends AnsiSqlRenderer {
                     .append(", 0)))");
             case ASCII_CODE -> writer.append("toInt64(ascii(").expr(a.get(0), 0).append("))");
             // DuckDB's split_part: the empty string past the end
-            case SPLIT_PART -> writer.append("coalesce(arrayElement(splitByString(").expr(a.get(1), 0).append(", ")
-                    .expr(a.get(0), 0).append("), ").expr(a.get(2), 0).append("), '')");
+            // a function making a list takes no Nullable text (a list is never NULL, measured): the text past NULL,
+            // its answer NULL's (split_part's NULL, a split's or a match list's empty list)
+            case SPLIT_PART -> writer.append("if(isNull(").expr(a.get(0), 0).append("), NULL, coalesce(arrayElement(")
+                    .append("splitByString(").expr(a.get(1), 0).append(", ifNull(").expr(a.get(0), 0).append(", '')), ")
+                    .expr(a.get(2), 0).append("), ''))");
             case MATCHES -> writer.append("match(").expr(a.get(0), 0).append(", ").expr(a.get(1), 0).append(")");
             case REGEXP_FULL_MATCH -> writer.append("match(").expr(a.get(0), 0).append(", ").piece(anchored(a.get(1)))
                     .append(")");
@@ -842,14 +1095,25 @@ public final class ClickHouse extends AnsiSqlRenderer {
                 }
                 yield writer.append("regexpExtract(").expr(a.get(0), 0).append(", ").expr(a.get(1), 0).append(", 0)");
             }
-            case REGEXP_EXTRACT_ALL -> writer.append("extractAll(").expr(a.get(0), 0).append(", ").expr(a.get(1), 0)
-                    .append(")");
+            // extractAll answers the first group where the pattern has one (measured): the pattern in one group of
+            // its own is the whole match, DuckDB's group 0; a numbered group from every match's groups
+            case REGEXP_EXTRACT_ALL -> {
+                writer.append("if(isNull(").expr(a.get(0), 0).append("), [], ");
+                SqlWriter.Piece text = w -> w.append("ifNull(").expr(a.get(0), 0).append(", '')");
+                yield (a.size() > 2 && !(a.get(2) instanceof SqlExpr.IntLit g && g.value() == 0)
+                        ? writer.append("arrayMap(\"__g\" -> arrayElement(\"__g\", ").expr(a.get(2), 0)
+                                .append("), extractAllGroupsVertical(").piece(text).append(", ").expr(a.get(1), 0)
+                                .append("))")
+                        : writer.append("extractAll(").piece(text).append(", concat('(', ").expr(a.get(1), 0)
+                                .append(", ')'))")).append(")");
+            }
             // DuckDB replaces the first match unless 'g'; its \1 group references are ClickHouse's own
             case REGEXP_REPLACE -> {
                 boolean global = a.size() > 3 && a.get(3) instanceof SqlExpr.StringLit o && o.value().contains("g");
                 yield writer.append(global ? "replaceRegexpAll(" : "replaceRegexpOne(").list(a.subList(0, 3)).append(")");
             }
-            case SPLIT -> writer.append("splitByString(").expr(a.get(1), 0).append(", ").expr(a.get(0), 0).append(")");
+            case SPLIT -> writer.append("if(isNull(").expr(a.get(0), 0).append("), [], splitByString(").expr(a.get(1), 0)
+                    .append(", ifNull(").expr(a.get(0), 0).append(", '')))");
             case TRIM, LTRIM, RTRIM -> {
                 String side = c.fn() == SqlFn.TRIM ? "BOTH" : c.fn() == SqlFn.LTRIM ? "LEADING" : "TRAILING";
                 if (a.size() == 1) {
@@ -873,8 +1137,13 @@ public final class ClickHouse extends AnsiSqlRenderer {
                     boolean real = typeOf(x) instanceof SqlType.Decimal || x instanceof SqlExpr.FloatLit
                             || x instanceof SqlExpr.DecimalLit || typeOf(x) == SqlType.Scalar.DOUBLE;
                     writer.append(", ");
-                    if (real && conversions != null && i - 1 < conversions.size() && conversions.get(i - 1) == 's') {
+                    boolean asText = conversions != null && i - 1 < conversions.size() && conversions.get(i - 1) == 's';
+                    if (real && asText) {
                         writer.expr(FloatCanonText.of(new SqlExpr.Cast(x, SqlType.Scalar.DOUBLE)), 0);
+                    } else if (asText && (typeOf(x) == SqlType.Scalar.BOOLEAN || typeOf(x) == SqlType.Scalar.BIGINT
+                            || typeOf(x) == SqlType.Scalar.INTEGER)) {
+                        // %s takes only a String (a Bool or an Int64 is refused, measured): its text
+                        writer.append("toString(").expr(x, 0).append(")");
                     } else if (real && typeOf(x) != SqlType.Scalar.DOUBLE) {
                         writer.append("toFloat64(").expr(x, 0).append(")");
                     } else {
@@ -896,6 +1165,11 @@ public final class ClickHouse extends AnsiSqlRenderer {
                 if (a.size() == 1) {
                     yield writer.append("arrayMap(\"__g\" -> toInt64(\"__g\"), range(toInt64(").expr(a.get(0), 0)
                             .append(")))");
+                }
+                if (a.size() == 3) {
+                    // a constant step is folded before its guard runs (range's own error over the guard's, measured)
+                    yield writer.append("arrayMap(\"__g\" -> toInt64(\"__g\"), range(").expr(a.get(0), 0).append(", ")
+                            .expr(a.get(1), 0).append(", materialize(").expr(a.get(2), 0).append(")))");
                 }
                 yield writer.append("arrayMap(\"__g\" -> toInt64(\"__g\"), range(").list(a).append("))");
             }
@@ -924,6 +1198,66 @@ public final class ClickHouse extends AnsiSqlRenderer {
             case JSON_PRETTY -> throw wall(c.fn(), "ClickHouse has no JSON pretty-printer");
             case JSON_MERGE_PATCH -> throw wall(c.fn(), "ClickHouse has no JSON merge patch");
         };
+    }
+
+    /**
+     * DuckDB's time_bucket: a fixed unit binned from 1970-01-01 (a week from the Monday 1969-12-29) in epoch
+     * microseconds, floored in integers; a month or a year by the month index since 1970-01, floored to the bucket's
+     * size. {@code toStartOfInterval} counts unsigned units, wrapping before 1970 (1951 bucketed to 2087, measured).
+     */
+    private SqlWriter.Piece timeBucket(List<SqlExpr> a) {
+        String unit = literal(a.get(0), "TIME_BUCKET");
+        SqlWriter.Piece n = w -> w.append("toInt64(").expr(a.get(1), 0).append(")");
+        Long micros = BUCKET_MICROS.get(unit);
+        if (micros != null) {
+            long origin = unit.endsWith("weeks") ? -3L * 86400000000L : 0L;
+            SqlWriter.Piece x = w -> w.append("(toUnixTimestamp64Micro(toDateTime64(").expr(a.get(2), 0)
+                    .append(", 6, 'UTC')) - (" + origin + "))");
+            SqlWriter.Piece u = w -> w.append("(").piece(n).append(" * " + micros + ")");
+            return w -> w.append("fromUnixTimestamp64Micro(").piece(x).append(" - ((").piece(x).append(" % ").piece(u)
+                    .append(") + ").piece(u).append(") % ").piece(u).append(" + (" + origin + "), 'UTC')");
+        }
+        Integer months = BUCKET_MONTHS.get(unit);
+        if (months == null) {
+            throw new DialectCapability("a " + unit + " time bucket reached ClickHouse");
+        }
+        SqlWriter.Piece m = w -> w.append("((toYear(").expr(a.get(2), 0).append(") - 1970) * 12 + toMonth(")
+                .expr(a.get(2), 0).append(") - 1)");
+        SqlWriter.Piece size = w -> w.append("(").piece(n).append(" * " + months + ")");
+        return w -> w.append("toDateTime64(addMonths(toDate32('1970-01-01'), ").piece(m).append(" - ((").piece(m)
+                .append(" % ").piece(size).append(") + ").piece(size).append(") % ").piece(size).append("), 6, 'UTC')");
+    }
+
+    private static final java.util.Map<String, Long> BUCKET_MICROS = java.util.Map.of(
+            "to_weeks", 7L * 86400000000L, "to_days", 86400000000L, "to_hours", 3600000000L,
+            "to_minutes", 60000000L, "to_seconds", 1000000L, "to_milliseconds", 1000L, "to_microseconds", 1L);
+
+    private static final java.util.Map<String, Integer> BUCKET_MONTHS = java.util.Map.of("to_months", 1, "to_years", 12);
+
+    /** A modulo's operand: beside a Decimal, both are Decimal128s of the larger scale (an Int64 modulo a Decimal is
+     *  wrong, 5 % 2.5 is 0.5; and Decimals of two scales too, 5 % 1.5 at scales 18 and 1 is 5e-18, measured). */
+    private static SqlWriter.Piece operand(List<SqlExpr> a, int i) {
+        Integer s0 = decimalScale(a.get(0));
+        Integer s1 = decimalScale(a.get(1));
+        if (s0 == null && s1 == null) {
+            return w -> w.expr(a.get(i), 0);
+        }
+        int scale = Math.max(s0 == null ? 0 : s0, s1 == null ? 0 : s1);
+        return w -> w.append("toDecimal128(").expr(a.get(i), 0).append(", " + scale + ")");
+    }
+
+    /** {@code e}'s scale where it is a Decimal (a Float literal is one by its digits), else null. */
+    private static @com.legend.base.Nullable Integer decimalScale(SqlExpr e) {
+        if (e instanceof SqlExpr.FloatLit f && com.legend.sql.SqlTyping.floatDecimal(f.value()) instanceof java.math.BigDecimal b) {
+            return Math.max(b.stripTrailingZeros().scale(), 0);
+        }
+        return typeOf(e) instanceof SqlType.Decimal d ? d.scale() : null;
+    }
+
+    /** The modulo for these operands: moduloOrZero (no constant-folded raise), plain modulo over a Decimal. */
+    private static String modulo(List<SqlExpr> a) {
+        return typeOf(a.get(0)) instanceof SqlType.Decimal || typeOf(a.get(1)) instanceof SqlType.Decimal
+                || a.get(0) instanceof SqlExpr.FloatLit || a.get(1) instanceof SqlExpr.FloatLit ? "modulo" : "moduloOrZero";
     }
 
     /** The temporal arms of {@link #call} (held to its 250 lines). */
@@ -972,24 +1306,24 @@ public final class ClickHouse extends AnsiSqlRenderer {
                 yield writer.append(fn + "(").expr(a.get(2), 0).append(", ").expr(a.get(1), 0).append(")");
             }
             // DuckDB's date_diff counts boundaries crossed, as ClickHouse's dateDiff does
-            case DATE_DIFF -> writer.append("dateDiff(").append(stringLit(literal(a.get(0), "DATE_DIFF"))).append(", ")
-                    .expr(a.get(1), 0).append(", ").expr(a.get(2), 0).append(")");
-            case TIME_BUCKET -> {
-                String unit = switch (literal(a.get(0), "TIME_BUCKET")) {
-                    case "to_years" -> "YEAR";
-                    case "to_months" -> "MONTH";
-                    case "to_weeks" -> "WEEK";
-                    case "to_days" -> "DAY";
-                    case "to_hours" -> "HOUR";
-                    case "to_minutes" -> "MINUTE";
-                    case "to_seconds" -> "SECOND";
-                    default -> throw wall(c.fn(), "the unit " + a.get(0));
-                };
-                // (a week, month or year bucket is a Date: the date-time of its start)
-                yield writer.append("toDateTime64(toStartOfInterval(").expr(a.get(2), 0).append(", INTERVAL ")
-                        .expr(a.get(1), 0).append(" " + unit + "), 6, 'UTC')");
+            // the platform's week index counts days from an ancient Sunday (0001-01-07, Scalars.sundayIndex), before
+            // Date32's first day (1900-01-01: an earlier date clamps to it, measured); a difference of indices is the
+            // same from any Sunday a whole number of weeks away, and 1900-01-07 is one, within the range
+            case DATE_DIFF -> {
+                writer.append("dateDiff(").append(stringLit(literal(a.get(0), "DATE_DIFF"))).append(", ");
+                if (a.get(1) instanceof SqlExpr.DateLit d && d.iso().equals("0001-01-07")) {
+                    writer.append(dateLit("1900-01-07"));
+                } else {
+                    writer.expr(a.get(1), 0);
+                }
+                yield writer.append(", ").expr(a.get(2), 0).append(")");
             }
-            case TIMEZONE -> writer.append("toTimeZone(").expr(a.get(1), 0).append(", ").expr(a.get(0), 0).append(")");
+            case TIME_BUCKET -> writer.piece(timeBucket(a));
+            // the wall clock in the zone at the instant (DuckDB's of a zoned value, Trino's), as a naive UTC value:
+            // toTimeZone keeps the instant and changes only how it prints (measured)
+            case TIMEZONE -> writer.append("addSeconds(toDateTime64(").expr(a.get(1), 0)
+                    .append(", 6, 'UTC'), timeZoneOffset(toTimeZone(toDateTime64(").expr(a.get(1), 0).append(", 6, 'UTC'), ")
+                    .expr(a.get(0), 0).append(")))");
             // (of a DateTime64: a Date32 is refused, measured)
             case EPOCH_SECONDS -> writer.append("(toFloat64(toUnixTimestamp64Micro(toDateTime64(").expr(a.get(0), 0)
                     .append(", 6, 'UTC'))) / 1000000)");
@@ -1005,7 +1339,7 @@ public final class ClickHouse extends AnsiSqlRenderer {
                 if (!(a.get(1) instanceof SqlExpr.FormatLit)) {
                     throw wall(c.fn(), "a date format that is not a format literal: its codes are DuckDB's");
                 }
-                yield writer.append("formatDateTime(").expr(a.get(0), 0).append(", ").expr(a.get(1), 0).append(")");
+                yield writer.piece(formatted(a.get(0), ((SqlExpr.FormatLit) a.get(1)).parts()));
             }
             case STRPTIME -> {
                 if (!(a.get(1) instanceof SqlExpr.FormatLit)) {
@@ -1074,7 +1408,8 @@ public final class ClickHouse extends AnsiSqlRenderer {
     /** Pure's hashCode is a signed 64-bit integer: cityHash64's bits, read signed. */
     @Override
     protected SqlWriter hashSigned(SqlWriter writer, List<SqlExpr> a) {
-        return writer.append("reinterpretAsInt64(cityHash64(").list(a).append("))");
+        // no value (an empty collection's NULL) still hashes: Pure's hashCode([]) is one
+        return writer.append("coalesce(reinterpretAsInt64(cityHash64(").list(a).append(")), toInt64(0))");
     }
 
     /** Pure round is half-EVEN: ClickHouse's round of a Float is (measured); of a Decimal it is roundBankers. */
@@ -1105,12 +1440,36 @@ public final class ClickHouse extends AnsiSqlRenderer {
     // Aggregates and windows
     // ==================================================================
 
-    private record SortKey(SqlWriter.Piece key, boolean ascending, boolean nullsFirst) {
+    private record SortKey(SqlWriter.Piece key, boolean ascending, boolean nullsFirst,
+            @com.legend.base.Nullable SqlType type) {
+    }
+
+    /** A key in descending order as a key arraySort orders ascending: a number negated; a date or a timestamp its
+     *  number negated (negate refuses them, measured), a boolean its 0 or 1; a string its bytes negated, then 1 (arrays
+     *  compare element by element, and a longer string sorts first: 'abc' before 'ab', measured). */
+    private static String descending(String key, @com.legend.base.Nullable SqlType type) {
+        return switch (type) {
+            case SqlType.Scalar.BIGINT, SqlType.Scalar.INTEGER, SqlType.Scalar.DOUBLE, SqlType.Scalar.HUGEINT -> "-" + key;
+            case SqlType.Decimal d -> "-" + key;
+            case SqlType.Scalar.TIMESTAMP, SqlType.Scalar.TIMESTAMPTZ -> "-toUnixTimestamp64Micro(toDateTime64(" + key
+                    + ", 6, 'UTC'))";
+            case SqlType.Scalar.DATE -> "-toInt32(" + key + ")";
+            case SqlType.Scalar.BOOLEAN -> "-toInt8(" + key + ")";
+            case SqlType.Scalar.VARCHAR -> "arrayPushBack(arrayMap(\"__i\" -> -toInt16(reinterpretAsUInt8(substring(ifNull("
+                    + key + ", ''), \"__i\", 1))), range(1, length(ifNull(" + key + ", '')) + 1)), 1)";
+            case null -> throw new DialectCapability("a descending sort key of no type reached ClickHouse");
+            case SqlType t -> throw new DialectCapability("a descending sort key of " + t + " reached ClickHouse");
+        };
     }
 
     /** The values collected into a list in the keys' order, NULL values kept (groupArray drops them): each row's value
      *  in a tuple (a tuple is never NULL), sorted by the keys, then read back. */
     private SqlWriter.Piece collected(SqlWriter.Piece value, List<SortKey> keys) {
+        return collected(value, keys, null);
+    }
+
+    private SqlWriter.Piece collected(SqlWriter.Piece value, List<SortKey> keys,
+            SqlExpr.@com.legend.base.Nullable WindowCall win) {
         return w -> {
             w.append("arrayMap(\"__s\" -> tupleElement(\"__s\", 1), ");
             if (!keys.isEmpty()) {
@@ -1121,7 +1480,7 @@ public final class ClickHouse extends AnsiSqlRenderer {
                     // NULLs where the key says: isNull sorts false (0) before true (1)
                     w.append(i > 0 ? ", " : "").append(k.nullsFirst() ? "isNotNull(" + key + "), "
                             : "isNull(" + key + "), ");
-                    w.append(k.ascending() ? key : "-" + key);
+                    w.append(k.ascending() ? key : descending(key, k.type()));
                 }
                 w.append("), ");
             }
@@ -1129,7 +1488,7 @@ public final class ClickHouse extends AnsiSqlRenderer {
             for (SortKey k : keys) {
                 w.append(", ").piece(k.key());
             }
-            w.append("))");
+            ov(w.append("))"), win);
             if (!keys.isEmpty()) {
                 w.append(")");
             }
@@ -1141,33 +1500,53 @@ public final class ClickHouse extends AnsiSqlRenderer {
         boolean nullsFirst = k.nullOrder() != null
                 ? k.nullOrder() == SqlSelect.SortKey.NullOrder.NULLS_FIRST
                 : !k.ascending();
-        return new SortKey(w -> w.expr(k.expr(), 0), k.ascending(), nullsFirst);
+        return new SortKey(w -> w.expr(k.expr(), 0), k.ascending(), nullsFirst, typeOf(k.expr()));
     }
 
     @Override
     protected SqlWriter reducer(SqlWriter writer, SqlAgg.Reducer r) {
+        return reducerIn(writer, r, null);
+    }
+
+    /** {@code w}'s OVER clause after an aggregate call, when the reducer is windowed: a composite reducer windows each
+     *  of its aggregates (ClickHouse refuses a window over its scalar wrapper: "Aggregate function with name 'if' does
+     *  not exist", measured). */
+    private SqlWriter ov(SqlWriter writer, SqlExpr.@com.legend.base.Nullable WindowCall w) {
+        return w == null ? writer : over(writer, w);
+    }
+
+    /** A reducer, windowed over {@code win} when it is one. */
+    private SqlWriter reducerIn(SqlWriter writer, SqlAgg.Reducer r, SqlExpr.@com.legend.base.Nullable WindowCall win) {
         return switch (r.fn()) {
             case COUNT -> {
                 writer.append("toInt64(");
                 super.reducer(writer, r);
-                yield writer.append(")");
+                yield ov(writer, win).append(")");
             }
-            case SUM, AVG, MIN, MAX, CORR, ROW_NUMBER, RANK, DENSE_RANK, PERCENT_RANK, CUME_DIST, NTILE,
+            // corr takes no Decimal beside an Int64 (measured): Float64 operands
+            case CORR -> ov(writer.append("corrOrNull(toFloat64(").expr(r.args().get(0), 0).append("), toFloat64(")
+                    .expr(r.args().get(1), 0).append("))"), win);
+            case SUM, AVG, MIN, MAX, ROW_NUMBER, RANK, DENSE_RANK, PERCENT_RANK, CUME_DIST, NTILE,
                  FIRST_VALUE, LAST_VALUE, NTH_VALUE -> {
                 if (!r.orderBy().isEmpty()) {
                     throw new DialectCapability("an ordered " + r.fn() + " reached ClickHouse");
                 }
-                yield super.reducer(writer, r);
+                yield ov(super.reducer(writer, r), win);
             }
-            case STDDEV_SAMP, STDDEV -> plain(writer, "stddevSampStableOrNull", r);
-            case STDDEV_POP -> plain(writer, "stddevPopStableOrNull", r);
-            case VAR_SAMP, VARIANCE -> plain(writer, "varSampStableOrNull", r);
-            case VAR_POP -> plain(writer, "varPopStableOrNull", r);
-            case COVAR_SAMP -> plain(writer, "covarSampStableOrNull", r);
-            case COVAR_POP -> plain(writer, "covarPopStableOrNull", r);
-            case BOOL_AND -> plain(writer, "minOrNull", r);
-            case BOOL_OR -> plain(writer, "maxOrNull", r);
-            case ANY_VALUE -> plain(writer, "anyOrNull", r);
+            case STDDEV_SAMP, STDDEV -> ov(plain(writer, "stddevSampStableOrNull", r), win);
+            case STDDEV_POP -> ov(plain(writer, "stddevPopStableOrNull", r), win);
+            case VAR_SAMP, VARIANCE -> ov(plain(writer, "varSampStableOrNull", r), win);
+            case VAR_POP -> ov(plain(writer, "varPopStableOrNull", r), win);
+            // one row's sample covariance is NaN here, DuckDB's NULL (measured)
+            case COVAR_SAMP -> {
+                writer.append("if(");
+                ov(writer.append("count(").expr(r.args().get(0), 0).append(")"), win).append(" < 2, NULL, ");
+                yield ov(plain(writer, "covarSampStableOrNull", r), win).append(")");
+            }
+            case COVAR_POP -> ov(plain(writer, "covarPopStableOrNull", r), win);
+            case BOOL_AND -> ov(plain(writer, "minOrNull", r), win);
+            case BOOL_OR -> ov(plain(writer, "maxOrNull", r), win);
+            case ANY_VALUE -> ov(plain(writer, "anyOrNull", r), win);
             case LAG, LEAD -> throw new IllegalStateException(r.fn() + " is a window function: windowCall writes it");
             case STRING_AGG -> {
                 if (r.args().size() != 2) {
@@ -1175,16 +1554,17 @@ public final class ClickHouse extends AnsiSqlRenderer {
                 }
                 SqlExpr v = r.args().get(0);
                 SqlWriter.Piece values = r.distinct()
-                        ? w -> w.append("arrayDistinct(groupArray(").expr(v, 0).append("))")
+                        ? w -> ov(w.append("arrayDistinct(groupArray(").expr(v, 0).append(")"), win).append(")")
                         : r.orderBy().isEmpty()
-                                ? w -> w.append("groupArray(").expr(v, 0).append(")")
+                                ? w -> ov(w.append("groupArray(").expr(v, 0).append(")"), win)
                                 : w -> w.append("arrayFilter(\"__x\" -> isNotNull(\"__x\"), ").piece(collected(
-                                        x -> x.expr(v, 0), r.orderBy().stream().map(this::sortKeyOf).toList()))
+                                        x -> x.expr(v, 0), r.orderBy().stream().map(this::sortKeyOf).toList(), win))
                                         .append(")");
                 yield writer.append("if(empty(").piece(values).append("), NULL, arrayStringConcat(").piece(values)
                         .append(", ").expr(r.args().get(1), 0).append("))");
             }
-            case MEDIAN -> writer.append("quantileExactInclusiveOrNull(0.5)(toFloat64(").expr(r.args().get(0), 0).append("))");
+            case MEDIAN -> ov(writer.append("quantileExactInclusiveOrNull(0.5)(toFloat64(").expr(r.args().get(0), 0)
+                    .append("))"), win);
             case QUANTILE_CONT, QUANTILE_DISC -> {
                 if (r.args().size() != 2 || r.distinct() || r.orderBy().size() > 1) {
                     throw new DialectCapability(r.fn() + " of this shape reached ClickHouse");
@@ -1195,29 +1575,32 @@ public final class ClickHouse extends AnsiSqlRenderer {
                     if (desc) {
                         writer.append("1 - ");
                     }
-                    yield writer.expr(r.args().get(1), 6).append(")(toFloat64(").expr(r.args().get(0), 0).append("))");
+                    yield ov(writer.expr(r.args().get(1), 6).append(")(toFloat64(").expr(r.args().get(0), 0).append("))"),
+                            win);
                 }
                 // DuckDB's quantile_disc: the sorted values' element at max(ceil(n q) - 1, 0), 0-based
-                SqlWriter.Piece sorted = w -> w.append("arraySort(groupArray(").expr(r.args().get(0), 0).append("))");
+                SqlWriter.Piece sorted = w -> ov(w.append("arraySort(groupArray(").expr(r.args().get(0), 0).append(")"),
+                        win).append(")");
                 SqlWriter.Piece q = desc ? w -> w.append("(1 - ").expr(r.args().get(1), 6).append(")")
                         : w -> w.expr(r.args().get(1), 6);
                 yield writer.append("if(empty(").piece(sorted).append("), NULL, arrayElement(").piece(sorted)
                         .append(", toInt64(greatest(ceil(length(").piece(sorted).append(") * ").piece(q)
                         .append(") - 1, 0)) + 1))");
             }
-            case MODE -> writer.piece(modeOf(w -> w.append("groupArray(").expr(r.args().get(0), 0).append(")")));
+            case MODE -> writer.piece(modeOf(w -> ov(w.append("groupArray(").expr(r.args().get(0), 0).append(")"), win)));
             case LIST -> {
                 if (r.distinct() || r.args().size() != 1) {
                     throw new DialectCapability("a distinct LIST aggregate reached ClickHouse");
                 }
                 yield writer.piece(collected(w -> w.expr(r.args().get(0), 0),
-                        r.orderBy().stream().map(this::sortKeyOf).toList()));
+                        r.orderBy().stream().map(this::sortKeyOf).toList(), win));
             }
             case ARG_MAX, ARG_MIN -> {
                 if (r.args().size() != 2 || r.distinct() || !r.orderBy().isEmpty()) {
                     throw new DialectCapability(r.fn() + " of this shape reached ClickHouse");
                 }
-                yield writer.append(r.fn() == SqlAgg.Fn.ARG_MAX ? "argMax(" : "argMin(").list(r.args()).append(")");
+                yield ov(writer.append(r.fn() == SqlAgg.Fn.ARG_MAX ? "argMax(" : "argMin(").list(r.args()).append(")"),
+                        win);
             }
             case WAVG, HASH_LIST, IS_DISTINCT_MARK, UNIQUE_VALUE_ONLY ->
                     throw new IllegalStateException("lowering marker " + r.fn() + " reached the renderer");
@@ -1245,10 +1628,101 @@ public final class ClickHouse extends AnsiSqlRenderer {
         return writer.append(fn + "(").append(r.distinct() ? "DISTINCT " : "").list(r.args()).append(")");
     }
 
+    private static boolean isInterval(SqlExpr.WindowCall.Frame.Bound b) {
+        return b instanceof SqlExpr.WindowCall.Frame.Bound.IntervalPreceding
+                || b instanceof SqlExpr.WindowCall.Frame.Bound.IntervalFollowing;
+    }
+
+    /**
+     * A RANGE frame of interval offsets: ClickHouse takes only a number as a RANGE offset (in days over a Date, and
+     * none at all over a DateTime64: "The RANGE OFFSET frame ... is not implemented", measured), so the window is
+     * ordered by its key's epoch milliseconds and each offset is its milliseconds -- a unit of fixed length, a week
+     * down to a millisecond; a month's or a year's has none, and a microsecond is finer than the key.
+     */
+    private static SqlExpr.WindowCall epochFramed(SqlExpr.WindowCall w, SqlExpr.WindowCall.Frame frame) {
+        if (w.orderBy().size() != 1) {
+            throw new DialectCapability("an interval RANGE frame over " + w.orderBy().size() + " order keys reached"
+                    + " ClickHouse");
+        }
+        SqlSelect.SortKey k = w.orderBy().get(0);
+        SqlSelect.SortKey epoch = new SqlSelect.SortKey(SqlExpr.Call.of(SqlFn.EPOCH_MS, k.expr()), k.ascending(),
+                k.nullOrder(), k.outputName());
+        return new SqlExpr.WindowCall(w.fn(), w.partitionBy(), List.of(epoch), new SqlExpr.WindowCall.Frame(
+                SqlExpr.WindowCall.Frame.Kind.RANGE, millis(frame.from()), millis(frame.to())), w.type());
+    }
+
+    /**
+     * A RANGE frame of offsets reaches a NULL order key from any value (measured: {@code ORDER BY o RANGE BETWEEN 1
+     * PRECEDING AND 1 FOLLOWING} over 1, 1, NULL sums all three on every row), where the standard's NULL is a peer of
+     * NULLs only. So the key is ordered with NULL as its type's extreme on the NULLs' side: a value's frame reaches the
+     * NULLs only from within its offset of that extreme (Int64's bound, or an infinity), a NULL's frame is its NULL
+     * peers, and an unbounded side still reaches them.
+     */
+    private static SqlExpr.WindowCall nullsAtEdge(SqlExpr.WindowCall w) {
+        if (w.orderBy().size() != 1) {
+            return w;   // ClickHouse refuses a RANGE frame of offsets over several keys itself
+        }
+        SqlSelect.SortKey k = w.orderBy().get(0);
+        boolean high = k.ascending() == (k.nullOrder() != SqlSelect.SortKey.NullOrder.NULLS_FIRST);
+        SqlExpr edge = switch (typeOf(k.expr())) {
+            case SqlType.Scalar.BIGINT, SqlType.Scalar.INTEGER -> new SqlExpr.IntLit(high ? Long.MAX_VALUE : Long.MIN_VALUE);
+            // an infinity is no Float literal (a literal is a Decimal of its digits): the text cast
+            case SqlType.Scalar.DOUBLE -> new SqlExpr.Cast(new SqlExpr.StringLit(high ? "inf" : "-inf"),
+                    SqlType.Scalar.DOUBLE);
+            case SqlType t -> throw new DialectCapability("a RANGE frame of offsets over a " + t + " key reached"
+                    + " ClickHouse, whose frame reaches a NULL key from any value");
+            case null -> throw new DialectCapability("a RANGE frame of offsets over an untyped key reached ClickHouse");
+        };
+        SqlSelect.SortKey keyed = new SqlSelect.SortKey(SqlExpr.Call.of(SqlFn.COALESCE, k.expr(), edge), k.ascending(),
+                k.nullOrder(), k.outputName());
+        return new SqlExpr.WindowCall(w.fn(), w.partitionBy(), List.of(keyed), w.frame(), w.type());
+    }
+
+    private static boolean isOffset(SqlExpr.WindowCall.Frame.Bound b) {
+        return b instanceof SqlExpr.WindowCall.Frame.Bound.Preceding
+                || b instanceof SqlExpr.WindowCall.Frame.Bound.Following;
+    }
+
+    private static SqlExpr.WindowCall.Frame.Bound millis(SqlExpr.WindowCall.Frame.Bound b) {
+        return switch (b) {
+            case SqlExpr.WindowCall.Frame.Bound.IntervalPreceding p ->
+                    new SqlExpr.WindowCall.Frame.Bound.Preceding(Math.multiplyExact(p.n(), unitMillis(p.unit())));
+            case SqlExpr.WindowCall.Frame.Bound.IntervalFollowing f ->
+                    new SqlExpr.WindowCall.Frame.Bound.Following(Math.multiplyExact(f.n(), unitMillis(f.unit())));
+            case SqlExpr.WindowCall.Frame.Bound.UnboundedPreceding u -> b;
+            case SqlExpr.WindowCall.Frame.Bound.Preceding p -> b;
+            case SqlExpr.WindowCall.Frame.Bound.CurrentRow c -> b;
+            case SqlExpr.WindowCall.Frame.Bound.Following f -> b;
+            case SqlExpr.WindowCall.Frame.Bound.UnboundedFollowing u -> b;
+        };
+    }
+
+    private static long unitMillis(String unit) {
+        String u = unit.toUpperCase(java.util.Locale.ROOT);
+        Long ms = UNIT_MILLIS.get(u.endsWith("S") ? u.substring(0, u.length() - 1) : u);
+        if (ms == null) {
+            throw new DialectCapability("a " + unit + " RANGE frame offset reached ClickHouse: no fixed length in the"
+                    + " key's milliseconds");
+        }
+        return ms;
+    }
+
+    private static final java.util.Map<String, Long> UNIT_MILLIS = java.util.Map.of("WEEK", 604800000L, "DAY",
+            86400000L, "HOUR", 3600000L, "MINUTE", 60000L, "SECOND", 1000L, "MILLISECOND", 1L);
+
     /** {@code lag} and {@code lead} as {@code lagInFrame} and {@code leadInFrame} of the nullable value over the whole
      *  partition (they answer the type's default past it otherwise); an average is a DOUBLE. */
     @Override
     protected SqlWriter windowCall(SqlWriter writer, SqlExpr.WindowCall w) {
+        SqlExpr.WindowCall.Frame frame = w.frame();
+        if (frame != null && frame.kind() == SqlExpr.WindowCall.Frame.Kind.RANGE
+                && (isInterval(frame.from()) || isInterval(frame.to()))) {
+            w = epochFramed(w, frame);
+        }
+        if (w.frame() instanceof SqlExpr.WindowCall.Frame f && f.kind() == SqlExpr.WindowCall.Frame.Kind.RANGE
+                && (isOffset(f.from()) || isOffset(f.to()))) {
+            w = nullsAtEdge(w);
+        }
         if (w.fn() instanceof SqlAgg.ValueFn v && (v.fn() == SqlAgg.Fn.LAG || v.fn() == SqlAgg.Fn.LEAD)) {
             writer.append(v.fn() == SqlAgg.Fn.LAG ? "lagInFrame(toNullable(" : "leadInFrame(toNullable(")
                     .expr(v.args().get(0), 0).append(")");
@@ -1289,7 +1763,7 @@ public final class ClickHouse extends AnsiSqlRenderer {
             writer.append("toInt64(");
         }
         switch (w.fn()) {
-            case SqlAgg.Reducer r -> reducer(writer, r);
+            case SqlAgg.Reducer r -> reducerIn(writer, r, w);
             // ntile's bucket count is unsigned (an Int64 is refused, measured)
             case SqlAgg.RankingFn r -> {
                 if (r.fn() == SqlAgg.Fn.NTILE) {
@@ -1307,7 +1781,9 @@ public final class ClickHouse extends AnsiSqlRenderer {
                 writer.append(")");
             }
         }
-        over(writer, w);
+        if (!(w.fn() instanceof SqlAgg.Reducer)) {
+            over(writer, w);
+        }
         if (signed) {
             writer.append(")");
         }
@@ -1318,19 +1794,48 @@ public final class ClickHouse extends AnsiSqlRenderer {
     // JSON constructors
     // ==================================================================
 
+    /** A value's JSON text: a JSON value its own text, any other value toJSONString's (which answers SQL NULL for a
+     *  NULL, measured: JSON's null here). */
+    private SqlWriter.Piece json(SqlExpr x) {
+        if (x instanceof SqlExpr.NullLit) {
+            return w -> w.append("'null'");
+        }
+        if (typeOf(x) == SqlType.Scalar.JSON) {
+            return w -> w.append("coalesce(").expr(x, 0).append(", 'null')");
+        }
+        return w -> w.append("coalesce(toJSONString(").expr(x, 0).append("), 'null')");
+    }
+
+    /** A JSON object's text: each key's JSON, a colon, its value's (ClickHouse has no JSON constructor; a value is a
+     *  JSON value's text here). */
     @Override
     protected SqlWriter jsonObject(SqlWriter writer, SqlExpr.JsonObject j) {
-        throw new DialectCapability("a JSON object constructor reached ClickHouse");
+        List<SqlExpr> kv = j.kv();
+        writer.append("concat('{'");
+        for (int i = 0; i < kv.size(); i += 2) {
+            writer.append(i > 0 ? ", ','" : "").append(", ").piece(json(kv.get(i))).append(", ':', ")
+                    .piece(json(kv.get(i + 1)));
+        }
+        return writer.append(", '}')");
     }
 
     @Override
     protected SqlWriter jsonArray(SqlWriter writer, SqlExpr.JsonArray j) {
-        throw new DialectCapability("a JSON array constructor reached ClickHouse");
+        writer.append("concat('['");
+        for (int i = 0; i < j.elements().size(); i++) {
+            writer.append(i > 0 ? ", ','" : "").append(", ").piece(json(j.elements().get(i)));
+        }
+        return writer.append(", ']')");
     }
 
+    /** The group's values' JSON as an array, in the keys' order (an empty group's is {@code []}). */
     @Override
     protected SqlWriter jsonArrayAgg(SqlWriter writer, SqlExpr.JsonArrayAgg j) {
-        throw new DialectCapability("a JSON array aggregate reached ClickHouse");
+        SqlWriter.Piece values = j.orderKeys().isEmpty()
+                ? w -> w.append("groupArray(").piece(json(j.value())).append(")")
+                : collected(json(j.value()), j.orderKeys().stream().map(k -> new SortKey(w -> w.expr(k.expr(), 0),
+                        !k.desc(), false, typeOf(k.expr()))).toList());
+        return writer.append("concat('[', arrayStringConcat(").piece(values).append(", ','), ']')");
     }
 
     // ==================================================================
@@ -1352,13 +1857,78 @@ public final class ClickHouse extends AnsiSqlRenderer {
                     case SEC2 -> "%S";
                     case SUBSEC_MICRO -> "%f";
                     case SUBSEC_NANO -> "%f000";
-                    case SUBSEC_MIN -> throw new DialectCapability("a millisecond format reached ClickHouse");
+                    case SUBSEC_MIN -> throw new DialectCapability("a millisecond format reached ClickHouse outside a"
+                            + " formatted date (formatted())");
                     case MONTH_ABBREV -> "%b";
                     case MONTH_NAME -> "%M";
                     case WEEKDAY_NAME -> "%W";
                     case HOUR12 -> "%I";
                     case HOUR12_NOPAD -> "%l";
                     case AMPM -> "%p";
+                };
+            });
+        }
+        return out.toString();
+    }
+
+    /**
+     * A date formatted: formatDateTime's letters, Joda's for a format with an unpadded 12-hour clock (formatDateTime's
+     * {@code %l} pads, measured). Neither has milliseconds (Joda's {@code SSS} drops the fraction's leading zeros: .001
+     * prints 100, measured), so a millisecond field is the first three digits of the microseconds, the format around
+     * it formatted on its own.
+     */
+    private SqlWriter.Piece formatted(SqlExpr value, List<com.legend.sql.DateFmt> parts) {
+        List<SqlWriter.Piece> pieces = new ArrayList<>();
+        List<com.legend.sql.DateFmt> run = new ArrayList<>();
+        for (com.legend.sql.DateFmt p : parts) {
+            if (p == com.legend.sql.DateFmt.Part.SUBSEC_MIN) {
+                if (!run.isEmpty()) {
+                    pieces.add(formattedRun(value, List.copyOf(run)));
+                    run.clear();
+                }
+                pieces.add(w -> w.append("substring(formatDateTime(").expr(value, 0).append(", '%f'), 1, 3)"));
+            } else {
+                run.add(p);
+            }
+        }
+        if (!run.isEmpty()) {
+            pieces.add(formattedRun(value, List.copyOf(run)));
+        }
+        return pieces.size() == 1 ? pieces.get(0) : w -> w.append("concat(").join(pieces, ", ", SqlWriter::piece)
+                .append(")");
+    }
+
+    private SqlWriter.Piece formattedRun(SqlExpr value, List<com.legend.sql.DateFmt> parts) {
+        SqlExpr.FormatLit fl = new SqlExpr.FormatLit(parts);
+        if (parts.contains(com.legend.sql.DateFmt.Part.HOUR12_NOPAD)) {
+            return w -> w.append("formatDateTimeInJodaSyntax(").expr(value, 0).append(", ").append(stringLit(jodaText(fl)))
+                    .append(")");
+        }
+        return w -> w.append("formatDateTime(").expr(value, 0).append(", ").append(stringLit(formatText(fl))).append(")");
+    }
+
+    /** A format in Joda's letters (formatDateTimeInJodaSyntax), its text quoted. */
+    private static String jodaText(SqlExpr.FormatLit fl) {
+        StringBuilder out = new StringBuilder();
+        for (com.legend.sql.DateFmt p : fl.parts()) {
+            out.append(switch (p) {
+                case com.legend.sql.DateFmt.Text t -> "'" + t.s().replace("'", "''") + "'";
+                case com.legend.sql.DateFmt.Part part -> switch (part) {
+                    case YEAR4 -> "yyyy";
+                    case MONTH2 -> "MM";
+                    case DAY2 -> "dd";
+                    case HOUR2 -> "HH";
+                    case MIN2 -> "mm";
+                    case SEC2 -> "ss";
+                    case SUBSEC_MICRO -> "SSSSSS";
+                    case SUBSEC_NANO, SUBSEC_MIN -> throw new IllegalStateException("a " + part + " field reached a Joda"
+                            + " format: formatted() writes it");
+                    case MONTH_ABBREV -> "MMM";
+                    case MONTH_NAME -> "MMMM";
+                    case WEEKDAY_NAME -> "EEEE";
+                    case HOUR12 -> "hh";
+                    case HOUR12_NOPAD -> "h";
+                    case AMPM -> "a";
                 };
             });
         }
@@ -1386,14 +1956,27 @@ public final class ClickHouse extends AnsiSqlRenderer {
     @Override
     public @com.legend.base.Nullable Object normalize(@com.legend.base.Nullable Object jdbcValue,
             @com.legend.base.Nullable SqlType type) {
-        if (jdbcValue instanceof Object[] fields && type instanceof SqlType.Struct st
-                && fields.length == st.fields().size()) {
+        return tupled(jdbcValue, type);
+    }
+
+    /** A Tuple (the driver's Object[]) as the platform's map of the struct's fields, a nested one too (a zip of pairs
+     *  is a pair of pairs), and a list's elements so. */
+    private static @com.legend.base.Nullable Object tupled(@com.legend.base.Nullable Object v,
+            @com.legend.base.Nullable SqlType type) {
+        if (v instanceof Object[] fields && type instanceof SqlType.Struct st && fields.length == st.fields().size()) {
             java.util.Map<String, Object> m = new java.util.LinkedHashMap<>();
             for (int i = 0; i < fields.length; i++) {
-                m.put(st.fields().get(i).name(), fields[i]);
+                m.put(st.fields().get(i).name(), tupled(fields[i], st.fields().get(i).type()));
             }
             return m;
         }
-        return jdbcValue;
+        if (v instanceof List<?> l && type instanceof SqlType.Array at) {
+            List<Object> out = new ArrayList<>(l.size());
+            for (Object e : l) {
+                out.add(tupled(e, at.element()));
+            }
+            return out;
+        }
+        return v;
     }
 }

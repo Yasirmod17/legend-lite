@@ -826,12 +826,15 @@ carrier STRUCT <- JSON; a ResultSet of no columns before a failing statement's c
 new `testing/.../EmbeddedTrino.java` and `tools/trino/` (the server, as a Bazel repository); `MODULE.bazel` and
 `tools/deps/jars_table.bzl` (the driver, test-only); `pct/BUILD.bazel` (the lanes, `manual`), `PctBackend`
 (`Lane.TRINO`), five suite classes and `ChannelBLane`'s pins; `gates/BUILD.bazel` puts the Trino lanes in `heavy`.
-**Announced 2026-10-12, in progress:** ClickHouse 25.8 by the same recipe (`sql/dialect/ClickHouse.java`, its rows in
-the same tables and arms in the same switches, `testing/.../EmbeddedClickHouse.java`, `tools/clickhouse/`, its lanes
-and suite classes); its lanes are wired, unpinned, not yet green.
-**Next** (the user's order): ClickHouse, then the coverage map of the primitives the corpus uses that PCT never
-exercises, the relational corpus on Snowflake, Databricks and BigQuery, MongoDB, Elasticsearch, SingleStore (the
-plan's §2).
+**2026-10-12, ClickHouse landed on the branch** (all five suites green on a real ClickHouse 25.8 server, 65 pinned of
+1,251, 31 of them ClickHouse's own limits; channel B pinned; the plan's §19): `sql/dialect/ClickHouse.java` (its
+ARRAY JOIN columns named after a star, guarded raises kept by `query_plan_merge_expressions = 0`, NULL keys at a RANGE
+frame's edge, JSON constructors, typed descending keys, out-of-range date literals refused); `Spellings` (ClickHouse's
+`abs` is its own arm); `exec/DynamicPivot.java` (an integral key delivered as a BigInteger, the `BigDecimal` arm's
+twin; `JavaEvalLedgerTest`'s pin 111 -> 112, dated); `exec/SqlTypeCensus.java` (ClickHouse's spellings and its
+carrier JSON <- VARCHAR); five suite classes and `ChannelBLane`'s pins.
+**Next** (the user's order): the coverage map of the primitives the corpus uses that PCT never exercises, the
+relational corpus on Snowflake, Databricks and BigQuery, MongoDB, Elasticsearch, SingleStore (the plan's §2).
 
 ## Rules between sessions
 

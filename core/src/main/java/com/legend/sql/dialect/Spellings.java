@@ -127,7 +127,8 @@ public record Spellings(Map<SqlFn, String> fnNames) {
 
     private static Map<SqlFn, String> clickhouse() {
         Map<SqlFn, String> m = new EnumMap<>(SqlFn.class);
-        for (SqlFn f : new SqlFn[] {SqlFn.ABS, SqlFn.ACOS, SqlFn.ASIN, SqlFn.ATAN, SqlFn.ATAN2, SqlFn.CBRT,
+        // (ABS is ClickHouse's own arm: an integer's abs is a UInt64 there)
+        for (SqlFn f : new SqlFn[] {SqlFn.ACOS, SqlFn.ASIN, SqlFn.ATAN, SqlFn.ATAN2, SqlFn.CBRT,
                 SqlFn.COALESCE, SqlFn.COS, SqlFn.COSH, SqlFn.DEGREES, SqlFn.EXP, SqlFn.GREATEST, SqlFn.LEAST, SqlFn.LN,
                 SqlFn.LOG10, SqlFn.RADIANS, SqlFn.SIN, SqlFn.SINH, SqlFn.SQRT, SqlFn.TAN, SqlFn.TANH}) {
             m.put(f, DUCKDB.fnNames().get(f));

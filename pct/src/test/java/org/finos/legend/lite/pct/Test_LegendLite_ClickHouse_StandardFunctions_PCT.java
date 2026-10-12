@@ -30,6 +30,14 @@ public class Test_LegendLite_ClickHouse_StandardFunctions_PCT extends PCTReportC
     // Pinned by a STABLE part of the message (the runner matches by containment): no per-run id.
     // First measured 2026-10-12 (ClickHouse 25.8, the pinned server).
     private static final MutableList<ExclusionSpecification> expectedFailures = Lists.mutable.with(
+            // CLICKHOUSE'S OWN LIMIT: its dates are 1900 to 2299 (Date32, DateTime64; a date past either end is
+            // clamped, silently, measured): the dialect refuses a literal outside them
+            one("meta::pure::functions::boolean::tests::inequalities::between::testBetween_DateTime_Function_1__Boolean_1_", "\"the date 1032-01-01 00:32:34.000000 reached ClickHouse, whose dates are 1900 to 2299 (it clamps a date past either end)\""),
+            one("meta::pure::functions::boolean::tests::inequalities::between::testBetween_Date_Function_1__Boolean_1_", "\"the date 1032-01-01 00:32:34.000000 reached ClickHouse, whose dates are 1900 to 2299 (it clamps a date past either end)\""),
+            one("meta::pure::functions::boolean::tests::inequalities::between::testBetween_StrictDate_Function_1__Boolean_1_", "\"the date 1032-01-01 reached ClickHouse, whose dates are 1900 to 2299 (it clamps a date past either end)\""),
+            // CLICKHOUSE'S OWN LIMIT: a quantile's level is a parameter, a constant (quantile(0.5)(x)): a level from
+            // a column is refused
+            one("meta::pure::functions::math::tests::percentile::testPercentile_Function_1__Boolean_1_", "\"a quantile whose level is no literal number reached ClickHouse\"")
     );
 
     public static Test suite() {

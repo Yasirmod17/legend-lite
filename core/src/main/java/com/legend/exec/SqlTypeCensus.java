@@ -291,7 +291,8 @@ public final class SqlTypeCensus {
                     WIRE_AGREE.increment();
                 } else if (delivers(outs.get(i).type(), meta) || snowflakeOwn(dialect, outs.get(i).type(), meta)
                         || bigQueryOwn(dialect, outs.get(i).type(), meta) || sqliteOwn(dialect, outs.get(i).type(), meta)
-                        || mariaDbOwn(dialect, outs.get(i).type(), meta) || trinoOwn(dialect, outs.get(i).type(), meta)) {
+                        || mariaDbOwn(dialect, outs.get(i).type(), meta) || trinoOwn(dialect, outs.get(i).type(), meta)
+                        || clickHouseOwn(dialect, outs.get(i).type(), meta)) {
                     // THE DELIVERY RELATION (adjudicated 2026-08-23):
                     // value-subset narrowing (every INTEGER fits the
                     // BIGINT contract; DECIMAL(p,s) fits DECIMAL(P>=p,s))
@@ -609,6 +610,33 @@ public final class SqlTypeCensus {
                 default -> name;
             };
         }
+        // ClickHouse's (2026-10-12): every scalar Nullable(T); its own names for the same types, a date-time's
+        // precision and zone in its name, a struct a (named) Tuple
+        if ("ClickHouse".equals(dialect) && name != null) {
+            String n = name.trim();
+            while (n.startsWith("Nullable(") && n.endsWith(")")) {
+                n = n.substring("Nullable(".length(), n.length() - 1).trim();
+            }
+            if (n.startsWith("Tuple(")) {
+                return "STRUCT";
+            }
+            if (n.startsWith("DateTime")) {
+                return "TIMESTAMP";
+            }
+            if (n.startsWith("Decimal")) {
+                return "DECIMAL";
+            }
+            return switch (n) {
+                case "Int64", "UInt32" -> "BIGINT";
+                case "Int32", "Int16", "Int8", "UInt16", "UInt8" -> "INTEGER";
+                case "Int128", "UInt64" -> "HUGEINT";
+                case "Float64" -> "DOUBLE";
+                case "Float32" -> "FLOAT";
+                case "Date32", "Date" -> "DATE";
+                case "Nothing" -> "NULL";
+                default -> n;
+            };
+        }
         if ("SQLite".equals(dialect) && name != null) {
             return switch (name) {
                 case "FLOAT" -> "DOUBLE";
@@ -627,16 +655,21 @@ public final class SqlTypeCensus {
         };
     }
 
-    /** BigQuery's exact decimal carrier (2026-10-11): every decimal is a BIGNUMERIC (a parameterized type cannot be
-     *  cast to; its 38 digits each side hold every DECIMAL(p,s) and HUGEINT value), and a Float-declared column may
-     *  arrive as it (the numeric charter's Rule 2, as a DECIMAL does). Its map carrier (2026-10-11): a map is its
-     *  entries, an ARRAY of (key, value) structs -- BigQuery has no MAP type (the dialect's mapTypeName). */
     /** Trino's carrier (2026-10-12): a statement's ROW column is delivered as its JSON text (the driver's own Row class
      *  is read through no interface; Trino.rowsAsJson), decoded to the struct's map. */
     private static boolean trinoOwn(String dialect, SqlType label, String meta) {
         return "Trino".equals(dialect) && label instanceof SqlType.Struct && meta.equals("JSON");
     }
 
+    /** ClickHouse's carrier (2026-10-12): a Variant is its JSON text, a String (TypeNames.CLICKHOUSE). */
+    private static boolean clickHouseOwn(String dialect, SqlType label, String meta) {
+        return "ClickHouse".equals(dialect) && label == SqlType.Scalar.JSON && meta.equals("VARCHAR");
+    }
+
+    /** BigQuery's exact decimal carrier (2026-10-11): every decimal is a BIGNUMERIC (a parameterized type cannot be
+     *  cast to; its 38 digits each side hold every DECIMAL(p,s) and HUGEINT value), and a Float-declared column may
+     *  arrive as it (the numeric charter's Rule 2, as a DECIMAL does). Its map carrier (2026-10-11): a map is its
+     *  entries, an ARRAY of (key, value) structs -- BigQuery has no MAP type (the dialect's mapTypeName). */
     private static boolean bigQueryOwn(String dialect, SqlType label, String meta) {
         if (!"BigQuery".equals(dialect)) {
             return false;

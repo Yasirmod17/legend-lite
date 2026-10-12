@@ -165,7 +165,9 @@ class JavaEvalLedgerTest {
             // 107 -> 111 (2026-10-02, Postgres delivers HUGEINT as NUMERIC(38)): the probed key decodes by
             // its DECLARED type, Executor.unwrap's rule -- an integer key arriving as a numeric is an
             // integer literal (a decode, not evaluation)
-            Map.entry("core/src/main/java/com/legend/exec/DynamicPivot.java", 111),
+            // 111 -> 112 (2026-10-12, ClickHouse delivers an Int128 key, a sum of integers, as BigInteger): the same
+            // rule's arm for that JDBC kind, the integral BigDecimal arm's twin (a decode, not evaluation)
+            Map.entry("core/src/main/java/com/legend/exec/DynamicPivot.java", 112),
             // Phase 1c endgame: the boundary resolver (stamp + marker
             // substitution over stamped schema — the DynamicPivot model;
             // audit 2026-08-18 Tier-3: size-pinned so the resolver never

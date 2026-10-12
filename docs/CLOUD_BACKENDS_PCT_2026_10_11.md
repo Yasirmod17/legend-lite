@@ -799,3 +799,62 @@ JVM, and its log simply stopped). The coordinator forgets a finished query at on
 statements filled its heap until it stopped (measured: the server restarted mid-suite, the statement running then
 failed). Measured on Linux x86_64; the server is Java's jars, so the one repository serves
 every platform (unmeasured elsewhere). The lanes are `manual`, in `//gates:heavy`.
+
+## 19. ClickHouse, measured (2026-10-12)
+
+The fifth of the open ones (§2, item 4): ClickHouse 25.8, a long-term release, its static build Bazel unpacks
+(`@embedded_clickhouse`, `tools/clickhouse/`: the one self-contained binary, pinned for Linux x86_64 and skipped as
+incompatible elsewhere), started per test JVM on free loopback ports with a configuration file of its own
+(`testing/.../EmbeddedClickHouse.java`); the driver is ClickHouse's JDBC driver (test-only), which speaks HTTP. The
+dialect, `ClickHouse`, is a sibling over `AnsiSqlRenderer` that changes nothing the other dialects render.
+
+**Result:** all five suites pass on ClickHouse, each failure pinned by its message: 1,251 tests, 65 pinned (Essential
+29 of 346, Grammar 14 of 138, Relation 18 of 469, Standard 4 of 205, Unclassified 0 of 93), the census divergence 0 in
+every suite (no ceiling raised). 34 are the platform's own, pinned on the DuckDB lane by the same cause (7 of them
+instance identity); 31 are ClickHouse's own limits, each measured:
+
+- a Tuple's fields are typed and a Tuple is never NULL (10): an unset property is a NULL of no type, and an empty
+  untyped list (`Nullable(Nothing)`) has no Tuple to zip or project into;
+- a join's ON needs an equality between its two sides (9): an as-of join one besides its inequality, a condition on
+  one side alone is refused, and an outer join's condition reading both sides outside an equality is refused under
+  `join_use_nulls` (which SQL's NULLs for the missing side need); a correlated subquery is refused as IN's argument;
+  there is no LATERAL join (the dialect refuses one by name; an explosion's lateral join is an ARRAY JOIN);
+- a RANGE frame's offsets are non-negative integers (4): a Float offset is refused;
+- its dates are 1900 to 2299 (3): `Date32` and `DateTime64` clamp a date past either end, silently, so the dialect
+  refuses such a literal rather than answer for another date;
+- a list is never NULL (2): a JSON null read as a list is the empty list, which `toVariant` writes as `[]` where Pure
+  writes `null`;
+- a quantile's level is a parameter (1), a constant: a level from a column is refused;
+- a statement over the server's `max_query_size` (1), 256 KiB by default, is refused before its own SETTINGS clause is
+  read (this one spells many Floats' text);
+- no session (1): the driver's HTTP has none, so no table only one session sees, and the system database (§14) has
+  nowhere to live.
+
+First measured with 221 failing, burned down the same day. **What ClickHouse does differently, and the dialect's
+answer** (every row measured on 25.8.2.29):
+
+| Measured | Consequence |
+|---|---|
+| SQL's semantics are settings, off by default: an outer join's missing side is its type's default (0, `''`), a bare UNION is refused, an aggregate over no row is 0; the driver's HTTP has no session, so a `SET` does not outlive its statement | every statement carries its own `SETTINGS` (`join_use_nulls`, `union_default_mode`, `cast_keep_nullable`, `session_timezone`), and each aggregate its `OrNull` form |
+| a value is NOT NULL unless its type is `Nullable(T)`; `Nullable(Array)` and `Nullable(Tuple)` are refused; `splitByString` and `extractAll` refuse a Nullable text | every cast names the nullable type; the empty collection is the empty array; a list made from text takes the text past NULL (NULL's list is empty, `split_part`'s answer NULL) |
+| a literal is typed by its magnitude (`1` is UInt8, and its arithmetic wraps); `abs` of an Int64 is a UInt64 | an integer literal is `toInt64(1)`, a Float literal an exact Decimal (`1.5` alone is a Float64); an integer's `abs` back to Int64 by `accurateCast` (raising where it does not fit, as DuckDB's overflow) |
+| no raise with a computed message (`throwIf` takes a constant); a CASE's branch, read through an outer `if`, ran on every row once the planner merged a subquery's expressions into its reader's; a constant `range` step is folded before its guard runs | a failed cast of the message's text raises it, verbatim in the server's message; `query_plan_merge_expressions = 0`; the step `materialize`d |
+| no LATERAL; an ARRAY JOIN's column is read as `"t1"."x"` when named `"t1.x"`, but `*` does not include an ARRAY JOIN's columns | an explosion is an ARRAY JOIN (several lists padded to the longest), and a select over one names its columns after its star |
+| a RANGE frame's offset is a number only, and none over a DateTime64; a RANGE frame of offsets reaches a NULL key from any value | an interval frame orders by the key's epoch milliseconds; a NULL key is ordered as its type's extreme on the NULLs' side (a value's frame reaches it only from within its offset of Int64's bound) |
+| `formatDateTime` has no milliseconds and its `%l` pads; Joda's `SSS` drops the fraction's leading zeros (.001 prints `100`) | a millisecond field is the first three digits of `%f`, the format around it formatted on its own; Joda's letters only for an unpadded 12-hour clock |
+| `toTimeZone` keeps the instant and changes only how it prints | the wall clock in the zone is `addSeconds(x, timeZoneOffset(toTimeZone(x, zone)))`, a naive UTC value (DuckDB's, Trino's) |
+| `exp`, `log` and `tanh` are approximations; a Decimal modulo of mixed scales is wrong and `moduloOrZero` takes no Decimal | `pow(e(), x)`, a ratio of `log2`, the tanh identity; the operands at one scale, a zero divisor NULL |
+| `toString` drops a Decimal's trailing zeros (3.0 is `'3'`) | `toDecimalString` at the value's own scale, read from its type name (a constant) |
+| no JSON constructor; `toJSONString` answers SQL NULL for NULL; a JSON value's text keeps the spaces it was written with | an object, an array and an array aggregate written as JSON text, JSON's `null` for NULL |
+| `negate` refuses a String or a DateTime, which an ordered collection's descending key needed | a descending key as a key ordered ascending: a date its number negated, a string its bytes negated then 1 (arrays compare element by element) |
+| the driver hands a Tuple as an `Object[]` and an Int128 as a `BigInteger` | a Tuple decoded into its named fields in `normalize`; a dynamic pivot's integral key decoded from a `BigInteger` (`DynamicPivot`, the integral `BigDecimal` arm's twin) |
+
+**Channel B on ClickHouse** (§16, judged against the engine's own ClickHouse manifest): 328 / 3 / 1, 131 / 0 / 0,
+445 / 7 / 0, 201 / 0 / 0, 93 / 0 / 0. Essential's 1 true wire bug is a date past 2299, outside ClickHouse's dates;
+Relation's 7, each the engine's frontier too, are 5 JSON values whose text keeps its spaces (ClickHouse stores a JSON
+value's text as written, DuckDB re-writes it) and a pivot's column order twice. Channel B also found what channel A's
+interpreter had hidden, fixed the same day: the descending keys above, the JSON constructors, and a list made from
+Nullable text (Relation went 389 / 62 / 7 to 445 / 7 / 0).
+
+The lanes were measured with `bazel test //pct:pct_clickhouse --local_test_jobs=1`, as Trino's. Measured on Linux
+x86_64, the one platform with a pinned build. The lanes are `manual`, in `//gates:heavy`.
