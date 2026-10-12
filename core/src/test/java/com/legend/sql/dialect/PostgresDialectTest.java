@@ -169,7 +169,7 @@ class PostgresDialectTest {
         // would ROUND 9999-12-31 23:59:59.999999999 into year 10000)
         assertEquals("""
                 SELECT ("t0"."sym" ~ '(?p)^(?:S1.*)$') AS "m", (right("t0"."sym", length('1')) = '1') AS "ew", \
-                CASE WHEN "t0"."qty" - 1 = 0 THEN CAST(CAST(CAST(chr(31) || ('Division by zero') || chr(31) AS TIMESTAMPTZ) \
+                CASE WHEN "t0"."qty" - 1 = 0 THEN CAST(CAST(CAST(chr(31) || ('Division by zero') || chr(31) || left(CAST(random() AS VARCHAR), 0) AS TIMESTAMPTZ) \
                 AS VARCHAR) AS DOUBLE PRECISION) ELSE (CAST("t0"."qty" AS DOUBLE PRECISION) / CAST("t0"."qty" - 1 AS DOUBLE PRECISION)) \
                 END AS "dv", (CAST(CAST("t0"."id" AS BIGINT) AS BIGINT) << CAST(40 AS INTEGER)) AS "sh"
                 FROM "trades" AS "t0"

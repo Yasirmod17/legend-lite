@@ -921,8 +921,14 @@ unprivileged user in a root container, `docs/GATES.md`). **109 pins become 61; P
 - a Boolean list's extremes as `bool_or`/`bool_and` (2), splitPart over `string_to_array` (4), hashCode from MD5 (1);
 - a struct decoded from the driver's jsonb object (7), after which seven instance tests fail as they do on DuckDB.
 
-Kept: the jsonb collection carrier for maps and list folds (12, leg P4), extension functions (5, a decision), an IR
-typing gap (3), jsonb's key order (3), Postgres's own limits (2) and two not yet examined. The census ceiling for
+Then, at the user's ask, the jsonb collections (12): a map is its entries in order, a `jsonb[]` of `{"key", "value"}`
+(BigQuery's shape, which the executor decodes to a map; the census delivers a map as an ARRAY of entries for every
+dialect now, by its declared type, not by a database's name); a fold or a reduction into a list of scalars walks a
+native array; the LIST aggregate is `array_agg`. On the way, the raise: a STABLE cast, which the planner pre-evaluates
+where it estimates (an argument of `unnest`), so an untaken raise fired at plan time; it carries an empty volatile
+term now. **109 pins become 49; the own 15**: extension functions (5, a decision), an IR typing gap (3), jsonb's key
+order (3, next: a Variant as `json`), Postgres's limits (2), two not yet examined. Channel B: 326 / 2 / 0,
+132 / 3 / 0, 465 / 2 / 0, 204 / 1 / 0, 87 / 0 / 0. The census ceiling for
 Postgres rose by the by-design class (a struct as jsonb), Essential 13 -> 14 and Grammar 5 -> 6, as tests that stopped
 at their first struct now run their later statements (`PctCensusGate`, dated).
 

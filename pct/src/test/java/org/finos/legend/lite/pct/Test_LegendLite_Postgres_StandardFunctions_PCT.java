@@ -34,8 +34,6 @@ public class Test_LegendLite_Postgres_StandardFunctions_PCT extends PCTReportCon
 
     // Pinned by a STABLE part of the message (the runner matches by containment): no per-run id.
     private static final MutableList<ExclusionSpecification> expectedFailures = Lists.mutable.with(
-            // refused by name: a construct the Postgres dialect does not spell yet
-            one("meta::pure::functions::math::hashCode::tests::testHashCodeAggregate_Function_1__Boolean_1_", "\"a LIST aggregate reached Postgres before the jsonb collection carrier (leg P4)\"")
     );
 
     public static Test suite() {

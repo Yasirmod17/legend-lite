@@ -184,6 +184,10 @@ public final class Postgres extends AnsiSqlRenderer {
     // refused by name, never guessed.
     // ==================================================================
 
+    private static @com.legend.base.Nullable SqlType typeOf(SqlExpr e) {
+        return e.type() instanceof com.legend.sql.TypeFact.Typed t ? t.type() : null;
+    }
+
     /** The element type of a list, or null for a value that is no list. */
     private static @com.legend.base.Nullable SqlType listElement(SqlExpr e) {
         return e.type() instanceof com.legend.sql.TypeFact.Typed t && t.type() instanceof SqlType.Array a
@@ -206,6 +210,108 @@ public final class Postgres extends AnsiSqlRenderer {
     private SqlWriter.Piece listOf(SqlExpr list, Object what) {
         elementOf(list, what);
         return w -> w.expr(list, 0);
+    }
+
+    // ---- maps: a map is its entries in order, a JSONB[] of {"key": k, "value": v} (a list of structs, as BigQuery's
+    // ARRAY<STRUCT<key, value>>; the executor decodes it to the map, Executor.unwrap). DuckDB's semantics (BigQuery's
+    // notes, measured there on 1.5): entries keep their order; a NULL key raises "Map keys can not be NULL.", a
+    // repeated one "Map keys must be unique."; map(ks, vs) of unequal lengths raises; a concatenation keeps each key at
+    // its first place with the value of the last map holding it, a NULL map adding nothing; an extraction is the key's
+    // value as a list, empty when it is absent; a NULL map's keys, values or extraction are NULL.
+
+    @Override
+    protected String mapTypeName(String key, String value) {
+        return "JSONB[]";
+    }
+
+    private SqlWriter maps(SqlWriter writer, SqlExpr.Call c) {
+        List<SqlExpr> a = c.args();
+        return switch (c.fn()) {
+            case MAP_EMPTY -> writer.append("CAST(ARRAY[] AS JSONB[])");
+            // each entry a struct of two fields (a pair's first and second), by position whatever their names
+            case MAP_FROM_ENTRIES -> {
+                SqlExpr xs = a.get(0);
+                if (!(listElement(xs) instanceof SqlType.Struct entry) || entry.fields().size() != 2) {
+                    throw wall(c.fn(), "entries of " + listElement(xs));
+                }
+                String k = stringLit(entry.fields().get(0).name());
+                String v = stringLit(entry.fields().get(1).name());
+                SqlWriter.Piece entries = w -> w.append("ARRAY(SELECT jsonb_build_object('key', __me -> " + k
+                        + ", 'value', __me -> " + v + ") FROM unnest(").expr(xs, 0)
+                        .append(") WITH ORDINALITY AS __mu(__me, __mo) ORDER BY __mo)");
+                yield writer.append("(CASE WHEN ").expr(xs, 4).append(" IS NULL THEN NULL ELSE ")
+                        .piece(keysChecked(entries)).append(" END)");
+            }
+            // DuckDB's map(ks, vs): the keys zipped with the values by position
+            case MAP_FROM_LISTS -> {
+                SqlExpr ks = a.get(0);
+                SqlExpr vs = a.get(1);
+                SqlType kt = elementOf(ks, c.fn());
+                SqlType vt = elementOf(vs, c.fn());
+                SqlWriter.Piece entries = w -> w.append("ARRAY(SELECT jsonb_build_object('key', ")
+                        .piece(asJsonb(v -> v.append("__mk"), kt)).append(", 'value', ")
+                        .piece(asJsonb(v -> v.append("(").expr(vs, 0).append(")[__mo]"), vt)).append(") FROM unnest(")
+                        .expr(ks, 0).append(") WITH ORDINALITY AS __mu(__mk, __mo) ORDER BY __mo)");
+                yield writer.append("(CASE WHEN ").expr(ks, 4).append(" IS NULL OR ").expr(vs, 4)
+                        .append(" IS NULL THEN NULL WHEN cardinality(").expr(ks, 0).append(") <> cardinality(")
+                        .expr(vs, 0).append(") THEN ").piece(mapRaise("The map key list does not align with the map"
+                                + " value list.")).append(" ELSE ").piece(keysChecked(entries)).append(" END)");
+            }
+            // the entries of every map, each key at its first place (map, then position) with the last map's value
+            case MAP_CONCAT -> {
+                writer.append("ARRAY(SELECT jsonb_build_object('key', __mg.k, 'value', (array_agg(__mg.v ORDER BY"
+                        + " __mg.s DESC))[1]) FROM (");
+                for (int i = 0; i < a.size(); i++) {
+                    writer.append(i > 0 ? " UNION ALL " : "").append("SELECT " + i + " AS s, __me -> 'key' AS k,"
+                            + " __me -> 'value' AS v, __mo AS o FROM unnest(").expr(a.get(i), 0)
+                            .append(") WITH ORDINALITY AS __mu" + i + "(__me, __mo)");
+                }
+                yield writer.append(") AS __mg GROUP BY __mg.k ORDER BY min(__mg.s), (array_agg(__mg.o ORDER BY"
+                        + " __mg.s))[1])");
+            }
+            case MAP_KEYS, MAP_VALUES, MAP_EXTRACT -> {
+                SqlExpr m = a.get(0);
+                if (!(typeOf(m) instanceof SqlType.Map mt)) {
+                    throw wall(c.fn(), "a map of unknown key and value types");
+                }
+                boolean keys = c.fn() == SqlFn.MAP_KEYS;
+                writer.append("(CASE WHEN ").expr(m, 4).append(" IS NULL THEN NULL ELSE ARRAY(SELECT ")
+                        .piece(held(w -> w.append(keys ? "__me -> 'key'" : "__me -> 'value'"), keys ? mt.key()
+                                : mt.value(), 0)).append(" FROM unnest(").expr(m, 0)
+                        .append(") WITH ORDINALITY AS __mu(__me, __mo)");
+                if (c.fn() == SqlFn.MAP_EXTRACT) {
+                    writer.append(" WHERE __me -> 'key' = ").piece(asJsonb(w -> w.expr(a.get(1), 0), mt.key()));
+                }
+                yield writer.append(" ORDER BY __mo) END)");
+            }
+            default -> throw new IllegalStateException("not a map call: " + c.fn());
+        };
+    }
+
+    /** A value of type {@code t} as jsonb: a struct or a Variant is jsonb already, anything else converted, as its
+     *  type (an untyped literal is refused by to_jsonb: "could not determine polymorphic type", measured). */
+    private SqlWriter.Piece asJsonb(SqlWriter.Piece v, SqlType t) {
+        if (t instanceof SqlType.Struct || t == SqlType.Scalar.JSON) {
+            return v;
+        }
+        String type = t instanceof SqlType.Array arr ? carrier(arr.element()) + "[]" : castTypeName(t);
+        return w -> w.append("to_jsonb(CAST(").piece(v).append(" AS " + type + "))");
+    }
+
+    /** {@code entries} when their keys are each non-NULL and distinct; DuckDB's error otherwise. */
+    private SqlWriter.Piece keysChecked(SqlWriter.Piece entries) {
+        return w -> w.append("(CASE WHEN (SELECT count(*) FROM unnest(").piece(entries)
+                .append(") AS __mk(e) WHERE jsonb_typeof(e -> 'key') = 'null') > 0 THEN ")
+                .piece(mapRaise("Map keys can not be NULL.")).append(" WHEN (SELECT count(DISTINCT e -> 'key') FROM"
+                        + " unnest(").piece(entries).append(") AS __mk(e)) < cardinality(").piece(entries)
+                .append(") THEN ").piece(mapRaise("Map keys must be unique.")).append(" ELSE ").piece(entries)
+                .append(" END)");
+    }
+
+    /** DuckDB's map error, raised as a map (the CASE's type). */
+    private SqlWriter.Piece mapRaise(String message) {
+        SqlWriter.Piece text = raise(List.of(new SqlExpr.StringLit(message)), null);
+        return w -> w.append("CAST(").piece(text).append(" AS JSONB[])");
     }
 
     /** Pure's splitPart: the non-empty tokens, 1-based (the lowering's index), NULL past either end, as an array
@@ -596,13 +702,15 @@ public final class Postgres extends AnsiSqlRenderer {
     }
 
     /** fold(xs, {element, accumulator | body}, init): a correlated recursive walk over the elements, the
-     *  accumulator typed as the fold's result (Postgres types a recursive column by its first term). */
+     *  accumulator typed as the fold's result (Postgres types a recursive column by its first term): a scalar, or a
+     *  list of scalars, a native array (a list of anything else is jsonb, refused by name). */
     @Override
     protected SqlWriter foldCall(SqlWriter writer, SqlExpr.FoldCall f) {
-        if (f.accIsList() || !(f.type() instanceof com.legend.sql.TypeFact.Typed t)
-                || !(t.type() instanceof SqlType.Scalar || t.type() instanceof SqlType.Decimal)) {
-            throw new DialectCapability("a fold into a " + f.type() + " reached Postgres: a list accumulator"
-                    + " is the jsonb carrier (leg P4)");
+        if (!(f.type() instanceof com.legend.sql.TypeFact.Typed t)
+                || !(t.type() instanceof SqlType.Scalar || t.type() instanceof SqlType.Decimal
+                        || t.type() instanceof SqlType.Array arr && heldAsItself(arr.element()))) {
+            throw new DialectCapability("a fold into a " + f.type() + " reached Postgres: a list accumulator of"
+                    + " anything but scalars is the jsonb carrier");
         }
         SqlWriter.Piece xs = listOf(f.source(), "fold");
         String type = castTypeName(t.type());
@@ -614,6 +722,36 @@ public final class Postgres extends AnsiSqlRenderer {
                 .append(")[__f.__i + 1] AS " + elem + ", __f.__acc AS " + acc + ") AS __b WHERE __f.__i <"
                         + " coalesce(cardinality(").piece(xs).append("), 0))")
                 .append(" SELECT __acc FROM __f ORDER BY __i DESC LIMIT 1)");
+    }
+
+    /** DuckDB's list_reduce(xs, (acc, x) -> body): the first element starts the accumulator, the lambda walks the rest
+     *  -- a correlated recursive walk, as a fold's, typed as the reduction (a scalar, or a list of scalars, a native
+     *  array; each element read as the list holds it, a list from its jsonb). The empty list is the lowering's. */
+    private SqlWriter listReduce(SqlWriter writer, SqlExpr.Call c) {
+        SqlExpr xs = c.args().get(0);
+        SqlType element = elementOf(xs, c.fn());
+        SqlType acc = typeOf(c) instanceof SqlType t ? t : element;
+        if (!(acc instanceof SqlType.Scalar || acc instanceof SqlType.Decimal
+                || acc instanceof SqlType.Array arr && heldAsItself(arr.element()))) {
+            throw new DialectCapability("a list reduction into a " + acc + " reached Postgres");
+        }
+        SqlExpr.Lambda l = (SqlExpr.Lambda) c.args().get(1);
+        String type = castTypeName(acc);
+        String a = param(l.params().get(0));
+        String x = param(l.params().get(1));
+        SqlWriter.Piece at1 = elementAt(xs, "1", element);
+        SqlWriter.Piece next = elementAt(xs, "__r.__i + 1", element);
+        return writer.append("(WITH RECURSIVE __r(__i, __acc) AS (SELECT 1, CAST(").piece(at1).append(" AS " + type
+                + ") UNION ALL SELECT __r.__i + 1, CAST(").expr(l.body(), 0).append(" AS " + type + ") FROM __r CROSS"
+                + " JOIN LATERAL (SELECT ").piece(next).append(" AS " + x + ", __r.__acc AS " + a + ") AS __b WHERE"
+                + " __r.__i < coalesce(cardinality(").expr(xs, 0).append("), 0)) SELECT __acc FROM __r ORDER BY __i DESC"
+                + " LIMIT 1)");
+    }
+
+    /** The element of {@code xs} at a 1-based index, as its type reads: a scalar itself, a list from its jsonb. */
+    private SqlWriter.Piece elementAt(SqlExpr xs, String index, SqlType element) {
+        SqlWriter.Piece at = w -> w.append("(").expr(xs, 0).append(")[" + index + "]");
+        return heldAsItself(element) ? at : decode(at, element, 0);
     }
 
     /** A reduction of a list's elements: {@code (SELECT agg FROM unnest(xs) AS __u(__x))}. */
@@ -762,14 +900,24 @@ public final class Postgres extends AnsiSqlRenderer {
         if (c.target() instanceof SqlType.Array arr) {
             return listCast(writer, c, arr);
         }
-        // Map<String, ...> of a Variant: the jsonb object itself (keys and values read by MAP_KEYS / MAP_VALUES)
+        // a Variant as a map: its members as entries, in jsonb's own key order; NULL when it is no object
         if (c.target() instanceof SqlType.Map && isJson(c.value())) {
-            return writer.append("(CASE WHEN jsonb_typeof(").expr(c.value(), 0).append(") = 'object' THEN ")
-                    .expr(c.value(), 0).append(" END)");
+            return writer.append("(CASE WHEN jsonb_typeof(").expr(c.value(), 0).append(") = 'object' THEN ARRAY(SELECT"
+                    + " jsonb_build_object('key', to_jsonb(__mk), 'value', __mv) FROM jsonb_each(").expr(c.value(), 0)
+                    .append(") WITH ORDINALITY AS __mj(__mk, __mv, __mo) ORDER BY __mo) END)");
         }
+        // a map to another map's key and value types: its entries are jsonb, so it is itself (a NULL or the empty map
+        // typed as the carrier)
         if (c.target() instanceof SqlType.Map) {
-            throw new DialectCapability("a cast to " + c.target() + " reached Postgres before"
-                    + " the jsonb collection carrier (leg P4)");
+            if (c.value() instanceof SqlExpr.NullLit) {
+                return writer.append("CAST(NULL AS JSONB[])");
+            }
+            if (!(typeOf(c.value()) instanceof SqlType.Map) && !(c.value() instanceof SqlExpr.Call call
+                    && (call.fn() == SqlFn.MAP_EMPTY || call.fn() == SqlFn.MAP_FROM_LISTS
+                            || call.fn() == SqlFn.MAP_FROM_ENTRIES || call.fn() == SqlFn.MAP_CONCAT))) {
+                throw new DialectCapability("a cast of " + c.value().type() + " to " + c.target() + " reached Postgres");
+            }
+            return writer.expr(c.value(), 0);
         }
         // A VARIANT is jsonb: text parses into it; any other value converts (no cast from a number
         // or a boolean to jsonb exists)
@@ -1093,17 +1241,13 @@ public final class Postgres extends AnsiSqlRenderer {
                         .append(") FROM generate_series(1, regexp_count(").expr(a.get(0), 0).append(", ").piece(pat)
                         .append(")) AS __g(__n) ORDER BY __n)");
             }
-            // a map is a jsonb object (a Variant read as Map<String, ...>): its keys and values, in
-            // jsonb's own key order
-            case MAP_KEYS -> writer.append("ARRAY(SELECT k FROM jsonb_object_keys(").expr(a.get(0), 0)
-                    .append(") AS k)");
-            case MAP_VALUES -> writer.append("ARRAY(SELECT v FROM jsonb_each(").expr(a.get(0), 0)
-                    .append(") AS e(k, v))");
+            case MAP_FROM_LISTS, MAP_FROM_ENTRIES, MAP_EMPTY, MAP_EXTRACT, MAP_CONCAT, MAP_KEYS, MAP_VALUES ->
+                    maps(writer, c);
             // the jsonb carrier for nested lists, structs and mixed lists is the next step
             case STRUCT_INSERT -> throw new IllegalStateException("STRUCT_INSERT is rendered by call");
             case PURE_SPLIT_PART -> splitPartCall(writer, a);
-            case LIST_FLATTEN, MAP_FROM_LISTS, MAP_FROM_ENTRIES, MAP_EMPTY, MAP_EXTRACT,
-                 MAP_CONCAT, LIST_ZIP, LIST_PRODUCT, LIST_REDUCE, TYPEOF ->
+            case LIST_REDUCE -> listReduce(writer, c);
+            case LIST_FLATTEN, LIST_ZIP, LIST_PRODUCT, TYPEOF ->
                     throw wall(c.fn(), "collections over the jsonb carrier are leg P4");
         };
     }
@@ -1118,6 +1262,10 @@ public final class Postgres extends AnsiSqlRenderer {
      * arm never taken); the CASE stays lazy per row. Then text, then the slot's own
      * type where a CASE branch IS the raise, so the branches unify. Probed on 17:
      * constant-false and row guards do not fire, a taken guard raises the message.
+     * But a STABLE expression IS evaluated at plan time where the planner estimates (an
+     * argument of unnest, whose row estimate pre-evaluates it: an untaken raise under
+     * unnest(CASE ...) fired, measured on 16.15, 2026-10-12), so the message carries an
+     * empty VOLATILE term ({@code left(random()::text, 0)}), which no estimate evaluates.
      */
     private SqlWriter.Piece raise(List<SqlExpr> a, @com.legend.base.Nullable SqlType slot) {
         SqlWriter.Piece text = w -> {
@@ -1125,7 +1273,8 @@ public final class Postgres extends AnsiSqlRenderer {
             if (a.size() > 1) {
                 w.expr(a.get(1), 0).append(" || chr(30) || ");
             }
-            w.append("(").expr(a.get(0), 0).append(") || chr(31) AS TIMESTAMPTZ) AS VARCHAR)");
+            w.append("(").expr(a.get(0), 0).append(") || chr(31) || left(CAST(random() AS VARCHAR), 0) AS TIMESTAMPTZ)"
+                    + " AS VARCHAR)");
         };
         // typed as its slot (never evaluated: the TIMESTAMPTZ cast raises first) -- a list of scalars too
         boolean typed = slot instanceof SqlType.Scalar || slot instanceof SqlType.Decimal
@@ -1508,8 +1657,21 @@ public final class Postgres extends AnsiSqlRenderer {
                         .expr(r.args().get(1), 0).append(") WITHIN GROUP (ORDER BY ").expr(r.args().get(0), 0)
                         .append(desc ? " DESC" : "").append(")");
             }
-            case LIST -> throw new DialectCapability("a LIST aggregate reached Postgres before"
-                    + " the jsonb collection carrier (leg P4)");
+            // DuckDB's list(x): the values in order, NULLs kept, NULL over no row (array_agg's own), each value
+            // held as a list holds it (a list as jsonb, a struct jsonb already)
+            case LIST -> {
+                if (r.args().size() != 1 || r.distinct() && !r.orderBy().isEmpty()) {
+                    throw new DialectCapability("a LIST aggregate of this shape reached Postgres");
+                }
+                SqlExpr x = r.args().get(0);
+                writer.append("array_agg(").append(r.distinct() ? "DISTINCT " : "")
+                        .piece(typeOf(x) instanceof SqlType.Array ? w -> w.append("to_jsonb(").expr(x, 0).append(")")
+                                : w -> w.expr(x, 0));
+                if (!r.orderBy().isEmpty()) {
+                    writer.append(" ORDER BY ").join(r.orderBy(), ", ", this::aggregateOrderKey);
+                }
+                yield writer.append(")");
+            }
             // no arg_max/arg_min: the value at the first row in the key's order, rows of a NULL key
             // ignored, as DuckDB's arg_max/arg_min (a flat, internal array: never a carrier)
             case ARG_MAX, ARG_MIN -> {

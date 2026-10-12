@@ -60,25 +60,14 @@ public class Test_LegendLite_Postgres_EssentialFunctions_PCT extends PCTReportCo
             one("meta::pure::functions::math::tests::trigonometry::testArcSineError_Function_1__Boolean_1_", "Execution error message mismatch.\nThe actual message was \"Infinite or NaN"),
             one("meta::pure::functions::string::tests::toString::testPairCollectionToString_Function_1__Boolean_1_", "ERROR: could not determine polymorphic type because input has type unknown"),
             // collections over the jsonb carrier: leg P4
-            one("meta::pure::functions::collection::tests::fold::testFoldCollectionAccumulator_Function_1__Boolean_1_", "a fold into a Typed[type=Array[element=BIGINT], nullable=false] reached Postgres: a list accumulator is the jsonb carrier (leg P4)"),
-            one("meta::pure::functions::collection::tests::get::testGet_Function_1__Boolean_1_", "MAP_EXTRACT reached Postgres: collections over the jsonb carrier are leg P4"),
-            one("meta::pure::functions::collection::tests::keys::testKeys_Function_1__Boolean_1_", "a cast to Map[key=VARCHAR, value=BIGINT] reached Postgres before the jsonb collection carrier (leg P4)"),
-            one("meta::pure::functions::collection::tests::put::testPut_addsEntry_Function_1__Boolean_1_", "MAP_CONCAT reached Postgres: collections over the jsonb carrier are leg P4"),
-            one("meta::pure::functions::collection::tests::put::testPut_emptyMap_Function_1__Boolean_1_", "MAP_CONCAT reached Postgres: collections over the jsonb carrier are leg P4"),
-            one("meta::pure::functions::collection::tests::put::testPut_overridesEntry_Function_1__Boolean_1_", "MAP_CONCAT reached Postgres: collections over the jsonb carrier are leg P4"),
-            one("meta::pure::functions::collection::tests::putAll::testPutAll_emptyInputMap_Function_1__Boolean_1_", "MAP_CONCAT reached Postgres: collections over the jsonb carrier are leg P4"),
-            one("meta::pure::functions::collection::tests::putAll::testPutAll_emptyPutEntries_Function_1__Boolean_1_", "MAP_CONCAT reached Postgres: collections over the jsonb carrier are leg P4"),
-            one("meta::pure::functions::collection::tests::putAll::testPutAll_overridesExistingAndAddNew_Function_1__Boolean_1_", "MAP_CONCAT reached Postgres: collections over the jsonb carrier are leg P4"),
             one("meta::pure::functions::collection::tests::removeDuplicates::testRemoveDuplicatesPrimitiveNonStandardFunction_Function_1__Boolean_1_", "UNNEST over Unknown[] reached Postgres: a list of unknown element type"),
             one("meta::pure::functions::collection::tests::removeDuplicates::testRemoveDuplicatesPrimitiveStandardFunctionExplicit_Function_1__Boolean_1_", "UNNEST over Unknown[] reached Postgres: a list of unknown element type"),
             one("meta::pure::functions::collection::tests::sort::testMixedSortNoComparator_Function_1__Boolean_1_", "UNNEST over Typed[type=VARCHAR, nullable=true] reached Postgres: a list of unknown element type"),
-            one("meta::pure::functions::collection::tests::values::testValues_Function_1__Boolean_1_", "a cast to Map[key=VARCHAR, value=BIGINT] reached Postgres before the jsonb collection carrier (leg P4)"),
             // refused by name: a construct the Postgres dialect does not spell yet
             one("meta::pure::functions::collection::tests::concatenate::testConcatenateTypeInference_Function_1__Boolean_1_", "no typed conversion for org.postgresql.util.PGobject (type=ClassType[fqn=meta::pure::functions::collection::tests::model::CO_GeographicEntity])"),
             one("meta::pure::functions::collection::tests::fold::testFoldFiltering_Function_1__Boolean_1_", "'otherNames' is not a known class, mapping, runtime, connection, or database — user elements in a query need a fully qualified name"),
             one("meta::pure::functions::collection::tests::fold::testFoldToMany_Function_1__Boolean_1_", "'otherNames' is not a known class, mapping, runtime, connection, or database — user elements in a query need a fully qualified name"),
             one("meta::pure::functions::collection::tests::fold::testFold_Function_1__Boolean_1_", "'lastName' is not a known class, mapping, runtime, connection, or database — user elements in a query need a fully qualified name"),
-            one("meta::pure::functions::collection::tests::removeDuplicates::testRemoveDuplicatesEmptyListExplicit_Function_1__Boolean_1_", "\"LIST_REDUCE reached Postgres: collections over the jsonb carrier are leg P4\""),
             one("meta::pure::functions::lang::tests::match::testMatchWithMixedReturnType_Function_1__Boolean_1_", "scalar lowering not yet implemented for TypedDeactivate"),
             one("meta::pure::functions::string::tests::toString::testComplexClassToString_Function_1__Boolean_1_", "a field '__id' of unknown type reached Postgres")
     );
