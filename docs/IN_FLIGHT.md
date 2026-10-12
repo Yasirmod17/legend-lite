@@ -771,6 +771,15 @@ study's §9.2). It lands as a pull request, merged after its full CI run.
   `lowering/LowerRelationTest.java` (two shape pins follow the new elements SQL); `sql-parity/` the ledger, the answers,
   `lite/json.yaml`, `lite/lateral.yaml`.
 - **Docs:** `docs/SEMANTICS_REGISTER.md` (S49: a Variant is jsonb), the study's §9.2, `docs/GATES.md`.
+- **Widened 2026-10-12** (the user: the basics first -- filters, aggregations, joins, select lists, functions -- before
+  the PR; it was closed to fold them in): a randomized check of the basics against Postgres (generated queries, both
+  lanes), and what it and the independent review found. One more cross-area edit in `sql/dialect/`:
+  `RootNumericTypes.java` -- under DISTINCT, an ORDER BY key that was a projection it casts to its numeric type is
+  ordered by the cast expression (Postgres: "for SELECT DISTINCT, ORDER BY expressions must appear in select list";
+  Postgres, Trino, ClickHouse, Databricks and Snowflake run the pass; the cast changes no value). The SQL front end
+  gains `FILTER (WHERE ...)`, `DISTINCT` in every aggregate, integer division (exact for every bigint),
+  `string_agg(... ORDER BY ...)`, and Postgres's typing of CASE, COALESCE, GREATEST, LEAST, ceil, floor, sign, round,
+  extract and date_part. Judged as above.
 
 ## An eighth line, 2026-10-11: Databricks, Snowflake and BigQuery (the user's ask, rule 5)
 
