@@ -1,0 +1,108 @@
+# legend-lite's own Postgres-judged cases over upstream's parity schema: the function table (math, text, dates,
+# statistical aggregates) and casts, each at the edges where Postgres's answer is easy to miss: NULLs, rounding at
+# .5, negative and empty values, truncation and padding.
+# Each answer is snapped from Postgres 16 with upstream's (postgres-answers.jsonl, key lite/functions/<id>).
+tests:
+  # math
+  - id: sqrt_exp_ln_log
+    sql: "SELECT id, sqrt(int_val) AS r, exp(small_val) AS e, ln(float_val) AS l, log(big_val) AS g FROM numbers WHERE int_val > 0 AND float_val > 0 AND big_val > 0 ORDER BY id"
+  - id: trigonometry
+    sql: "SELECT id, sin(float_val) AS s, cos(float_val) AS c, atan(float_val) AS a, atan2(float_val, 2) AS a2, degrees(float_val) AS d, radians(float_val) AS r FROM numbers ORDER BY id"
+  - id: pi_and_cbrt
+    sql: "SELECT id, cbrt(int_val) AS c, pi() * small_val AS p FROM numbers ORDER BY id"
+  - id: sign_of_each_kind
+    sql: "SELECT id, sign(int_val) AS i, sign(numeric_val) AS n, sign(float_val) AS f FROM numbers ORDER BY id"
+  - id: mod_follows_the_dividend_sign
+    sql: "SELECT id, mod(int_val, 7) AS m, mod(-int_val, 7) AS n FROM numbers ORDER BY id"
+  - id: round_numeric_half_away_from_zero
+    sql: "SELECT id, round(numeric_val) AS r0, round(numeric_val, 0) AS z FROM numbers ORDER BY id"
+  - id: round_ties_away_from_zero
+    sql: "SELECT id, round(salary) AS r, round(-salary) AS n FROM persons ORDER BY id"
+  - id: round_to_places_is_refused
+    sql: "SELECT id, round(salary, 1) AS r FROM persons ORDER BY id"
+  - id: round_of_integers
+    sql: "SELECT id, round(int_val) AS r, round(int_val, 1) AS r1 FROM numbers ORDER BY id"
+  - id: round_of_a_double_is_refused
+    sql: "SELECT id, round(float_val) AS r FROM numbers ORDER BY id"
+  - id: greatest_and_least_ignore_nulls
+    sql: "SELECT id, greatest(age, dept_id * 10) AS g, least(age, dept_id * 10) AS l FROM persons ORDER BY id"
+  - id: greatest_of_three_mixed_numbers
+    sql: "SELECT id, greatest(int_val, numeric_val, small_val) AS g FROM numbers ORDER BY id"
+  - id: greatest_of_text
+    sql: "SELECT id, greatest(name, 'D') AS g FROM persons ORDER BY id"
+  - id: nullif
+    sql: "SELECT id, nullif(dept_id, 1) AS d, nullif(name, 'Bob') AS n FROM persons ORDER BY id"
+  - id: num_nulls
+    sql: "SELECT id, num_nulls(age, salary, dept_id) AS n, num_nonnulls(age, salary, dept_id) AS nn FROM persons ORDER BY id"
+  # text
+  - id: concat_skips_nulls
+    sql: "SELECT id, concat(val, '-', nullable_val) AS c FROM strings ORDER BY id"
+  - id: concat_of_numbers_is_refused
+    sql: "SELECT id, concat(name, age) AS c FROM persons ORDER BY id"
+  - id: left_right
+    sql: "SELECT id, left(val, 3) AS l, right(val, 3) AS r FROM strings ORDER BY id"
+  - id: left_negative_is_refused
+    sql: "SELECT id, left(val, -2) AS l FROM strings ORDER BY id"
+  - id: lpad_rpad_pad_and_truncate
+    sql: "SELECT id, lpad(val, 8, '*') AS l, rpad(val, 8) AS r, lpad(val, 3, 'xy') AS t FROM strings ORDER BY id"
+  - id: replace_reverse_repeat
+    sql: "SELECT id, replace(val, 'l', 'L') AS rp, reverse(val) AS rv, repeat(empty_val, 2) AS rt FROM strings ORDER BY id"
+  - id: split_part
+    sql: "SELECT id, split_part(val, ' ', 1) AS a, split_part(val, ' ', 2) AS b FROM strings ORDER BY id"
+  - id: strpos_and_position
+    sql: "SELECT id, strpos(val, 'e') AS s, position('o' IN val) AS p FROM strings ORDER BY id"
+  - id: starts_with
+    sql: "SELECT id FROM strings WHERE starts_with(val, 'a') OR starts_with(nullable_val, 't') ORDER BY id"
+  - id: ltrim_rtrim
+    sql: "SELECT id, '[' || ltrim(val) || ']' AS l, '[' || rtrim(val) || ']' AS r FROM strings ORDER BY id"
+  - id: ascii_chr
+    sql: "SELECT id, ascii(name) AS a, chr(ascii(name) + 1) AS c FROM persons ORDER BY id"
+  - id: md5
+    sql: "SELECT id, md5(val) AS h FROM strings ORDER BY id"
+  # dates
+  - id: extract_date_fields
+    sql: "SELECT id, extract(year FROM hire_date) AS y, extract(month FROM hire_date) AS m, extract(day FROM hire_date) AS d, extract(quarter FROM hire_date) AS q, extract(doy FROM hire_date) AS doy, extract(isodow FROM hire_date) AS dow FROM persons ORDER BY id"
+  - id: extract_time_fields
+    sql: "SELECT id, extract(hour FROM order_date) AS h, extract(minute FROM order_date) AS m FROM orders ORDER BY id"
+  - id: date_part
+    sql: "SELECT id, date_part('year', created_at) AS y, date_part('month', created_at) AS m FROM departments ORDER BY id"
+  - id: extract_second_is_refused
+    sql: "SELECT id, extract(second FROM order_date) AS s FROM orders ORDER BY id"
+  # statistical aggregates
+  - id: stddev_and_variance
+    sql: "SELECT dept_id, stddev(salary) AS sd, stddev_pop(salary) AS sp, variance(age) AS v, var_pop(age) AS vp, var_samp(age) AS vs FROM persons GROUP BY dept_id ORDER BY dept_id"
+  - id: stddev_of_one_row_is_null
+    sql: "SELECT id, stddev_samp(age) AS sd FROM persons GROUP BY id ORDER BY id"
+  - id: stddev_over_a_window
+    sql: "SELECT id, stddev_samp(age) OVER (PARTITION BY dept_id) AS sd FROM persons ORDER BY id"
+  # casts
+  - id: cast_literals
+    sql: "SELECT '2024-02-29'::date AS d, CAST('2024-01-01 10:30:00' AS timestamp) AS t, '42'::integer AS i, '3.25'::numeric AS n, 'yes'::boolean AS b, 'x'::text AS s FROM departments WHERE id = 1"
+  - id: cast_numbers_to_text
+    sql: "SELECT id, int_val::text AS i, numeric_val::text AS n FROM numbers ORDER BY id"
+  - id: cast_dates_and_booleans_to_text
+    sql: "SELECT id, hire_date::text AS d, active::text AS a FROM persons ORDER BY id"
+  - id: cast_numeric_to_bigint_rounds_half_away
+    sql: "SELECT id, salary::bigint AS b, CAST(-salary AS int8) AS n FROM persons ORDER BY id"
+  - id: cast_numeric_to_integer_is_refused
+    sql: "SELECT id, salary::integer AS i FROM persons ORDER BY id"
+  - id: cast_text_out_of_integer_range
+    sql: "SELECT '3000000000'::integer AS i FROM departments WHERE id = 1"
+  - id: cast_integer_to_numeric_and_double
+    sql: "SELECT id, int_val::numeric AS n, int_val::double precision AS f FROM numbers ORDER BY id"
+  - id: cast_numeric_to_double
+    sql: "SELECT id, numeric_val::float8 AS f FROM numbers ORDER BY id"
+  - id: cast_text_to_numbers
+    sql: "SELECT id, nullable_val::bigint AS i, nullable_val::float8 AS f FROM strings WHERE id = 5"
+  - id: cast_text_to_numeric_is_refused
+    sql: "SELECT id, nullable_val::numeric AS n FROM strings WHERE id = 5"
+  - id: cast_timestamp_to_date
+    sql: "SELECT id, order_date::date AS d FROM orders ORDER BY id"
+  - id: cast_integer_to_boolean
+    sql: "SELECT id, int_val::boolean AS b FROM numbers ORDER BY id"
+  - id: cast_double_to_integer_is_refused
+    sql: "SELECT id, float_val::integer AS i FROM numbers ORDER BY id"
+  - id: cast_with_a_modifier_is_refused
+    sql: "SELECT id, numeric_val::numeric(10,2) AS n FROM numbers ORDER BY id"
+  - id: cast_of_bad_text_is_an_error
+    sql: "SELECT id, val::bigint AS i FROM strings ORDER BY id"
