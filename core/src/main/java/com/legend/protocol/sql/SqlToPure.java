@@ -2594,6 +2594,12 @@ public final class SqlToPure {
     /** Postgres's strict functions and operators: NULL when any argument is NULL, else {@code build} of the values. */
     private static Tx strict(Kind kind, List<Tx> args, java.util.function.Function<List<ValueSpecification>,
             ValueSpecification> build) {
+        for (Tx a : args) {
+            if (isNullConstant(a)) {
+                // a NULL constant makes a strict operator or function NULL, of the type Postgres resolves it by
+                return nullOf(kind);
+            }
+        }
         List<ValueSpecification> values = new ArrayList<>();
         ValueSpecification anyNull = null;
         for (Tx a : args) {
@@ -2615,6 +2621,11 @@ public final class SqlToPure {
     /** A strict predicate (a comparison, IN, BETWEEN, LIKE): NULL when an operand is NULL, else {@code test}. */
     private static Tx strictTest(List<Tx> operands, java.util.function.Function<List<ValueSpecification>,
             ValueSpecification> test) {
+        for (Tx a : operands) {
+            if (isNullConstant(a)) {
+                return nullOf(Kind.BOOLEAN);
+            }
+        }
         List<ValueSpecification> values = new ArrayList<>();
         ValueSpecification known = null;
         for (Tx a : operands) {
@@ -2631,6 +2642,51 @@ public final class SqlToPure {
             return Tx.condition(t, call("not", t), false);
         }
         return Tx.condition(call("and", known, t), call("and", known, call("not", t)), true);
+    }
+
+    /** A NULL of a kind, as Postgres types a NULL constant by its context: Pure's empty collection cast to the kind's
+     *  type (SQL's typed NULL); for a boolean, a condition that is neither TRUE nor FALSE. A NULL constant in no
+     *  context of a type is text (Postgres's unknown resolves to text). */
+    private static Tx nullOf(Kind kind) {
+        if (kind == Kind.BOOLEAN) {
+            return Tx.condition(new CBoolean(false), new CBoolean(false), true);
+        }
+        String type = switch (kind) {
+            case INTEGER -> "Integer";
+            case FLOAT -> "Float";
+            case DECIMAL, NUMBER -> "Decimal";
+            case STRING, NULL -> "String";
+            case DATE -> "StrictDate";
+            case DATETIME -> "DateTime";
+            case JSON -> VARIANT;
+            case BOOLEAN, OTHER -> null;
+        };
+        if (type == null) {
+            return Tx.value(empty(), kind, true);
+        }
+        return Tx.value(call("cast", empty(), typeArg(type)), kind == Kind.NULL ? Kind.STRING : kind, true);
+    }
+
+    /** Whether a value is a NULL constant: untyped ({@code NULL}) or typed ({@link #nullOf}). */
+    private static boolean isNullConstant(Tx t) {
+        return t.kind() == Kind.NULL || t.whenFalse() == null && t.vs() instanceof AppliedFunction af
+                && af.function().equals("cast") && !af.parameters().isEmpty()
+                && af.parameters().get(0) instanceof PureCollection c && c.values().isEmpty();
+    }
+
+    /** An operator's operands, a NULL constant typed as the other operand (Postgres resolves an unknown by the other
+     *  side); two NULL constants are Postgres's error. */
+    private static List<Tx> typedOperands(Tx l, Tx r, String operator, SqlAst.Pos pos) {
+        if (l.kind() == Kind.NULL && r.kind() == Kind.NULL) {
+            throw SqlTranslationException.invalid("operator is not unique: unknown " + operator + " unknown", pos);
+        }
+        if (l.kind() == Kind.NULL) {
+            return List.of(nullOf(r.kind()), r);
+        }
+        if (r.kind() == Kind.NULL) {
+            return List.of(l, nullOf(l.kind()));
+        }
+        return List.of(l, r);
     }
 
     private static Tx not(Tx t) {
@@ -2729,8 +2785,10 @@ public final class SqlToPure {
                 return compare(b.op(), sides.get(0), sides.get(1));
             }
             case PLUS, MINUS, TIMES -> {
-                Tx l = tx(b.left(), scope, row);
-                Tx r = tx(b.right(), scope, row);
+                List<Tx> lr = typedOperands(tx(b.left(), scope, row), tx(b.right(), scope, row),
+                        b.op() == SqlAst.BinaryOp.PLUS ? "+" : b.op() == SqlAst.BinaryOp.MINUS ? "-" : "*", b.pos());
+                Tx l = lr.get(0);
+                Tx r = lr.get(1);
                 numericOperand(l, b.left());
                 numericOperand(r, b.right());
                 String fn = b.op() == SqlAst.BinaryOp.PLUS ? "plus" : b.op() == SqlAst.BinaryOp.MINUS ? "minus"
@@ -2739,8 +2797,9 @@ public final class SqlToPure {
                         v -> AppliedFunction.infixRun(fn, List.of(v.get(0), v.get(1))));
             }
             case DIVIDE -> {
-                Tx l = tx(b.left(), scope, row);
-                Tx r = tx(b.right(), scope, row);
+                List<Tx> lr = typedOperands(tx(b.left(), scope, row), tx(b.right(), scope, row), "/", b.pos());
+                Tx l = lr.get(0);
+                Tx r = lr.get(1);
                 numericOperand(l, b.left());
                 numericOperand(r, b.right());
                 if (l.kind() == Kind.INTEGER && r.kind() == Kind.INTEGER) {
@@ -2749,8 +2808,9 @@ public final class SqlToPure {
                 return strict(Kind.FLOAT, List.of(l, r), v -> call("divide", v.get(0), v.get(1)));
             }
             case POWER -> {
-                Tx l = tx(b.left(), scope, row);
-                Tx r = tx(b.right(), scope, row);
+                List<Tx> lr = typedOperands(tx(b.left(), scope, row), tx(b.right(), scope, row), "^", b.pos());
+                Tx l = lr.get(0);
+                Tx r = lr.get(1);
                 numericOperand(l, b.left());
                 numericOperand(r, b.right());
                 // Postgres computes ^ in double precision but for a numeric operand, where it is exact; pow is a Float
@@ -2761,25 +2821,48 @@ public final class SqlToPure {
                 return strict(Kind.FLOAT, List.of(l, r), v -> call("pow", v.get(0), v.get(1)));
             }
             case MODULO -> {
-                Tx l = tx(b.left(), scope, row);
-                Tx r = tx(b.right(), scope, row);
+                List<Tx> lr = typedOperands(tx(b.left(), scope, row), tx(b.right(), scope, row), "%", b.pos());
+                Tx l = lr.get(0);
+                Tx r = lr.get(1);
                 if (l.kind() != Kind.INTEGER || r.kind() != Kind.INTEGER) {
                     throw SqlTranslationException.unsupported("% is supported for integers only, so far", b.pos());
                 }
                 return strict(Kind.INTEGER, List.of(l, r), v -> call("rem", v.get(0), v.get(1)));
             }
             case CONCAT -> {
-                // a || b || c is one strict concatenation of all its operands: NULL when any is
+                // a || b || c is one strict concatenation of all its operands: NULL when any is. Postgres's || reads a
+                // value of another type as its text where the other side is text (text || anynonarray)
+                List<SqlAst.Expr> exprs = concatenated(b);
                 List<Tx> operands = new ArrayList<>();
-                for (SqlAst.Expr operand : concatenated(b)) {
+                for (SqlAst.Expr operand : exprs) {
                     Tx t = tx(operand, scope, row);
-                    if (t.kind() != Kind.STRING) {
-                        throw SqlTranslationException.unsupported("|| is supported for text values only, so far"
-                                + (t.kind() == Kind.JSON ? " (jsonb's || merges values)" : ""), operand.pos());
+                    if (t.kind() == Kind.JSON) {
+                        throw SqlTranslationException.unsupported("|| of jsonb values (which merges them) is not"
+                                + " supported yet", operand.pos());
                     }
                     operands.add(t);
                 }
-                return strict(Kind.STRING, operands, v -> AppliedFunction.infixRun("plus", v));
+                Kind first = operands.get(0).kind();
+                Kind second = operands.get(1).kind();
+                if (first != Kind.STRING && first != Kind.NULL && second != Kind.STRING && second != Kind.NULL) {
+                    throw SqlTranslationException.invalid("operator does not exist: " + postgresName(first) + " || "
+                            + postgresName(second), b.pos());
+                }
+                List<Kind> kinds = new ArrayList<>();
+                for (int i = 0; i < operands.size(); i++) {
+                    Tx t = operands.get(i);
+                    if (t.kind() != Kind.STRING && t.kind() != Kind.NULL) {
+                        asText(t, exprs.get(i).pos(), "||");
+                    }
+                    kinds.add(t.kind());
+                }
+                return strict(Kind.STRING, operands, v -> {
+                    List<ValueSpecification> texts = new ArrayList<>();
+                    for (int i = 0; i < v.size(); i++) {
+                        texts.add(kinds.get(i) == Kind.STRING ? v.get(i) : call("toString", v.get(i)));
+                    }
+                    return AppliedFunction.infixRun("plus", texts);
+                });
             }
         }
         throw new IllegalStateException("unreachable: " + b.op());
@@ -2813,9 +2896,9 @@ public final class SqlToPure {
     }
 
     private static void numericOperand(Tx t, SqlAst.Expr e) {
-        if (t.kind() == Kind.NULL) {
-            throw SqlTranslationException.unsupported("arithmetic with a NULL constant is always NULL in Postgres; it"
-                    + " is not supported here", e.pos());
+        if (t.kind() == Kind.NULL || isNullConstant(t)) {
+            // a NULL constant: strict makes the result NULL of the operator's type
+            return;
         }
         // Postgres has these operators (an untyped constant takes the other operand's type; date - date, jsonb - key)
         if (e instanceof SqlAst.StringLit) {
@@ -2842,8 +2925,10 @@ public final class SqlToPure {
      *  an untyped constant by its context), in ISO 8601 spelling. */
     private List<Tx> comparable(SqlAst.Expr left, SqlAst.Expr right, Scope scope, String row, SqlAst.Pos pos) {
         if (left instanceof SqlAst.NullLit || right instanceof SqlAst.NullLit) {
-            throw SqlTranslationException.unsupported("a comparison with a NULL constant is NULL in Postgres, never"
-                    + " true; write IS NULL or IS NOT NULL", pos);
+            // NULL compared with anything is NULL in Postgres, never TRUE or FALSE: strictTest reads it so
+            Tx l = left instanceof SqlAst.NullLit ? Tx.value(empty(), Kind.NULL, true) : tx(left, scope, row);
+            Tx r = right instanceof SqlAst.NullLit ? Tx.value(empty(), Kind.NULL, true) : tx(right, scope, row);
+            return List.of(l, r);
         }
         return comparableValues(left, right, scope, row, pos);
     }
@@ -3118,14 +3203,23 @@ public final class SqlToPure {
     private Tx inList(SqlAst.InList in, Scope scope, String row) {
         List<Tx> operands = new ArrayList<>();
         operands.add(tx(in.operand(), scope, row));
+        boolean nullInList = false;
         for (SqlAst.Expr v : in.values()) {
             if (v instanceof SqlAst.NullLit) {
-                throw SqlTranslationException.unsupported("NULL in an IN list is not supported yet (Postgres makes"
-                        + " the result NULL rather than false)", v.pos());
+                nullInList = true;
+                continue;
             }
             operands.add(comparable(in.operand(), v, scope, row, v.pos()).get(1));
         }
+        if (operands.size() == 1) {
+            // x IN (NULL): never TRUE, never FALSE
+            return nullOf(Kind.BOOLEAN);
+        }
         Tx test = strictTest(operands, v -> call("in", v.get(0), new PureCollection(v.subList(1, v.size()))));
+        if (nullInList) {
+            // a NULL in the list: TRUE where the value is found, else NULL (it might equal the NULL), never FALSE
+            test = Tx.condition(test.vs(), new CBoolean(false), true);
+        }
         return in.negated() ? not(test) : test;
     }
 
@@ -3445,8 +3539,8 @@ public final class SqlToPure {
     private static Tx text1(SqlAst.FunctionCall f, List<Tx> args, String pure, Kind result) {
         arity(f, args, 1);
         if (args.get(0).kind() == Kind.NULL) {
-            throw SqlTranslationException.unsupported("a NULL constant argument makes " + functionName(f.name()
-                    .get(0)) + "(...) NULL in Postgres; it is not supported here", f.pos());
+            // Postgres reads the NULL as text: the function's NULL
+            return nullOf(result);
         }
         if (args.get(0).kind() != Kind.STRING) {
             throw SqlTranslationException.invalid("function " + functionName(f.name().get(0)) + " needs a text"
@@ -3458,6 +3552,9 @@ public final class SqlToPure {
     private static Tx numeric1(SqlAst.FunctionCall f, List<Tx> args, String pure) {
         arity(f, args, 1);
         numericOperand(args.get(0), f.args().get(0));
+        if (args.get(0).kind() == Kind.NULL) {
+            return nullOf(Kind.FLOAT);
+        }
         if (pure.equals("abs")) {
             return strict(args.get(0).kind(), args, v -> call(pure, v.get(0)));
         }
@@ -3471,6 +3568,9 @@ public final class SqlToPure {
      *  Pure's Integer, an exact number either way (a toDecimal of it is a 38-digit decimal of scale 0, which DuckDB's
      *  CASE then imposes on a branch's decimals). */
     private static Tx wholeNumber(Tx x, java.util.function.UnaryOperator<ValueSpecification> pure) {
+        if (x.kind() == Kind.NULL) {
+            return nullOf(Kind.FLOAT);
+        }
         if (x.kind() == Kind.INTEGER || x.kind() == Kind.FLOAT) {
             return strict(Kind.FLOAT, List.of(x), v -> call("toFloat", x.kind() == Kind.INTEGER ? v.get(0)
                     : pure.apply(v.get(0))));
@@ -3492,6 +3592,9 @@ public final class SqlToPure {
         Common common = common("COALESCE", f.args(), arguments, f.pos());
         List<Tx> args = common.values();
         Kind kind = common.kind();
+        if (kind == Kind.NULL) {
+            return nullOf(Kind.STRING);
+        }
         // the arguments after the first that is never NULL are never read (Postgres evaluates none of them): it is
         // the last, so the result is one value where Pure types it (by its last argument)
         for (int i = 0; i < args.size() - 1; i++) {
@@ -3557,8 +3660,8 @@ public final class SqlToPure {
         for (int i = 0; i < expected.length; i++) {
             Kind k = args.get(i).kind();
             if (k == Kind.NULL) {
-                throw SqlTranslationException.unsupported("a NULL constant argument makes " + functionName(f.name()
-                        .get(0)) + "(...) NULL in Postgres; it is not supported here", f.pos());
+                // Postgres reads the NULL as the argument's type: strict makes the function NULL
+                continue;
             }
             if (k != expected[i]) {
                 throw SqlTranslationException.invalid("function " + functionName(f.name().get(0)) + " needs "
@@ -3642,17 +3745,36 @@ public final class SqlToPure {
             if (a.kind() == Kind.NULL) {
                 continue;
             }
-            if (a.kind() != Kind.STRING) {
-                throw SqlTranslationException.unsupported("concat(...) of values other than text is not supported yet",
-                        f.args().get(i).pos());
-            }
-            ValueSpecification v = valueOf(a);
+            ValueSpecification v = asText(a, f.args().get(i).pos(), "concat(...)");
             parts.add(a.nullable() ? call("if", call("isEmpty", v), thunk(new CString("")), thunk(call("toOne", v)))
                     : v);
         }
         ValueSpecification all = parts.isEmpty() ? new CString("") : parts.size() == 1 ? parts.get(0)
                 : AppliedFunction.infixRun("plus", parts);
         return Tx.value(all, Kind.STRING, false);
+    }
+
+    /** A value as concat writes it, by Postgres's output function: an integer's digits, t or f, a date's ISO spelling,
+     *  a numeric's digits with its scale -- Pure's toString writes each so on every database (judged), the boolean
+     *  spelled here. A double's text (Postgres's shortest that reads back), a timestamp's and others are not yet. */
+    private static ValueSpecification asText(Tx a, SqlAst.Pos pos, String where) {
+        return switch (a.kind()) {
+            case STRING -> valueOf(a);
+            // concat writes a boolean with its output function, t or f (|| casts it: true, false)
+            case BOOLEAN -> {
+                ValueSpecification v = valueOf(a);
+                ValueSpecification tf = call("if", a.nullable() ? call("toOne", v) : v, thunk(new CString("t")),
+                        thunk(new CString("f")));
+                yield a.nullable() ? call("if", call("isEmpty", v), thunk(empty()), thunk(tf)) : tf;
+            }
+            case INTEGER, DATE, DECIMAL -> {
+                ValueSpecification v = valueOf(a);
+                yield a.nullable() ? call("if", call("isEmpty", v), thunk(empty()), thunk(call("toString",
+                        call("toOne", v)))) : call("toString", v);
+            }
+            default -> throw SqlTranslationException.unsupported(where + " of " + postgresName(a.kind())
+                    + " values is not supported yet", pos);
+        };
     }
 
     /** {@code greatest(...)}, {@code least(...)}: the largest (smallest) of the values, NULLs ignored; NULL only when
@@ -3677,8 +3799,8 @@ public final class SqlToPure {
             best = better(best, a, greatest);
         }
         if (best == null) {
-            throw SqlTranslationException.unsupported("a NULL constant argument makes " + functionName(f.name()
-                    .get(0)) + "(...) NULL in Postgres; it is not supported here", f.pos());
+            // every value NULL: Postgres reads them as text
+            return nullOf(Kind.STRING);
         }
         return best;
     }
@@ -3793,7 +3915,7 @@ public final class SqlToPure {
         }
         Tx x = tx(c.operand(), scope, row);
         if (x.kind() == Kind.NULL) {
-            throw SqlTranslationException.unsupported("a cast of a NULL constant is not supported yet", c.pos());
+            return nullOf(target);
         }
         if (x.kind() == target || target == Kind.DECIMAL && x.kind() == Kind.NUMBER) {
             return x;

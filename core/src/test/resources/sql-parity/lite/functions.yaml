@@ -37,7 +37,7 @@ tests:
   # text
   - id: concat_skips_nulls
     sql: "SELECT id, concat(val, '-', nullable_val) AS c FROM strings ORDER BY id"
-  - id: concat_of_numbers_is_refused
+  - id: concat_of_numbers
     sql: "SELECT id, concat(name, age) AS c FROM persons ORDER BY id"
   - id: left_right
     sql: "SELECT id, left(val, 3) AS l, right(val, 3) AS r FROM strings ORDER BY id"
@@ -159,3 +159,26 @@ tests:
     sql: "SELECT string_agg(name, ',' ORDER BY id) FILTER (WHERE active) AS a, string_agg(CASE WHEN age > 30 THEN name END, ',' ORDER BY id) AS b FROM persons"
   - id: string_agg_of_an_integer_is_an_error
     sql: "SELECT string_agg(age, ',') AS a FROM persons"
+  # NULL constants as Postgres types them: an operand takes the other's type, a function's argument its preferred
+  # type (double precision, text); comparisons with NULL are NULL; an IN list with NULL is TRUE or NULL, never FALSE
+  - id: null_in_arithmetic
+    sql: "SELECT id, int_val + NULL AS a, NULL * numeric_val AS b, float_val - NULL AS c, int_val / NULL AS d FROM numbers ORDER BY id"
+  - id: null_constant_function_arguments
+    sql: "SELECT upper(NULL) AS a, length(NULL) AS b, abs(NULL) AS c, round(NULL) AS d, ceil(NULL) AS e, coalesce(NULL, NULL) AS f, greatest(NULL, NULL) AS g FROM departments WHERE id = 1"
+  - id: null_comparisons_are_null
+    sql: "SELECT id, NULL = NULL AS a, age <> NULL AS b, CASE age WHEN NULL THEN 'n' ELSE 'v' END AS c FROM persons ORDER BY id"
+  - id: null_in_an_in_list
+    sql: "SELECT id, age IN (30, NULL) AS a, age NOT IN (30, NULL) AS b, age IN (NULL) AS c FROM persons ORDER BY id"
+  - id: where_with_a_null_comparison_keeps_nothing
+    sql: "SELECT id FROM persons WHERE age = NULL OR age IN (NULL) OR NOT (age NOT IN (25, NULL)) ORDER BY id"
+  - id: cast_of_null
+    sql: "SELECT id, CAST(NULL AS integer) AS a, CAST(NULL AS numeric) + salary AS b, NULL::text || name AS c FROM persons ORDER BY id"
+  - id: null_plus_null_is_an_error
+    sql: "SELECT NULL + NULL AS a FROM departments WHERE id = 1"
+  # concat and || read a value of another type as its text (Postgres's output function)
+  - id: concat_of_values_other_than_text
+    sql: "SELECT id, concat(name, '-', age, '-', active, '-', hire_date, '-', salary) AS a, name || '/' || age || '/' || active AS b, 'x' || salary AS c FROM persons ORDER BY id"
+  - id: concat_of_two_values_other_than_text_is_an_error
+    sql: "SELECT 1 || 2 AS a FROM departments WHERE id = 1"
+  - id: concat_with_null
+    sql: "SELECT id, name || NULL AS a, NULL || name AS b, concat(NULL, name, NULL) AS c FROM persons ORDER BY id"

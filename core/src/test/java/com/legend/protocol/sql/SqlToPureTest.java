@@ -519,7 +519,7 @@ class SqlToPureTest {
         assertEquals("aggregate functions are not allowed in WHERE",
                 refusal("select ID from tb('s::DB.T') where count(*) > 1").getMessage());
         assertEquals("column \"nope\" does not exist", refusal("select nope from tb('s::DB.T')").getMessage());
-        assertEquals(SqlTranslationException.Kind.UNSUPPORTED,
-                refusal("select ID from tb('s::DB.T') where age = null").kind());
+        // a comparison with NULL is NULL, never TRUE: the filter keeps no row (Postgres's answer)
+        assertEquals("#>{s::DB.T}#->filter(r|false)->select(~[ID])", pure("select ID from tb('s::DB.T') where age = null"));
     }
 }
