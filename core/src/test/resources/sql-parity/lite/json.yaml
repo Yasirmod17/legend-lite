@@ -32,7 +32,7 @@ tests:
     sql: "SELECT id, jsonb_val ->> 'a' AS a FROM json_data WHERE id = 2"
   - id: text_in_where_and_case
     sql: "SELECT id, CASE WHEN jsonb_val ->> 'b' = 'hello' THEN 'greeting' ELSE coalesce(jsonb_val ->> 'name', 'none') END AS what FROM json_data ORDER BY id"
-  - id: text_cast_to_integer
+  - id: text_cast_to_integer_is_refused
     sql: "SELECT id, (jsonb_val ->> 'num')::bigint + 1 AS next FROM json_data WHERE jsonb_val ->> 'num' IS NOT NULL ORDER BY id"
   # #> and #>>: a path
   - id: path_to_a_member

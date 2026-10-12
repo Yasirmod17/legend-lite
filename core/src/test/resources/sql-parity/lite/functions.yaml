@@ -22,7 +22,7 @@ tests:
     sql: "SELECT id, round(salary, 1) AS r FROM persons ORDER BY id"
   - id: round_of_integers
     sql: "SELECT id, round(int_val) AS r, round(int_val, 1) AS r1 FROM numbers ORDER BY id"
-  - id: round_of_a_double_is_refused
+  - id: round_of_a_double_column
     sql: "SELECT id, round(float_val) AS r FROM numbers ORDER BY id"
   - id: greatest_and_least_ignore_nulls
     sql: "SELECT id, greatest(age, dept_id * 10) AS g, least(age, dept_id * 10) AS l FROM persons ORDER BY id"
@@ -84,15 +84,15 @@ tests:
     sql: "SELECT id, hire_date::text AS d, active::text AS a FROM persons ORDER BY id"
   - id: cast_numeric_to_bigint_rounds_half_away
     sql: "SELECT id, salary::bigint AS b, CAST(-salary AS int8) AS n FROM persons ORDER BY id"
-  - id: cast_numeric_to_integer_is_refused
-    sql: "SELECT id, salary::integer AS i FROM persons ORDER BY id"
+  - id: cast_numeric_to_integer_rounds_half_away
+    sql: "SELECT id, salary::integer AS i, CAST(int_val + 0.5 AS bigint) AS h FROM persons JOIN numbers USING (id) ORDER BY id"
   - id: cast_text_out_of_integer_range
     sql: "SELECT '3000000000'::integer AS i FROM departments WHERE id = 1"
   - id: cast_integer_to_numeric_and_double
     sql: "SELECT id, int_val::numeric AS n, int_val::double precision AS f FROM numbers ORDER BY id"
   - id: cast_numeric_to_double
     sql: "SELECT id, numeric_val::float8 AS f FROM numbers ORDER BY id"
-  - id: cast_text_to_numbers
+  - id: cast_text_to_numbers_is_refused
     sql: "SELECT id, nullable_val::bigint AS i, nullable_val::float8 AS f FROM strings WHERE id = 5"
   - id: cast_text_to_numeric_is_refused
     sql: "SELECT id, nullable_val::numeric AS n FROM strings WHERE id = 5"
@@ -100,8 +100,26 @@ tests:
     sql: "SELECT id, order_date::date AS d FROM orders ORDER BY id"
   - id: cast_integer_to_boolean
     sql: "SELECT id, int_val::boolean AS b FROM numbers ORDER BY id"
-  - id: cast_double_to_integer_is_refused
-    sql: "SELECT id, float_val::integer AS i FROM numbers ORDER BY id"
+  - id: cast_double_to_integer_rounds_half_to_even
+    sql: "SELECT id, float_val::integer AS i, CAST(int_val + 0.5::float8 AS bigint) AS h, (float_val * 10)::int4 AS t FROM numbers WHERE id <> 4 ORDER BY id"
+  - id: cast_double_out_of_the_integer_range_is_an_error
+    sql: "SELECT id, (int_val + 0.5::float8)::integer AS i FROM numbers ORDER BY id"
+  - id: cast_to_integer_and_smallint_in_range
+    sql: "SELECT id, big_val::integer AS a, int_val::smallint AS b, small_val::int2 AS c, numeric_val::int AS d FROM numbers WHERE id NOT IN (1, 2, 4) ORDER BY id"
+  - id: cast_bigint_out_of_the_integer_range_is_an_error
+    sql: "SELECT id, big_val::integer AS i FROM numbers ORDER BY id"
+  - id: cast_integer_out_of_the_smallint_range_is_an_error
+    sql: "SELECT id, int_val::smallint AS i FROM numbers ORDER BY id"
+  - id: cast_numeric_out_of_the_integer_range_is_an_error
+    sql: "SELECT id, numeric_val::integer AS i FROM numbers WHERE id = 4"
+  - id: cast_constant_out_of_the_integer_range_is_an_error
+    sql: "SELECT 3000000000::integer AS i, 1 AS j FROM departments WHERE id = 1"
+  - id: cast_text_out_of_the_smallint_range
+    sql: "SELECT '40000'::smallint AS i FROM departments WHERE id = 1"
+  - id: cast_to_varchar_with_a_length_cuts_the_text
+    sql: "SELECT id, name::varchar(3) AS a, CAST(id AS VARCHAR(1)) AS b, CAST(active AS varchar(2)) AS c, CAST(name AS character varying(4)) AS d, CAST(salary AS varchar(5)) AS e FROM persons ORDER BY id"
+  - id: cast_null_to_varchar_with_a_length
+    sql: "SELECT id, CAST(NULL AS varchar(2)) AS a FROM departments ORDER BY id"
   - id: cast_with_a_modifier_is_refused
     sql: "SELECT id, numeric_val::numeric(10,2) AS n FROM numbers ORDER BY id"
   - id: cast_of_bad_text_is_an_error
@@ -197,7 +215,33 @@ tests:
     sql: "SELECT round(2.665, 2) AS a, round(1.005, 2) AS b, round(0.285, 2) AS c, round(-2.665, 2) AS d, round(1234.5, -2) AS e, round(1250, -2) AS f, trunc(2.679, 2) AS g, trunc(-2.679, 1) AS h, trunc(-2.7) AS i, trunc(7) AS j FROM departments WHERE id = 1"
   - id: round_and_trunc_of_columns
     sql: "SELECT id, round(salary, -3) AS b, trunc(salary * 1.07, 1) AS c, round(numeric_val, 2) AS d, round(numeric_val * 3, 4) AS e FROM persons p JOIN numbers n USING (id) ORDER BY id"
-  - id: round_of_a_double_to_places_is_refused
+  - id: round_of_a_double_to_places_does_not_exist
     sql: "SELECT round(float_val, 2) AS a FROM numbers WHERE id = 1"
+  # a double rounds half to even (Postgres's rint, Pure's round of a Float)
+  - id: round_of_a_double_rounds_half_to_even
+    sql: "SELECT id, round(float_val) AS a, round(int_val + 0.5::float8) AS b, round(float_val * 10) / 4 AS c FROM numbers ORDER BY id"
+  - id: round_of_an_average_of_doubles
+    sql: "SELECT round(avg(float_val)) AS a, round(sum(float_val)) AS b FROM numbers"
+  # a quotient, average or root of numerics is numeric in Postgres, exact there and a double here: what rounds or
+  # spells it is refused (floor(0.3 / 0.1) is 3 in Postgres, 2 from a double)
+  - id: floor_of_a_quotient_of_numerics_is_refused
+    sql: "SELECT floor(0.3 / 0.1) AS a FROM departments WHERE id = 1"
+  - id: ceil_of_an_average_of_integers_is_refused
+    sql: "SELECT ceil(avg(age)) AS a FROM persons"
+  - id: cast_of_a_quotient_of_numerics_to_integer_is_refused
+    sql: "SELECT id, CAST(salary / 10000 AS INTEGER) AS a FROM persons ORDER BY id"
+  - id: round_of_a_quotient_of_numerics_is_refused
+    sql: "SELECT id, round(salary / 7) AS a FROM persons ORDER BY id"
+  - id: trunc_of_a_square_root_of_a_numeric_is_refused
+    sql: "SELECT id, trunc(sqrt(salary)) AS a FROM persons ORDER BY id"
+  - id: text_of_a_quotient_of_numerics_is_refused
+    sql: "SELECT id, (salary / 3)::text AS a FROM persons ORDER BY id"
+  # a quotient with a double in it is a double in Postgres too: it rounds
+  - id: floor_and_round_of_a_quotient_of_doubles
+    sql: "SELECT id, floor(float_val / 0.1) AS a, round(int_val / 4.0::float8) AS b, CAST(float_val / 2 AS INTEGER) AS c FROM numbers ORDER BY id"
+  - id: floor_of_a_square_root_of_an_integer
+    sql: "SELECT id, floor(sqrt(age)) AS a, ceil(ln(age)) AS b FROM persons ORDER BY id"
+  - id: a_quotient_of_numerics_cast_to_numeric_or_double
+    sql: "SELECT id, (salary / 4)::numeric AS a, (salary / 4)::float8 AS b FROM persons ORDER BY id"
   - id: power_of_integers_and_doubles
     sql: "SELECT id, power(small_val, 2) AS a, power(float_val, 2) AS b, pow(2, small_val) AS c FROM numbers WHERE small_val BETWEEN -10 AND 10 ORDER BY id"

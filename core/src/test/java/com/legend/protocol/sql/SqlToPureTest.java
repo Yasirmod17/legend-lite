@@ -280,6 +280,29 @@ class SqlToPureTest {
                 refusal("select dept::integer from tb('s::DB.T')").getMessage());
         assertEquals("value \"3000000000\" is out of range for type integer",
                 refusal("select '3000000000'::int from tb('s::DB.T')").getMessage());
+        // a smallint holds what is in its range, else Postgres's error: an empty value read as one raises
+        assertEquals("#>{s::DB.T}#->extend(~[s:r|if(($r.ID < -32768) || ($r.ID > 32767), |[]->cast(@Integer)"
+                        + "->toOne(), |$r.ID), v:r|if($r.firstName->isEmpty(), |[], |$r.firstName->toOne()->left(2))])"
+                        + "->select(~[s, v])",
+                pure("select ID::smallint as s, firstName::varchar(2) as v from tb('s::DB.T')"));
+        assertEquals("integer out of range", refusal("select 3000000000::int4 from tb('s::DB.T')").getMessage());
+    }
+
+    @Test
+    void aQuotientOfNumericsIsInexactSoNothingRoundsOrSpellsIt() {
+        // Postgres's numeric quotient is exact, Pure's divide a Float: floor(0.3 / 0.1) is 3 there, 2 here
+        assertEquals("floor of a quotient, average or root of numerics (exact in Postgres, a double here) is not"
+                + " supported yet", refusal("select floor(0.3 / 0.1) as f from tb('s::DB.T')").getMessage());
+        assertEquals("a cast to integer of a quotient, average or root of numerics (exact in Postgres, a double"
+                + " here) is not supported yet", refusal("select (ID / 2.0)::integer as i from tb('s::DB.T')")
+                .getMessage());
+        assertEquals("round(x) of a quotient, average or root of numerics (exact in Postgres, a double here) is not"
+                + " supported yet", refusal("select round(avg(age)) as a from tb('s::DB.T')").getMessage());
+        assertEquals("|| of a quotient, average or root of numerics (exact in Postgres, a double here) is not"
+                + " supported yet", refusal("select dept || ID / 3.0 as t from tb('s::DB.T')").getMessage());
+        // a double's quotient is a double in Postgres too: round is rint, half to even, as Pure's round of a Float
+        assertEquals("#>{s::DB.T}#->extend(~[r:r|round($r.ID / toFloat(2.0D))->toFloat()])->select(~[r])",
+                pure("select round(ID / 2.0::float8) as r from tb('s::DB.T')"));
     }
 
     // ------------------------------------------------------------------ Postgres's NULL rules

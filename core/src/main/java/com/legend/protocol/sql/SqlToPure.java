@@ -141,11 +141,17 @@ public final class SqlToPure {
 
     // ------------------------------------------------------------------ kinds
 
-    /** What the translator knows of a value's type: enough to choose a Postgres meaning, nothing more. */
-    enum Kind { INTEGER, FLOAT, DECIMAL, NUMBER, STRING, BOOLEAN, DATE, DATETIME, JSON, NULL, OTHER;
+    /**
+     * What the translator knows of a value's type: enough to choose a Postgres meaning, nothing more. INEXACT is
+     * Postgres's numeric computed here as Pure's Float: a quotient of numbers that are not both integers (Pure's
+     * divide), an average or a statistic of numbers that are not doubles, a square root, exponential or logarithm of a
+     * numeric. It agrees with Postgres's exact value to about 15 significant digits but may fall either side of it
+     * ({@code 0.3 / 0.1} is 2.9999999999999996), so nothing that rounds it or spells it is translated.
+     */
+    enum Kind { INTEGER, FLOAT, DECIMAL, NUMBER, INEXACT, STRING, BOOLEAN, DATE, DATETIME, JSON, NULL, OTHER;
 
         boolean numeric() {
-            return this == INTEGER || this == FLOAT || this == DECIMAL || this == NUMBER;
+            return this == INTEGER || this == FLOAT || this == DECIMAL || this == NUMBER || this == INEXACT;
         }
     }
 
@@ -190,6 +196,9 @@ public final class SqlToPure {
         }
         if (a == Kind.FLOAT || b == Kind.FLOAT) {
             return Kind.FLOAT;
+        }
+        if (a == Kind.INEXACT || b == Kind.INEXACT) {
+            return Kind.INEXACT;
         }
         if (a == Kind.NUMBER || b == Kind.NUMBER) {
             return Kind.NUMBER;
@@ -1857,7 +1866,7 @@ public final class SqlToPure {
                     case "count" -> Kind.INTEGER;
                     case "sum" -> argKind == Kind.DECIMAL ? Kind.NUMBER : argKind;
                     case "min", "max" -> argKind;
-                    default -> Kind.FLOAT;
+                    default -> statisticKind(argKind);
                 };
                 if (fn.equals("min") || fn.equals("max")) {
                     notJsonKey(argKind, fn, f.pos());
@@ -2268,6 +2277,11 @@ public final class SqlToPure {
     private static final Set<String> WINDOW_FUNCTIONS = Set.of("row_number", "rank", "dense_rank", "percent_rank",
             "cume_dist", "ntile", "lag", "lead", "first_value", "last_value", "nth_value");
 
+    /** An average's or a statistic's kind: double precision of doubles; Postgres's numeric otherwise, a Float here. */
+    private static Kind statisticKind(Kind arg) {
+        return arg == Kind.FLOAT ? Kind.FLOAT : Kind.INEXACT;
+    }
+
     private static boolean isAggregate(SqlAst.FunctionCall f) {
         return f.name().size() == 1 && AGGREGATES.contains(functionName(f.name().get(0)));
     }
@@ -2387,7 +2401,7 @@ public final class SqlToPure {
                 }
                 case "avg" -> {
                     requireNumeric(arg, f);
-                    kind = Kind.FLOAT;
+                    kind = statisticKind(arg.kind());
                     reduce = call("average", values);
                 }
                 case "min" -> {
@@ -2403,7 +2417,7 @@ public final class SqlToPure {
                 default -> {
                     // stddev, variance and their sample and population forms
                     requireNumeric(arg, f);
-                    kind = Kind.FLOAT;
+                    kind = statisticKind(arg.kind());
                     reduce = call(java.util.Objects.requireNonNull(STATISTICS.get(fn), fn), values);
                 }
             }
@@ -2653,7 +2667,7 @@ public final class SqlToPure {
         }
         String type = switch (kind) {
             case INTEGER -> "Integer";
-            case FLOAT -> "Float";
+            case FLOAT, INEXACT -> "Float";
             case DECIMAL, NUMBER -> "Decimal";
             case STRING, NULL -> "String";
             case DATE -> "StrictDate";
@@ -2803,7 +2817,9 @@ public final class SqlToPure {
                 if (l.kind() == Kind.INTEGER && r.kind() == Kind.INTEGER) {
                     return strict(Kind.INTEGER, List.of(l, r), v -> integerQuotient(v.get(0), v.get(1)));
                 }
-                return strict(Kind.FLOAT, List.of(l, r), v -> call("divide", v.get(0), v.get(1)));
+                // a double's quotient is a double, in Postgres too; a numeric's is exact there, a Float here
+                return strict(l.kind() == Kind.FLOAT || r.kind() == Kind.FLOAT ? Kind.FLOAT : Kind.INEXACT,
+                        List.of(l, r), v -> call("divide", v.get(0), v.get(1)));
             }
             case POWER -> {
                 List<Tx> lr = typedOperands(tx(b.left(), scope, row), tx(b.right(), scope, row), "^", b.pos());
@@ -2816,7 +2832,7 @@ public final class SqlToPure {
                     throw SqlTranslationException.unsupported("^ on numeric values (exact in Postgres) is not supported"
                             + " yet", b.pos());
                 }
-                return strict(Kind.FLOAT, List.of(l, r), v -> call("pow", v.get(0), v.get(1)));
+                return strict(powerKind(l.kind(), r.kind()), List.of(l, r), v -> call("pow", v.get(0), v.get(1)));
             }
             case MODULO -> {
                 List<Tx> lr = typedOperands(tx(b.left(), scope, row), tx(b.right(), scope, row), "%", b.pos());
@@ -2877,6 +2893,12 @@ public final class SqlToPure {
         };
         Tx test = strictTest(List.of(l, r), v -> call(fn, v.get(0), v.get(1)));
         return op == SqlAst.BinaryOp.NE ? not(test) : test;
+    }
+
+    /** A power's kind: of an inexact numeric, numeric in Postgres (so inexact here) unless a double is in it. */
+    private static Kind powerKind(Kind a, Kind b) {
+        return a != Kind.FLOAT && b != Kind.FLOAT && (a == Kind.INEXACT || b == Kind.INEXACT) ? Kind.INEXACT
+                : Kind.FLOAT;
     }
 
     private static boolean exactNumeric(Kind kind) {
@@ -3017,7 +3039,7 @@ public final class SqlToPure {
         return switch (k) {
             case INTEGER -> "integer";
             case FLOAT -> "double precision";
-            case DECIMAL, NUMBER -> "numeric";
+            case DECIMAL, NUMBER, INEXACT -> "numeric";
             case STRING -> "text";
             case BOOLEAN -> "boolean";
             case DATE -> "date";
@@ -3031,7 +3053,8 @@ public final class SqlToPure {
     /** The kinds an untyped string constant compared with them is read as (Postgres: an "unknown" constant takes the
      *  other operand's type, read by that type's input rules). */
     private static boolean readsStrings(Kind k) {
-        return isDate(k) || k == Kind.INTEGER || k == Kind.DECIMAL || k == Kind.FLOAT || k == Kind.BOOLEAN;
+        return isDate(k) || k == Kind.INTEGER || k == Kind.DECIMAL || k == Kind.FLOAT || k == Kind.INEXACT
+                || k == Kind.BOOLEAN;
     }
 
     private static final Set<String> REGEX_OPERATORS = Set.of("~", "~*", "!~", "!~*");
@@ -3051,7 +3074,7 @@ public final class SqlToPure {
                     return Tx.value(integer(new java.math.BigInteger(n)), Kind.INTEGER, false);
                 }
             }
-            case DECIMAL, FLOAT -> {
+            case DECIMAL, FLOAT, INEXACT -> {
                 String n = plainNumber(v.strip(), true);
                 if (n != null) {
                     return Tx.value(new CDecimal(new BigDecimal(n)), Kind.DECIMAL, false);
@@ -3437,10 +3460,15 @@ public final class SqlToPure {
                 {"radians", "toRadians"}};
         for (String[] fl : floats) {
             String pure = fl[1];
+            // sqrt, exp, ln and log have numeric forms in Postgres, which a numeric reads (an integer reads the
+            // double precision one)
+            boolean numericForm = Set.of("sqrt", "exp", "ln", "log").contains(fl[0]);
             m.put(fl[0], (t, f, a, s, r) -> {
                 arity(f, a, 1);
                 numericOperand(a.get(0), f.args().get(0));
-                return strict(Kind.FLOAT, a, v -> call(pure, v.get(0)));
+                Kind k = a.get(0).kind();
+                return strict(numericForm && (exactNumeric(k) || k == Kind.INEXACT) ? Kind.INEXACT : Kind.FLOAT, a,
+                        v -> call(pure, v.get(0)));
             });
         }
         m.put("atan2", (t, f, a, s, r) -> {
@@ -3543,7 +3571,8 @@ public final class SqlToPure {
                     throw SqlTranslationException.unsupported(functionName(f.name().get(0)) + "(...) of numeric values"
                             + " (exact in Postgres) is not supported yet", f.pos());
                 }
-                return strict(Kind.FLOAT, lr, v -> call("pow", v.get(0), v.get(1)));
+                return strict(powerKind(lr.get(0).kind(), lr.get(1).kind()), lr, v -> call("pow", v.get(0),
+                        v.get(1)));
             });
         }
         m.put("starts_with", (t, f, a, s, r) -> {
@@ -3577,6 +3606,7 @@ public final class SqlToPure {
         if (pure.equals("abs")) {
             return strict(args.get(0).kind(), args, v -> call(pure, v.get(0)));
         }
+        inexact(args.get(0), functionName(f.name().get(0)), f.pos());
         return wholeNumber(args.get(0), v -> call(pure, v));
     }
 
@@ -3652,10 +3682,17 @@ public final class SqlToPure {
     /** Postgres's 4-byte integer's names: a numeric or text value it cannot hold is Postgres's error. */
     private static final Set<String> NARROW_INTEGERS = Set.of("integer", "int", "int4");
 
-    /** The types a cast reads, as Postgres names them, and their kinds: smallint (whose range is narrower), real
+    /** Postgres's 2-byte integer's names. */
+    private static final Set<String> SMALL_INTEGERS = Set.of("smallint", "int2");
+
+    /** The names of text with a length ({@code varchar(n)}): an explicit cast cuts a longer value to n characters. */
+    private static final Set<String> VARCHAR_TYPES = Set.of("varchar", "character varying");
+
+    /** The types a cast reads, as Postgres names them, and their kinds: real
      *  (single precision), char(n) (padded), time zones, intervals, json and arrays are not among them yet. */
     private static final Map<String, Kind> CAST_TYPES = Map.ofEntries(Map.entry("integer", Kind.INTEGER),
             Map.entry("int", Kind.INTEGER), Map.entry("int4", Kind.INTEGER), Map.entry("bigint", Kind.INTEGER),
+            Map.entry("smallint", Kind.INTEGER), Map.entry("int2", Kind.INTEGER),
             Map.entry("int8", Kind.INTEGER), Map.entry("numeric", Kind.DECIMAL), Map.entry("decimal", Kind.DECIMAL),
             Map.entry("double precision", Kind.FLOAT), Map.entry("float8", Kind.FLOAT), Map.entry("float", Kind.FLOAT),
             Map.entry("text", Kind.STRING), Map.entry("varchar", Kind.STRING),
@@ -3778,6 +3815,7 @@ public final class SqlToPure {
         Tx x = args.get(0);
         numericOperand(x, f.args().get(0));
         if (args.size() == 1) {
+            inexact(x, "trunc(x)", f.pos());
             if (x.kind() == Kind.NULL) {
                 // trunc has numeric, double precision and macaddr forms: a NULL is no one of them
                 throw SqlTranslationException.invalid("function trunc(unknown) is not unique", f.pos());
@@ -3795,11 +3833,10 @@ public final class SqlToPure {
             return nullOf(Kind.DECIMAL);
         }
         if (x.kind() == Kind.FLOAT) {
-            // a double has no such function in Postgres; but a quotient of numerics is a numeric there and a double
-            // here (Pure's divide), whose ties a double may round the wrong way: refused, never answered
-            throw SqlTranslationException.unsupported(fn + "(x, n) of a double precision value (or of a quotient of"
-                    + " numerics, a double here) is not supported yet", f.pos());
+            throw SqlTranslationException.invalid("function " + fn + "(double precision, "
+                    + postgresName(args.get(1).kind()) + ") does not exist", f.pos());
         }
+        inexact(x, fn + "(x, n)", f.pos());
         Long n = constantInteger(f.args().get(1));
         if (n == null || Math.abs(n) > 18) {
             throw SqlTranslationException.unsupported(fn + "(x, n) with n other than a constant (of at most 18) is not"
@@ -3813,6 +3850,19 @@ public final class SqlToPure {
         return strict(Kind.DECIMAL, List.of(x), v -> toPlaces(v.get(0), places, halfAway));
     }
 
+    /** Refuses what rounds or spells an inexact numeric (see {@link Kind}): it may fall either side of Postgres's
+     *  exact value, and a rounding or a spelling of it then differs from Postgres's. */
+    private static void inexact(Tx x, String what, SqlAst.Pos pos) {
+        if (x.kind() == Kind.INEXACT) {
+            throw inexactRefused(what, pos);
+        }
+    }
+
+    private static SqlTranslationException inexactRefused(String what, SqlAst.Pos pos) {
+        return SqlTranslationException.unsupported(what + " of a quotient, average or root of numerics (exact in"
+                + " Postgres, a double here) is not supported yet", pos);
+    }
+
     private static Tx round(SqlAst.FunctionCall f, List<Tx> args) {
         if (args.size() == 2) {
             numericOperand(args.get(0), f.args().get(0));
@@ -3822,9 +3872,10 @@ public final class SqlToPure {
         arity(f, args, 1);
         Tx x = args.get(0);
         numericOperand(x, f.args().get(0));
+        inexact(x, "round(x)", f.pos());
         if (x.kind() == Kind.FLOAT) {
-            throw SqlTranslationException.unsupported("round(...) of a double precision value (half to even in"
-                    + " Postgres) is not supported yet", f.pos());
+            // Postgres's round of a double precision is rint, half to even, as Pure's round of a Float is (measured)
+            return strict(Kind.FLOAT, List.of(x), v -> call("toFloat", call("round", v.get(0))));
         }
         if (x.kind() == Kind.INTEGER) {
             // round(int) is round(double precision) in Postgres: the value itself, a double
@@ -3892,6 +3943,7 @@ public final class SqlToPure {
                 yield a.nullable() ? call("if", call("isEmpty", v), thunk(empty()), thunk(call("toString",
                         call("toOne", v)))) : call("toString", v);
             }
+            case INEXACT -> throw inexactRefused(where, pos);
             default -> throw SqlTranslationException.unsupported(where + " of " + postgresName(a.kind())
                     + " values is not supported yet", pos);
         };
@@ -4005,10 +4057,11 @@ public final class SqlToPure {
     /**
      * {@code CAST(x AS type)}, {@code x::type}: a string constant is read by the type's input rules (as a typed
      * constant is); a value converts where one Pure function gives Postgres's answer: a number to another number
-     * (an exact one to a bigint rounds half away from zero), to text; text to a bigint or a double precision; a
-     * timestamp to its date; an integer to a boolean. Refused: what rounds, formats or overflows otherwise in
-     * Postgres (a double precision to an integer or a numeric, a double precision or a timestamp to text, a value
-     * to Postgres's narrower integer, text to numeric), a type modifier, the other types.
+     * (an exact one to an integer rounds half away from zero, a double precision half to even), to text; a
+     * timestamp to its date; an integer to a boolean. An integer or smallint holds a value in its range, else it
+     * is Postgres's error; {@code varchar(n)} cuts the text to n characters. Refused: what rounds, formats or reads
+     * otherwise in Postgres (a double precision to a numeric, a double precision or a timestamp to text, text to a
+     * number), another type modifier, the other types.
      */
     private Tx cast(SqlAst.Cast c, Scope scope, String row) {
         String type = c.type().name();
@@ -4017,21 +4070,30 @@ public final class SqlToPure {
             throw SqlTranslationException.unsupported("casts to " + type + " are not supported yet", c.pos());
         }
         if (!c.type().modifiers().isEmpty()) {
+            if (VARCHAR_TYPES.contains(type) && c.type().modifiers().size() == 1 && c.type().modifiers().get(0) > 0) {
+                // varchar(n): the value's text, cut to n characters (an explicit cast truncates in Postgres)
+                long n = c.type().modifiers().get(0);
+                Tx text = cast(new SqlAst.Cast(c.operand(), new SqlAst.TypeName(type, List.of(), c.type().pos()),
+                        c.pos()), scope, row);
+                return strict(Kind.STRING, List.of(text), v -> call("left", v.get(0), new CInteger(n)));
+            }
             throw SqlTranslationException.unsupported("casts to " + type + " with a type modifier are not supported"
                     + " yet", c.pos());
         }
-        // Postgres's integer (int4) is narrower than Pure's: a value it cannot hold is Postgres's error
-        boolean narrow = NARROW_INTEGERS.contains(type);
+        // Postgres's integer (int4) and smallint (int2) are narrower than Pure's: a value they cannot hold is
+        // Postgres's error ("integer out of range")
+        long[] range = NARROW_INTEGERS.contains(type) ? new long[] {Integer.MIN_VALUE, Integer.MAX_VALUE}
+                : SMALL_INTEGERS.contains(type) ? new long[] {Short.MIN_VALUE, Short.MAX_VALUE} : null;
         if (c.operand() instanceof SqlAst.StringLit s && target == Kind.JSON) {
             return jsonConstant(s);
         }
         if (c.operand() instanceof SqlAst.StringLit s) {
             Tx read = target == Kind.STRING ? Tx.value(new CString(s.value()), Kind.STRING, false)
                     : fromString(s, target);
-            if (narrow && read.vs() instanceof CInteger n && (n.value().longValue() > Integer.MAX_VALUE
-                    || n.value().longValue() < Integer.MIN_VALUE)) {
-                throw SqlTranslationException.invalid("value \"" + s.value() + "\" is out of range for type integer",
-                        s.pos());
+            if (range != null && read.vs() instanceof CInteger n && (n.value().longValue() > range[1]
+                    || n.value().longValue() < range[0])) {
+                throw SqlTranslationException.invalid("value \"" + s.value() + "\" is out of range for type "
+                        + (SMALL_INTEGERS.contains(type) ? "smallint" : "integer"), s.pos());
             }
             return read;
         }
@@ -4039,18 +4101,37 @@ public final class SqlToPure {
         if (x.kind() == Kind.NULL) {
             return nullOf(target);
         }
-        if (x.kind() == target || target == Kind.DECIMAL && x.kind() == Kind.NUMBER) {
+        if (target == Kind.INTEGER && range != null && x.vs() instanceof CInteger n) {
+            if (n.value().longValue() > range[1] || n.value().longValue() < range[0]) {
+                throw SqlTranslationException.invalid((SMALL_INTEGERS.contains(type) ? "smallint" : "integer")
+                        + " out of range", c.pos());
+            }
             return x;
+        }
+        if (x.kind() == target || target == Kind.DECIMAL && x.kind() == Kind.NUMBER) {
+            return range == null ? x : inRange(x, range, type);
+        }
+        if (x.kind() == Kind.INEXACT) {
+            if (target == Kind.DECIMAL || target == Kind.FLOAT) {
+                // already Postgres's numeric; as a double precision, Postgres's double of the exact value, which this
+                // one may miss: inexact either way
+                return x;
+            }
+            inexact(x, "a cast to " + type, c.pos());
         }
         String from = x.kind().name().toLowerCase(Locale.ROOT);
         String convert = switch (target) {
             case STRING -> x.kind() == Kind.INTEGER || x.kind() == Kind.DECIMAL || x.kind() == Kind.BOOLEAN
                     || x.kind() == Kind.DATE ? "toString" : null;
-            case INTEGER -> narrow ? null : x.kind() == Kind.DECIMAL || x.kind() == Kind.NUMBER ? "round"
-                    : x.kind() == Kind.STRING ? "parseInteger" : null;
+            // a numeric rounds half away from zero, a double half to even (Pure's round of a Float, measured). Text
+            // is not read: a database's cast reads what Postgres's input rejects ('1.5' and '1e3' are 2 and 1000 on
+            // DuckDB, errors in Postgres)
+            case INTEGER -> x.kind() == Kind.DECIMAL || x.kind() == Kind.NUMBER ? "halfAwayFromZero"
+                    : x.kind() == Kind.FLOAT ? "round" : null;
             // text to numeric: Pure's parseDecimal lowers to a fixed DECIMAL(5, 2), not Postgres's unbounded numeric
             case DECIMAL -> x.kind() == Kind.INTEGER ? "toDecimal" : null;
-            case FLOAT -> x.kind().numeric() ? "toFloat" : x.kind() == Kind.STRING ? "parseFloat" : null;
+            // text likewise: DuckDB reads '1_000' as 1000 and '1e400' as Infinity, Postgres rejects both
+            case FLOAT -> x.kind().numeric() ? "toFloat" : null;
             case DATE -> x.kind() == Kind.DATETIME ? "datePart" : null;
             case BOOLEAN -> x.kind() == Kind.INTEGER ? "notEqual" : null;
             // text parses into jsonb; a jsonb's text (with its strings quoted) is not Pure's to(@String)
@@ -4065,11 +4146,17 @@ public final class SqlToPure {
             // Postgres: 0 is false, any other integer true
             return strictTest(List.of(x), v -> call("not", call("equal", v.get(0), new CInteger(0L))));
         }
-        if (convert.equals("round")) {
-            // a numeric to a bigint rounds half away from zero, as Postgres's numeric round does
-            return strict(target, List.of(x), v -> halfAwayFromZero(v.get(0)));
-        }
-        return strict(target, List.of(x), v -> call(convert, v.get(0)));
+        Tx converted = convert.equals("halfAwayFromZero") ? strict(target, List.of(x), v -> halfAwayFromZero(v.get(0)))
+                : strict(target, List.of(x), v -> call(convert, v.get(0)));
+        return range == null ? converted : inRange(converted, range, type);
+    }
+
+    /** An integer that a narrower Postgres integer must hold: past its range, Postgres's error -- an empty value
+     *  read as one ({@code []->cast(@Integer)->toOne()} raises, typed as the integer it stands for). */
+    private static Tx inRange(Tx x, long[] range, String type) {
+        return strict(Kind.INTEGER, List.of(x), v -> call("if", call("or", call("lessThan", v.get(0),
+                new CInteger(range[0])), call("greaterThan", v.get(0), new CInteger(range[1]))),
+                thunk(call("toOne", call("cast", empty(), typeArg("Integer")))), thunk(v.get(0))));
     }
 
     /** {@code DATE '...'} and {@code TIMESTAMP '...'} in ISO 8601 spelling: Pure date constants; {@code JSONB '...'}
