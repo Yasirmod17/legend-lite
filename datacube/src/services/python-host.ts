@@ -3,9 +3,10 @@
 // notebook's cell (demo/widget.ts, over the widget's channel, which the notebook authenticates). The app is the tab's;
 // only these services differ.
 //
-// - THE ROWS ARE PYTHON'S (R4): the page sends Pure, never SQL. Python plans it with its planner and runs the SQL on its
-//   DuckDB, and the rows come back in upstream's Arrow format, declared (RemoteRun over the engine's pure/v1 execute).
-//   A grid's columns, a query's print, are Python's compiler's answers the same way.
+// - THE ROWS ARE PYTHON'S (R4): the page sends Pure, never SQL. Each grid is one PlanAndRun (§15): the page's own
+//   planner asks Python for the plan, which Python makes against the model it holds and runs on its DuckDB in the same
+//   call (`plan-and-run.json`), and the page reads the rows typed by that plan, as the tab reads its own. A grid's
+//   columns, a query's print, are the planner protocol's answers, made by Python's native library (`planner.json`).
 // - THE DATA IN is Python's frames: each a model Python wrote when the frame was registered (`cube.json?table=`).
 // - PYTHON IS ANOTHER EDITOR of what the page shows (§5): it changes the page (`ll.Page`) and its frames, the page
 //   follows their versions (`version.json`, or the widget's), and it says what it is now, for `page.read()`
@@ -225,7 +226,11 @@ export function pythonRunner(link: PythonLink, model: string, runtime: string): 
       const plan = readPlan(said.plan, query);
       throw new QueryFailure(new Error(said.error ?? `the engine answered ${answer.status}`), query, plan.sql);
     }
-    const { table, metadata } = arrowIpcAnswer(new Uint8Array(await answer.arrayBuffer()));
+    // a body cut short or not Arrow: said as every other failure here is, never thrown raw at the cube
+    const { table, metadata } = await answer.arrayBuffer().then((bytes) => arrowIpcAnswer(new Uint8Array(bytes))).catch((e: unknown) => {
+      if (signal?.aborted) throw e;
+      throw new QueryFailure(new Error(`the engine's rows could not be read: ${e instanceof Error ? e.message : String(e)}`), query);
+    });
     const said = metadata.get('legend.plan');
     if (said === undefined) throw new QueryFailure(new Error('the engine answered rows without the plan they are of'), query);
     const plan = readPlan(said, query);

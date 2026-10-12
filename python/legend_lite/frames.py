@@ -22,8 +22,8 @@ the plan does not type is refused, and each value is exact, as the database stor
 DuckDB answers as an exact decimal included), keeping that exact decimal only past 64 bits, never wrong; a Decimal
 exact; a DateTime as stored, in UTC (the session's zone), to the microsecond; a Variant as the planner's SQL answers it
 -- its JSON text, or, a STRUCT or a LIST under ``SELECT *``, as stored, until the planner answers every Variant as JSON
-(§15.3a: the Compiler Rewrite line's egress fix). ``to_pandas`` keeps them so: an Integer or a Boolean with nulls stays an integer or a boolean (pandas'
-nullable types), never a float or an object.
+(§15.3a: the Compiler Rewrite line's egress fix). ``to_pandas`` keeps them so: an Integer or a Boolean with nulls stays
+an integer or a boolean (pandas' nullable types), never a float or an object.
 """
 
 from __future__ import annotations
@@ -56,6 +56,10 @@ _CATALOG_FIELDS = ('name', 'dataType', 'logicalType', 'precision', 'scale', 'not
 TYPE_KEY = b'legend.type'
 
 
+class UntypedColumn(RuntimeError):
+    """A result column its plan does not type: the plan and the database disagree about the query's shape."""
+
+
 def _integer(column: pa.ChunkedArray) -> pa.ChunkedArray:
     """An Integer column as int64, from any integer the database answers with (a SUM's exact decimal(38, 0)
     included); one with a value past 64 bits as the database stored it, exact."""
@@ -80,7 +84,7 @@ def typed_by_plan(rows: pa.Table, plan: compiler.Plan) -> pa.Table:
     for field, column in zip(rows.schema, rows.columns):
         typed = types.get(field.name)
         if typed is None:
-            raise RuntimeError(f"the plan does not type the result column '{field.name}': {plan.sql}")
+            raise UntypedColumn(f"the plan does not type the result column '{field.name}': {plan.sql}")
         if typed == 'Integer':
             column = _integer(column)
         fields.append(pa.field(field.name, column.type, field.nullable, {**(field.metadata or {}), TYPE_KEY: typed}))
@@ -210,7 +214,8 @@ class Table:
     def _ready(self) -> None:
         if self._closed:
             raise ValueError(f'the frame {self.name!r} was registered again or unregistered: use the new table')
-        if self.mode == LIVE:
+        # held still (Frames.serving), it was read as the query began: read once per query, a function frame called once
+        if self.mode == LIVE and not self._frames._still:
             self._refresh()
 
     def plan(self, query: str | dict[str, Any]) -> compiler.Plan:
@@ -243,6 +248,8 @@ class Frames:
         for statement in compiler.session_setup('DuckDB'):
             self.connection.execute(statement)
         self._lock = threading.RLock()
+        # how deep in ``serving`` the thread holding the lock is: inside, the frames are held still, each Live one read
+        self._still = 0
         # DuckDB matches names without regard to case, quoted or not: so does this
         self._tables: dict[str, Table] = {}
         # the tables a page's files were read into on this connection by DataCube's own code (the engine's file.json),
@@ -305,8 +312,12 @@ class Frames:
             for table in self._tables.values():
                 if table.mode == LIVE:
                     table._ready()
-            yield {**{table.name: table.model for table in self._tables.values()},
-                   **{name: model for name, model, _view, _held in self._files.values()}}
+            self._still += 1
+            try:
+                yield {**{table.name: table.model for table in self._tables.values()},
+                       **{name: model for name, model, _view, _held in self._files.values()}}
+            finally:
+                self._still -= 1
 
     def held_for(self, model: str) -> compiler.HeldModel | None:
         """The model held for the frame or page file whose model is exactly this text -- what a page's plan is made
@@ -415,10 +426,14 @@ class Frames:
             for table in self._tables.values():
                 table._drop()
             self._tables.clear()
-            for name, _model, view, held in self._files.values():
-                self.connection.execute(f'DROP {"VIEW" if view else "TABLE"} IF EXISTS main."{name}"')
-                held.close()
-            self._files.clear()
+            files, self._files = list(self._files.values()), {}
+            try:
+                for name, _model, view, _held in files:
+                    self.connection.execute(f'DROP {"VIEW" if view else "TABLE"} IF EXISTS main."{name}"')
+            finally:
+                # every model let go, a drop that failed or not
+                for _name, _model, _view, held in files:
+                    held.close()
 
     def __getitem__(self, name: str) -> Table:
         return self._tables[name.lower()]

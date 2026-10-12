@@ -223,6 +223,76 @@ class Planes(Served):
         self.assertEqual(asked, ['execute', '/api/pure/v1/grammar/grammarToJson/lambda'])
 
 
+class PlanAndRunRoutes(Served):
+    """PLANANDRUN ON PYTHON (docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md §15): a page's grid planned against the model
+    Python holds and run on its DuckDB in one call (plan-and-run.json), the planner's other answers from Python's native
+    library (planner.json) -- only over the models this engine serves, no handle crossing, never a dropped call."""
+
+    def plan_and_run(self, steps, model=None):
+        return self.post('/plan-and-run.json', json.dumps({
+            'lambda': json.dumps(ll.parse('|' + self.table.accessor + steps)),
+            'model': self.table.model if model is None else model,
+            'runtime': self.table.runtime,
+        }))
+
+    def test_a_grid_is_planned_over_the_model_held_run_here_and_typed_by_its_plan(self):
+        status, headers, body = self.plan_and_run(GROUP)
+        self.assertEqual((status, headers['Content-Type']), (200, 'application/vnd.apache.arrow.stream'), body[:300])
+        rows = pyarrow.ipc.open_stream(pa.py_buffer(body)).read_all()
+        plan = rows.schema.metadata[b'legend.plan'].decode()
+        self.assertTrue(plan.startswith('OK\n'), plan[:200])
+        self.assertEqual(json.loads(plan[3:])['sql'], self.table.plan(GROUP).sql)
+        self.assertEqual({f.name: f.metadata[b'legend.type'] for f in rows.schema}, {'desk': b'String', 'q': b'Float'})
+        kept = self.df[self.df.qty > 5]
+        self.assertEqual(rows.to_pylist(), [{'desk': d, 'q': q} for d, q in kept.groupby('desk')['qty'].sum().sort_index().items()])
+
+    def test_a_model_it_does_not_serve_is_refused_and_nothing_runs(self):
+        status, headers, body = self.plan_and_run(GROUP, model=self.table.model + '\n')
+        self.assertEqual((status, headers['Content-Type']), (200, 'application/json'))
+        self.assertTrue(json.loads(body)['plan'].startswith('ERR\nMODEL\n'), body)
+
+    def test_sql_the_database_refuses_is_answered_with_its_plan(self):
+        status, headers, body = self.plan_and_run("->extend(~[n: x|$x.desk->toOne()->parseInteger()])")
+        self.assertEqual((status, headers['Content-Type']), (422, 'application/json'), body[:300])
+        said = json.loads(body)
+        self.assertTrue(said['plan'].startswith('OK\n'), said)
+        self.assertIn('Exception', said['error'])
+
+    def test_a_request_that_is_not_one_is_refused(self):
+        for body in ('not json', '[]', json.dumps({'lambda': 1, 'model': '', 'runtime': ''})):
+            self.assertEqual(self.post('/plan-and-run.json', body)[0], 400, body)
+        for body in ('not json', '[]', json.dumps({'kind': []}), json.dumps({'kind': 'nope'})):
+            self.assertEqual(self.post('/planner.json', body)[0], 400, body)
+
+    def test_the_planner_answers_over_the_model_held_and_keeps_no_handle_of_the_page(self):
+        lam = json.dumps(ll.parse('|' + self.table.accessor + GROUP))
+        status, _, body = self.post('/planner.json', json.dumps({
+            'kind': 'planJson', 'model': self.table.model, 'lambda': lam, 'runtime': self.table.runtime,
+            # a handle the page names is never used: the one Python holds for that model is
+            'handle': 'not-a-handle'}))
+        said = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertTrue(said['ok'] and said['answer'].startswith('OK\n'), said)
+        self.assertEqual(json.loads(said['answer'][3:])['sql'], self.table.plan(GROUP).sql)
+        refused = json.loads(self.post('/planner.json', json.dumps({
+            'kind': 'planJson', 'model': 'unserved', 'lambda': lam, 'runtime': self.table.runtime}))[2])
+        self.assertTrue(refused['answer'].startswith('ERR\nMODEL\n'), refused)
+        # holding and letting go are the page's own: Python holds nothing for a page
+        for kind in ('hold', 'release'):
+            self.assertEqual(self.post('/planner.json', json.dumps({'kind': kind, 'model': self.table.model, 'handle': '1'}))[0], 400)
+
+    def test_both_need_the_token_and_neither_is_a_get(self):
+        for path in ('/plan-and-run.json', '/planner.json'):
+            self.assertEqual(self.post(path, '{}', headers={'Authorization': 'Bearer nope'})[0], 401, path)
+            request = urllib.request.Request(self.server.url + path, headers={'Authorization': self.server.authorization})
+            try:
+                with urllib.request.urlopen(request, timeout=30) as r:
+                    status = r.status
+            except urllib.error.HTTPError as e:
+                status = e.code
+            self.assertNotEqual(status, 200, path)
+
+
 class SavedPagesKept(unittest.TestCase):
     """The page's saved pages (step 2d): the browser's records, kept whole, one file each in this user's folder, the
     store's rules the page's own -- the engine answers only all, find, put and remove."""

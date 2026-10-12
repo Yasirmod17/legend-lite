@@ -200,5 +200,9 @@ describe('toScalar', () => {
     assert.equal(toScalar([1n, undefined]), '[1,null]');
     assert.equal(toScalar({ gone: undefined, d: new Date(0) }), '{"d":"1970-01-01T00:00:00.000Z"}');
     assert.equal(toScalar({ xs: new BigInt64Array([3n, 4n]) }), '{"xs":[3,4]}');
+    // JSON.stringify's own rules otherwise: a boxed value its value, a symbol or a toJSON's undefined left out
+    assert.equal(toScalar({ n: Object(1n), s: new String('a'), sym: Symbol('x'), none: { toJSON: () => undefined } }),
+      '{"n":1,"s":"a"}');
+    assert.equal(toScalar([Symbol('x'), -0, Number.NaN]), '[null,0,null]');
   });
 });

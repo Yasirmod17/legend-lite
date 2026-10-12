@@ -96,6 +96,19 @@ class Grids(unittest.TestCase):
             self.assertEqual(sorted(out.qty.dropna().tolist()), [1])
             self.assertEqual(int(out.qty.isna().sum()), 1)
 
+    def test_an_integer_past_64_bits_stays_exact_in_its_view(self):
+        frame = pd.DataFrame({'k': ['a', 'a'], 'n': [2 ** 63 - 1, 2 ** 63 - 1]})
+        out = self.page.grid(frame, name='trades_wide', rows=['k'], measures={'n': 'sum'}).view().to_pandas()
+        self.assertEqual(out.n.tolist()[-1], 2 * (2 ** 63 - 1))
+
+    def test_its_rows_read_a_live_frame_once(self):
+        # one query, one read of the frame as it is then: a function frame called once (Frames.serving holds it still)
+        calls = []
+        grid = self.page.grid(lambda: calls.append(1) or TRADES, name='trades_called')
+        before = len(calls)
+        grid.to_pandas()
+        self.assertEqual(len(calls) - before, 1)
+
     def test_a_grid_changed_in_python_is_viewed_as_it_is_now(self):
         grid = self.page.grid(TRADES, name='trades_changing', rows=['desk'], measures={'qty': 'sum'})
         self.assertEqual(groups(grid.view(), 'qty'), TRADES.groupby('desk').qty.sum().to_dict())

@@ -53,7 +53,7 @@ import pyarrow.ipc
 
 from . import _json, _planner, compiler
 from ._library import library
-from .frames import Frames
+from .frames import Frames, UntypedColumn
 from ._home import SavedPages
 
 _API = '/api/pure/v1/'
@@ -162,6 +162,16 @@ def _said(status: int, message: str) -> Answer:
 def _planned(said: dict[str, str], status: int = 200) -> Answer:
     """A plan-and-run that answered no rows: the planner's own answer, and why its SQL was refused when it was."""
     return Answer(status, 'application/json', json.dumps(said).encode('utf-8'))
+
+
+def _answered(work: Callable[[str], Answer], body: str) -> Answer:
+    """A page's planner call answered, never a dropped call: what the call itself does not answer is a bug, logged whole
+    and said (500), as the API's are (``Engine._api``)."""
+    try:
+        return work(body)
+    except Exception as failure:
+        traceback.print_exc()
+        return _said(500, f'{type(failure).__name__}: {failure}')
 
 
 def duckdb_extensions() -> Path | None:
@@ -317,9 +327,9 @@ class Engine:
             if path == _SAVED:
                 return self._saved(body or '')
             if path == _PLAN_AND_RUN:
-                return _workers().submit(self._plan_and_run, body or '').result()
+                return _workers().submit(_answered, self._plan_and_run, body or '').result()
             if path == _PLANNER:
-                return _workers().submit(self._planner, body or '').result()
+                return _workers().submit(_answered, self._planner, body or '').result()
             if not path.startswith(_API):
                 return _said(404, f'no such path: {path}')
             return _workers().submit(self._api, path, query, body or '').result()
@@ -583,7 +593,7 @@ class Engine:
             try:
                 # Python's executor, as Python's own queries are run: the rows typed by the plan (frames.typed_by_plan)
                 rows = self.frames.run(compiler.read_plan(planned[3:]))
-            except (duckdb.Error, RuntimeError) as refused:
+            except (duckdb.Error, UntypedColumn) as refused:
                 return _planned({'plan': planned, 'error': f'{type(refused).__name__}: {refused}'}, 422)
         rows = rows.replace_schema_metadata({**(rows.schema.metadata or {}), _PLAN_KEY: planned.encode('utf-8')})
         sink = pa.BufferOutputStream()
@@ -601,7 +611,7 @@ class Engine:
         except ValueError:
             return _said(400, 'a planner request is its JSON')
         kind = asked.get('kind') if isinstance(asked, dict) else None
-        if kind not in _planner.KINDS or kind in ('hold', 'release'):
+        if not isinstance(kind, str) or kind not in _planner.KINDS or kind in ('hold', 'release'):
             return _said(400, f'this engine answers the planner requests {sorted(set(_planner.KINDS) - {"hold", "release"})}')
         if kind in _planner.HELD:
             model = asked.pop('model', None)

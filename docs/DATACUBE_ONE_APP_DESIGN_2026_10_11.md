@@ -768,9 +768,15 @@ phase, never a second field. Until then the executors type by the plan's Pure ty
 ### 15.4 Who may send a runner SQL
 
 - **The page's DuckDB-WASM**, in the browser's sandbox: the page.
-- **Python's DuckDB**, which can read this machine's files: only SQL planned in the same PlanAndRun call, so R4 holds
-  by construction. Raw SQL against Python, if it is ever wanted, is a capability of the planner -- a plan that passes
-  the SQL through -- so this rule still holds (the user, 2026-10-12).
+- **Python's DuckDB**, which can read this machine's files: only SQL planned in the same PlanAndRun call. Raw SQL
+  against Python, if it is ever wanted, is a capability of the planner -- a plan that passes the SQL through -- so this
+  rule still holds (the user, 2026-10-12).
+  - **Not yet by construction** (the audit, 2026-10-12). A planned query can name a file itself: Pure's
+    `meta::legend::lite::sourceUrl('file:///…')` plans to `read_json_objects('<the local path>')`. So a page with
+    Python's token can have Python read a local file through a model Python serves.
+  - The same holds for Python's pure/v1 execute, which predates PlanAndRun. Python's `remote.json` already refuses a
+    local URL for this reason.
+  - The fix is open for the user.
 - **A warehouse**: the signed-in person's SQL, under the warehouse's own grants, as today.
 
 ### 15.5 What it replaces
@@ -825,7 +831,9 @@ Rewrite line, then audited before it lands.
   - Planning: the page's own `LitePlanner` over `pythonWorker`. Hold and release are kept in the page, and a held kind
     sends the model's text, so no handle crosses hosts.
   - One `POST plan-and-run.json` per grid. Python plans against the model it holds for that frame or file
-    (`Frames.held_for`), runs only that SQL (R4) and types the rows (`Frames.run`).
+    (`Frames.held_for`), runs only that SQL (R4, short of a query's own `sourceUrl`: 15.4) and types the rows
+    (`Frames.run`). Both new routes are private, POST-only, and always answered: what one does not answer is logged
+    and said (500), never a dropped call.
   - The answer is Arrow IPC, the planner's answer in its schema's metadata (`legend.plan`). The page reads it as its
     planner reads its own. A refusal is JSON: the plan, and why.
   - Every other planner question goes over `planner.json`, answered by the native library from the planner protocol's

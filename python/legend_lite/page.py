@@ -589,9 +589,14 @@ class GridView:
         column with nulls an integer or a boolean still (pandas' nullable types, as ``frames.to_pandas``)."""
         import pandas as pd
         nullable = {'Integer': pd.Int64Dtype(), 'Boolean': pd.BooleanDtype()}
+
+        def column(i: int, type: str) -> Any:
+            values = [row[i] for row in self.rows]
+            # an Integer past 64 bits kept exact, as Python's own rows keep it (frames.to_pandas): pandas' objects
+            wide = type == 'Integer' and any(isinstance(v, int) and not -2 ** 63 <= v < 2 ** 63 for v in values)
+            return pd.Series(values, dtype=object if wide else nullable.get(type))
         # by position: a pivot's columns may share a name
-        frame = pd.DataFrame({i: pd.Series([row[i] for row in self.rows], dtype=nullable.get(c['type']))
-                              for i, c in enumerate(self.columns)})
+        frame = pd.DataFrame({i: column(i, c['type']) for i, c in enumerate(self.columns)})
         frame.columns = [c['name'] for c in self.columns]
         return frame
 
