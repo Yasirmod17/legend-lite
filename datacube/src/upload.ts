@@ -8,7 +8,7 @@ import type { RawTable } from '../../engine-client/src/engine.ts';
 import type { DuckDbEngine } from '../../engine-client/src/duckdb.ts';
 import type { Scalar } from '../../engine-client/src/result.ts';
 import type { CatalogColumn, InferredModel, TableModels } from './infer.ts';
-import { sqlLiteral } from './remote.ts';
+import { mountRemote, sqlLiteral, type S3Credentials } from './remote.ts';
 
 /**
  * The duckdb-wasm surface used here.
@@ -183,6 +183,19 @@ export async function readFileInto(
     rowCount,
     fileName: file.fileName,
   };
+}
+
+/**
+ * A REMOTE FILE MOUNTED AS A VIEW named `name`, and its model written from what the catalog found -- the one
+ * implementation of reading a remote Parquet, CSV or Iceberg file, on every host: the tab's DuckDB-WASM, a host's DuckDB
+ * (headless/data-in.ts). A view of a remote file cannot be rewritten: a column that needs a conversion is left out.
+ */
+export async function mountRemoteView(engine: DuckDbEngine, models: TableModels,
+  file: { readonly url: string; readonly s3?: S3Credentials; readonly name: string }): Promise<InferredModel> {
+  await mountRemote(engine, { sources: [{ name: file.name, url: file.url }], ...(file.s3 ? { s3: file.s3 } : {}) });
+  return models.tableModel(await catalogColumns(engine, models, file.name), {
+    table: file.name, convertible: false, databaseType: engine.databaseType,
+  });
 }
 
 /** A file's table dropped: its name is free again (the caller lets go of the file itself, where it keeps one). */

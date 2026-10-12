@@ -29,6 +29,7 @@ from __future__ import annotations
 import base64
 import binascii
 import contextlib
+import functools
 import hmac
 import http.server
 import json
@@ -65,7 +66,10 @@ _MAX_BODY = 16 * 1024 * 1024
 _MAX_FILE_BODY = 256 * 1024 * 1024
 # the calls that bring a page's data in and let it go (each changes the engine's data), and what Python's host offers
 # the page (docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md §3.4, §4.3): each the engine's own page's, so each carries the token
-_FILE_IN, _FILE_OUT, _SERVICES = '/file.json', '/forget.json', '/services.json'
+_FILE_IN, _FILE_OUT, _REMOTE, _SERVICES = '/file.json', '/forget.json', '/remote.json', '/services.json'
+# the only places a page's remote file may be read from (remote.json): never this machine's own files, which Python's
+# DuckDB can read and a page must not make it (R4's reason)
+_REMOTE_SCHEMES = ('http', 'https', 's3', 's3a', 's3n', 'gs', 'gcs', 'r2', 'az', 'azure', 'abfss', 'hf')
 # a connection that sends nothing, or stops sending, is closed after this long (seconds)
 _IDLE = 30
 # the threads that call the compiler: ONE fixed pool for every engine in the process, as the native library asks of
@@ -142,10 +146,28 @@ def _said(status: int, message: str) -> Answer:
     return Answer(status, 'text/plain; charset=utf-8', message.encode('utf-8'))
 
 
+def duckdb_extensions() -> Path | None:
+    """DuckDB's extensions as legend-lite carries them, laid out as DuckDB's own extension folder
+    (``v1.5.5/<platform>/httpfs.duckdb_extension``): LEGEND_LITE_DUCKDB_EXTENSIONS, else the folder inside this package;
+    None when it holds no httpfs for this DuckDB (a build without it: no remote file is read)."""
+    import os
+
+    explicit = os.environ.get('LEGEND_LITE_DUCKDB_EXTENSIONS')
+    folder = Path(explicit) if explicit else Path(__file__).with_name('_duckdb')
+    return folder if (folder / f'v{duckdb.__version__}' / _duckdb_platform() / 'httpfs.duckdb_extension').is_file() else None
+
+
+@functools.cache
+def _duckdb_platform() -> str:
+    """The platform DuckDB names its extensions by here (``osx_arm64``, ``linux_amd64``, ``windows_amd64``, ...)."""
+    return duckdb.connect().execute('PRAGMA platform').fetchone()[0]
+
+
 def private(path: str) -> bool:
     """Whether a call reads the engine's data -- the API, a frame's cube, its version -- and so, over HTTP, carries the
     token. The site's files are the page's own and carry no secret."""
-    return path.startswith(_API) or path in ('/cube.json', '/version.json', '/page.json', _FILE_IN, _FILE_OUT, _SERVICES)
+    return path.startswith(_API) or path in ('/cube.json', '/version.json', '/page.json', _FILE_IN, _FILE_OUT, _REMOTE,
+                                             _SERVICES)
 
 
 def _arrow_requested(query: str) -> bool:
@@ -220,6 +242,8 @@ class Engine:
         (services.json). ``planner``: where every query is planned, chosen once (R3): Python's own when not given."""
         self.frames = frames
         self._headless = headless
+        # where the frames' DuckDB was pointed for its extensions (a remote file's httpfs), once it was
+        self._extensions: Path | None = None
         self.planner = planner if planner is not None else NativePlanner()
         self.site = Path(site).resolve() if site is not None else None
         if self.site is not None and not self.site.is_dir():
@@ -251,6 +275,8 @@ class Engine:
                 return self._file_in(body or '')
             if path == _FILE_OUT:
                 return self._file_out(body or '')
+            if path == _REMOTE:
+                return self._remote(body or '')
             if not path.startswith(_API):
                 return _said(404, f'no such path: {path}')
             return _workers().submit(self._api, path, query, body or '').result()
@@ -272,7 +298,7 @@ class Engine:
         it reads a page's file, and where it plans -- the plane it plans on, and every plane it offers (today only its
         own: choosing another is step 2c's)."""
         plane = {'word': self.planner.plane, 'label': self.planner.label}
-        return {'files': self.takes_files(), 'plane': plane, 'planes': [plane]}
+        return {'files': self.takes_files(), 'remote': self.takes_remote(), 'plane': plane, 'planes': [plane]}
 
     def takes_files(self) -> bool:
         """Whether a page's file can be read into the frames' database here: DataCube's own code runs headless (its
@@ -285,6 +311,62 @@ class Engine:
             # legend-lite without its datacube extra's module (a build of the compiler alone)
             return False
         return available()
+
+    def takes_remote(self) -> bool:
+        """Whether a page's remote file can be read here: it takes files (DataCube's own code, headless), and DuckDB's
+        httpfs extension is where the package carries it (``duckdb_extensions``), so nothing is downloaded to read one."""
+        return self.takes_files() and duckdb_extensions() is not None
+
+    def _remote(self, body: str) -> Answer:
+        """A page's remote file read through a view of its own in the frames' database (``{"url", "name", "s3"?}``;
+        docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md, step 2b): its URL one of the remote schemes, never this machine's
+        files, checked before anything runs; read by DataCube's own code (upload.ts's mountRemoteView, the tab's, run
+        headless) with the httpfs extension the package carries. The view's model is served beside the frames' from
+        then on, and the answer is its model, as the tab's mount says it. The page sends no SQL."""
+        try:
+            asked = json.loads(body)
+        except ValueError:
+            return _said(400, 'a remote file is {"url", "name", "s3"?}, as JSON')
+        if not (isinstance(asked, dict) and isinstance(asked.get('url'), str) and isinstance(asked.get('name'), str)
+                and (asked.get('s3') is None or isinstance(asked['s3'], dict))):
+            return _said(400, 'a remote file is {"url", "name", "s3"?}: a URL, a name, and its keys when it needs them')
+        url = asked['url']
+        parts = urlsplit(url)
+        if parts.scheme.lower() not in _REMOTE_SCHEMES or not parts.netloc:
+            return _said(400, f'a remote file is read from {", ".join(s + "://" for s in _REMOTE_SCHEMES)}, never from '
+                              f'this machine: {url!r} is not such a URL (a file of yours: choose it under Files)')
+        extensions = duckdb_extensions()
+        if not self.takes_files() or extensions is None:
+            return _said(404, 'this engine reads no remote file: legend-lite reads one with DataCube\'s own code and '
+                              'DuckDB\'s httpfs extension, which its wheel carries (pip install "legend-lite[datacube]")')
+        assert self._headless is not None
+        try:
+            # asked for before the frames are held (the session's lock first, then the frames')
+            headless = self._headless()
+            with self.frames.reading_file(asked['name'], view=True) as name:
+                self._extensions_here(extensions)
+                mount = {'url': url, 'name': name, **({'s3': asked['s3']} if asked.get('s3') else {})}
+                said = headless.call('mount', json.dumps(mount))
+                self.frames.keep_file(name, json.loads(said)['model'], view=True)
+        except ValueError as refused:
+            return _said(400, str(refused))
+        except Exception as failure:
+            # the file not read (not there, its keys refused, a format DuckDB cannot read): said, as the tab says it
+            return _said(422, f'{type(failure).__name__}: {failure}')
+        return Answer(200, 'application/json', said.encode('utf-8'))
+
+    def _extensions_here(self, folder: Path) -> None:
+        """The frames' DuckDB pointed at the extensions the package carries, once (the frames held): DataCube's INSTALL
+        finds httpfs installed there and LOAD loads it, and an extension not there is never downloaded -- the
+        repository it would be fetched from is the same folder, and installing on its own is off."""
+        if self._extensions is not None:
+            return
+        folder_text = str(folder).replace("'", "''")
+        for statement in (f"SET extension_directory = '{folder_text}'",
+                          f"SET custom_extension_repository = '{folder_text}'",
+                          'SET autoinstall_known_extensions = false'):
+            self.frames.connection.execute(statement)
+        self._extensions = folder
 
     def _file_in(self, body: str) -> Answer:
         """A page's file read into a table of its own in the frames' database (docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md
@@ -680,7 +762,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802 -- the stdlib's name
         url = urlsplit(self.path)
         # the API, an open page saying what it is now (page.json: Python's page.read()), and a page's file in or out
-        if not (url.path.startswith(_API) or url.path in ('/page.json', _FILE_IN, _FILE_OUT)):
+        if not (url.path.startswith(_API) or url.path in ('/page.json', _FILE_IN, _FILE_OUT, _REMOTE)):
             self._refuse_unread(404, f'no such path: {url.path}')
             return
         if not self._admitted(url.path):

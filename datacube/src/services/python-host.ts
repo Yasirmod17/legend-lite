@@ -24,6 +24,8 @@ import { ExactNumber, fromJson, type ValueSpecification } from '../../../pure-pr
 import { base64 } from '../headless/web.ts';
 import { pageToJson, readPage, type PageDocument } from '../page-document.ts';
 import { RemoteRun } from '../runner.ts';
+import type { InferredModel } from '../infer.ts';
+import type { S3Credentials } from '../remote.ts';
 import type { UploadResult } from '../upload.ts';
 import type { BrowserService, DatabaseService, FrameModel, LivePage, Plane, PlaneService, PlaneWord, Services, Versions } from '../app/services.ts';
 
@@ -50,6 +52,8 @@ export interface PythonPlane {
  *  (chosen once, in Python: R3), and every plane it offers (today only that one: another is step 2c's). */
 export interface PythonOffers {
   readonly files: boolean;
+  /** Whether it reads a page's remote file (the httpfs extension it carries). */
+  readonly remote: boolean;
   readonly plane: PythonPlane;
   readonly planes: readonly PythonPlane[];
 }
@@ -117,10 +121,12 @@ async function frameOf(link: PythonLink, name: string): Promise<FrameModel> {
 
 /** What Python's host offers the page (`services.json`), or why it did not say. */
 export async function askedOffers(link: PythonLink): Promise<PythonOffers> {
-  const said = JSON.parse(await asked(link, 'services.json')) as { files?: unknown; plane?: unknown; planes?: unknown };
-  if (typeof said.files !== 'boolean') throw new Error(`the engine did not say whether it reads a page's file: ${JSON.stringify(said)}`);
+  const said = JSON.parse(await asked(link, 'services.json')) as { files?: unknown; remote?: unknown; plane?: unknown; planes?: unknown };
+  if (typeof said.files !== 'boolean' || typeof said.remote !== 'boolean') {
+    throw new Error(`the engine did not say which of a page's files it reads: ${JSON.stringify(said)}`);
+  }
   if (!Array.isArray(said.planes)) throw new Error(`the engine did not say which planes it offers: ${JSON.stringify(said)}`);
-  return { files: said.files, plane: planeOf(said.plane), planes: said.planes.map(planeOf) };
+  return { files: said.files, remote: said.remote, plane: planeOf(said.plane), planes: said.planes.map(planeOf) };
 }
 
 /** A call carrying JSON to Python: its answer's text, or -- refused -- Python's reason. */
@@ -147,6 +153,12 @@ function pythonDatabase(link: PythonLink, offers: PythonOffers): DatabaseService
         name: file.name, bytes: base64(new Uint8Array(await file.arrayBuffer())), table: options.table,
       })) as UploadResult,
       forgetFile: async (fileName: string, table: string) => { await posted(link, 'forget.json', { name: fileName, table }); },
+    } : {}),
+    // a remote file, read by Python's DuckDB through the httpfs extension Python carries; Python reads it only from a
+    // remote URL, never from its own machine's files
+    ...(offers.remote ? {
+      mountRemote: async (url: string, s3: S3Credentials | undefined, name: string) =>
+        JSON.parse(await posted(link, 'remote.json', { url, name, ...(s3 ? { s3 } : {}) })) as InferredModel,
     } : {}),
   };
 }

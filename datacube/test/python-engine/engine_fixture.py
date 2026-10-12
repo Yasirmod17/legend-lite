@@ -19,6 +19,9 @@ base64) and `trait <json>` (a property set). A second frame, `desks`, is served 
 import argparse
 import base64
 import contextlib
+import functools
+import http.server
+import tempfile
 import io
 import json
 import os
@@ -110,6 +113,17 @@ def main() -> None:
     desks = {'now': pa.table({'desk': ['Rates', 'FX', 'Credit'], 'head': ['Ana', 'Ben', 'Cy']})}
     datacube._session.register(lambda: desks['now'], 'desks', LIVE)
     served_page: dict = {}
+    # a remote file a page reads from Python (step 2b): a Parquet file served by a server on this machine, read by
+    # Python's DuckDB through the httpfs extension the wheel carries -- nothing leaves the machine
+    remote = tempfile.TemporaryDirectory()
+    import pyarrow.parquet as pq
+    pq.write_table(pa.table({'book': ['Dune', 'Emma', 'Ulysses'], 'pages': [412, 474, 730]}), f'{remote.name}/books.parquet')
+
+    class Quiet(http.server.SimpleHTTPRequestHandler):
+        def log_message(self, *_):
+            pass
+    files = http.server.ThreadingHTTPServer(('127.0.0.1', 0), functools.partial(Quiet, directory=remote.name))
+    threading.Thread(target=files.serve_forever, daemon=True).start()
     # two notebook cubes, as ll.DataCube(df) makes them: the page shows both and fetches DataCube's module once
     widgets = {'nb': DataCube(frame, name='nb'), 'nb2': DataCube(frame.slice(0, 3), name='nb2')}
     # and a notebook's PAGE (ll.Page, shown under a cell): a grid grouped by region
@@ -122,6 +136,7 @@ def main() -> None:
         'url': web.url,
         'authorization': web.authorization,
         'link': cube.url,
+        'remote': f'http://127.0.0.1:{files.server_address[1]}/books.parquet',
         'model': table.model,
         'runtime': table.runtime,
         'source': table.source,
@@ -186,6 +201,8 @@ def main() -> None:
         for widget in widgets.values():
             widget.close()
         cube.close()
+        files.shutdown()
+        remote.cleanup()
 
 
 if __name__ == '__main__':

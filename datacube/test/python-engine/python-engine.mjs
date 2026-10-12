@@ -23,7 +23,8 @@ const upstream = readFileSync(runfileFromEnv('UPSTREAM_ARROW_ANSWER'));
 const engine = spawn(fixture, ['--site', site], {
   stdio: ['pipe', 'pipe', 'pipe'],
   env: { ...process.env, LEGEND_LITE_LIBRARY: runfileFromEnv('LEGEND_LITE_LIBRARY'),
-    LEGEND_LITE_DATACUBE: runfileFromEnv('LEGEND_LITE_DATACUBE'), PYTHONUTF8: '1',
+    LEGEND_LITE_DATACUBE: runfileFromEnv('LEGEND_LITE_DATACUBE'),
+    LEGEND_LITE_DUCKDB_EXTENSIONS: runfileFromEnv('LEGEND_LITE_DUCKDB_EXTENSIONS'), PYTHONUTF8: '1',
     PYTHONDONTWRITEBYTECODE: '1' },
 });
 // the engine's own account, in this test's log: a server-side reason is then never invisible
@@ -188,6 +189,23 @@ try {
   undefined, { timeout: 60_000 }).then(() => true, () => false);
   console.log(`${exampleRead ? 'ok  ' : 'FAIL'} an example opened on Python's page is read into Python's DuckDB as a file is`);
   if (!exampleRead) {
+    console.log(`  the page showed: ${(await cube.evaluate(() => document.body.innerText.slice(0, 300)))}`);
+    failed = true;
+  }
+  // A REMOTE FILE, read by Python's DuckDB through the httpfs extension the wheel carries: the app's own Remote section,
+  // a Parquet file a server on this machine serves (nothing leaves the machine)
+  await cube.click('.dc-titlebar-menu');
+  await cube.locator('.dc-menu .dc-menu-item', { has: cube.locator(':scope > .dc-menu-label:text-is("New")') }).hover();
+  await cube.locator('.dc-menu .dc-menu-item', { has: cube.locator(':scope > .dc-menu-label:text-is("Blank Page")') }).click();
+  await cube.locator('.dc-blank .dc-primary').click();
+  await cube.locator('.dc-picker-tab[data-section="remote"]').click();
+  await cube.fill('.dc-picker-url', served.remote);
+  await cube.click('.dc-picker-form .dc-primary');
+  const remoteRead = await cube.waitForFunction(() => document.querySelector('.dc-picker') === null
+    && /\b3 rows\b/.test(document.body.innerText) && document.body.innerText.includes('Ulysses'),
+  undefined, { timeout: 60_000 }).then(() => true, () => false);
+  console.log(`${remoteRead ? 'ok  ' : 'FAIL'} a remote file opened on Python's page is read by Python's DuckDB, through the httpfs it carries`);
+  if (!remoteRead) {
     console.log(`  the page showed: ${(await cube.evaluate(() => document.body.innerText.slice(0, 300)))}`);
     failed = true;
   }

@@ -297,6 +297,9 @@ export function pageSources(d: SourcesOf): PageSources {
   /** A warehouse is read through the page's own pair (its model writer, its Snap): offered where both are. */
   const warehouse = local ? services.warehouse : undefined;
   const modelHome = services.modelHome;
+  /** Who reads a remote file: the page's own database (the tab's, which the file's server must let this page read), or
+   *  its host's (Python's). */
+  const remoteReader: 'page' | 'host' = local ? 'page' : 'host';
   /** Saved queries are read by the page's own compiler and their test data made in its database: offered where both. */
   const queries = local ? services.queries : undefined;
   /** A grid's place from its rows: a planner and the engine it runs on, or the host's runner. */
@@ -720,6 +723,7 @@ export function pageSources(d: SourcesOf): PageSources {
           detect: detectFormat,
           url: src.url,
           keys: true,
+          reader: remoteReader,
           open: async (url, credentials) => {
             got = await openedRemote(url, credentials ? s3Of(credentials) : undefined, saved, several);
             return true;
@@ -900,6 +904,7 @@ export function pageSources(d: SourcesOf): PageSources {
       ...(warehouse ? { database: databaseSection(warehouse, (session, object) => act({ kind: 'table', session, object })) } : {}),
       ...(database.mountRemote ? { remote: {
         detect: detectFormat,
+        reader: remoteReader,
         open: (url: string, credentials?: RemoteCredentials) => act({ kind: 'remote', url, ...(credentials ? { s3: s3Of(credentials) } : {}) }),
       } } : {}),
     };

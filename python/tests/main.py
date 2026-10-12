@@ -11,12 +11,13 @@ from python.runfiles import runfiles
 
 files = runfiles.Create()
 for name in ('LEGEND_LITE_LIBRARY', 'LEGEND_LITE_CORPUS_MODEL', 'LEGEND_LITE_CORPUS_QUERIES', 'LEGEND_LITE_JVM_ANSWERS',
-             'LEGEND_LITE_WHEEL', 'LEGEND_LITE_DEPENDENCY_WHEELS', 'LEGEND_LITE_SITE', 'LEGEND_LITE_DATACUBE'):
+             'LEGEND_LITE_WHEEL', 'LEGEND_LITE_DEPENDENCY_WHEELS', 'LEGEND_LITE_SITE', 'LEGEND_LITE_DATACUBE',
+             'LEGEND_LITE_DUCKDB_EXTENSIONS'):
     if name not in os.environ:
         continue
     # one path, or several separated by spaces ($(rlocationpaths ...)), handed on as os.pathsep separates them (a
-    # resolved path may hold a space); the site is a directory, every other a file
-    is_there = Path.is_dir if name == 'LEGEND_LITE_SITE' else Path.is_file
+    # resolved path may hold a space); the site and DuckDB's extension folder are directories, every other a file
+    is_there = Path.is_dir if name in ('LEGEND_LITE_SITE', 'LEGEND_LITE_DUCKDB_EXTENSIONS') else Path.is_file
     paths = [files.Rlocation(p) for p in os.environ[name].split()]
     for given, path in zip(os.environ[name].split(), paths):
         if not path or not is_there(Path(path)):

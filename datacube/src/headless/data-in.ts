@@ -7,7 +7,8 @@
 
 import { DuckDbEngine } from '../../../engine-client/src/duckdb.ts';
 import { LitePlanner } from '../lite-planner.ts';
-import { dropFileTable, readFileInto } from '../upload.ts';
+import type { S3Credentials } from '../remote.ts';
+import { dropFileTable, mountRemoteView, readFileInto } from '../upload.ts';
 import { hostCalls, hostDatabase, hostWorker } from './host.ts';
 
 /** A file as Python hands it in: where its DuckDB reads it, its name as picked (its format), the table to read it into. */
@@ -34,6 +35,14 @@ export async function ingest(spec: string): Promise<string> {
   const s = JSON.parse(spec) as IngestSpec;
   return using(async ({ engine, writer }) =>
     JSON.stringify(await readFileInto(engine, { at: s.path, fileName: s.name, table: s.table }, writer)));
+}
+
+/** A remote file mounted as the view Python named, through the httpfs extension Python's DuckDB carries: its model,
+ *  as the tab's mount says it, JSON. Python checked its URL is remote before anything ran. */
+export async function mount(spec: string): Promise<string> {
+  const s = JSON.parse(spec) as { readonly url: string; readonly name: string; readonly s3?: S3Credentials };
+  return using(async ({ engine, writer }) =>
+    JSON.stringify(await mountRemoteView(engine, writer, { url: s.url, name: s.name, ...(s.s3 ? { s3: s.s3 } : {}) })));
 }
 
 /** A file's table dropped (its last grid gone, or an open overtaken): the name is free again. */

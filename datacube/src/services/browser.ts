@@ -16,8 +16,7 @@ import { BrowserRecords, MemoryRecords, RuleStore, openCubeDatabase, persistStor
 import { FileHandles } from '../file-handles.ts';
 import type { TableModels } from '../infer.ts';
 import type { ModelOptions } from '../planner.ts';
-import { mountRemote } from '../remote.ts';
-import { catalogColumns, forgetUpload, ingestFile } from '../upload.ts';
+import { forgetUpload, ingestFile, mountRemoteView } from '../upload.ts';
 import { browserBasics, tabTitle } from './browser-basics.ts';
 import type {
   ConfiguredProject,
@@ -104,13 +103,7 @@ function tabDatabase(duck: { readonly engine: DuckDbEngine; readonly db: AsyncDu
   return {
     ingestFile: (file, options) => ingestFile(engine, db, file, tables, options),
     forgetFile: (fileName, table) => forgetUpload(engine, db, fileName, table),
-    mountRemote: async (url, s3, name) => {
-      await mountRemote(engine, { sources: [{ name, url }], ...(s3 ? { s3 } : {}) });
-      // a view of a remote file cannot be rewritten: a column that needs a conversion is left out
-      return tables.tableModel(await catalogColumns(engine, tables, name), {
-        table: name, convertible: false, databaseType: engine.databaseType,
-      });
-    },
+    mountRemote: (url, s3, name) => mountRemoteView(engine, tables, { url, name, ...(s3 ? { s3 } : {}) }),
   };
 }
 

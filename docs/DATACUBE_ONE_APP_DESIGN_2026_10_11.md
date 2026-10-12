@@ -515,10 +515,31 @@ Python's in-process services.
      read in Python, but its queries are refused by Python's execute, which plans in the compatibility mode, where
      Variant's relational spelling is still unprobed ("probe legend-engine, do not guess"). The tab's own planner plans
      it. That is the plan's to settle (Plan Gen).
-   - **Not in it, the second part**: a remote file on Python. Python's DuckDB reads one through its httpfs extension,
-     which it downloads from the internet the first time, and a URL from the page must never name a file on this
-     machine, so only remote schemes may reach it. Both need settling before it is built. Snap reaches Python with a
-     warehouse it can read ("the shared warehouse from Python", IN_FLIGHT).
+   - **Not in it**: Snap reaches Python with a warehouse it can read ("the shared warehouse from Python", IN_FLIGHT).
+
+   **2b, second part, as built (2026-10-12): a remote file on Python** (the user: httpfs "hermetic in the build";
+   remote schemes only).
+   - **httpfs comes with the wheel, never downloaded**: MODULE.bazel pins DuckDB's httpfs extension (1.5.5, matching the
+     duckdb wheel) per platform by content, gunzipped by the warehouse's Java action and laid out as DuckDB's own
+     extension folder (`legend_lite/_duckdb/v1.5.5/<platform>/`, `//python:wheel_duckdb`). Python points its DuckDB
+     there, with auto-install off and that same folder as the only repository: DataCube's `INSTALL httpfs; LOAD httpfs`
+     finds it installed and loads it, and an extension not there is refused, never fetched. The macOS arm64 wheel is
+     25.0 MB, 5.6 MB of it httpfs. Tests are given the folder as `LEGEND_LITE_DUCKDB_EXTENSIONS`; `wheel_test` proves an
+     installed wheel reads a remote file with its own.
+   - **Remote schemes only**: Python reads a page's remote file from `http(s)`, `s3`, `gs`, `r2`, `az`, `abfss` or `hf`
+     URLs, and refuses a path, `file://`, a Windows path or any other scheme before any SQL runs: Python's DuckDB can
+     read this machine's files, and the page must not make it (R4's reason). A file of this machine comes from the page
+     through Files (its bytes), or from Python code. An `http://` URL may still name this machine's or its network's own
+     servers, which Python fetches without the browser's CORS rules; only the engine's own page, with its token, can ask.
+   - **One implementation**: the tab's mount (a view over the file, its model from the catalog) is `upload.ts`'s
+     `mountRemoteView`, which the tab and Python (`remote.json`, `data-in.ts`'s `mount`) both call. Python keeps the
+     view and its model beside the frames' (`reading_file(view=True)`), under a name it chooses as for a file. The
+     Remote section says who reads the file: the page (the server must let it: CORS), or Python.
+   - **Not in it, waiting on a ruling**: Iceberg on Python, which needs DuckDB's `iceberg` and `avro` extensions too, about
+     13-22 MB more per wheel; until then an Iceberg URL is refused by Python's DuckDB, its extension not there.
+   - **Proven**: `headless_test` (Remote) reads a Parquet and a CSV file from a server on this machine, refuses every
+     local form, and offers none without the extensions; `python_engine_test` opens a remote Parquet file through the
+     app's own Remote section on Python's page; `wheel_test` reads one with the installed wheel's own httpfs.
    - **Proven**: `python_engine_test`, on Python's page, chooses a CSV in the app's own picker and reads its rows (the
      SQL Python ran reading the file's table), then opens an example the same way, the CSV's table let go of as its grid
      goes. `headless_test` (Files) covers a file read, served and let go of; two pages asking one name; names held by a

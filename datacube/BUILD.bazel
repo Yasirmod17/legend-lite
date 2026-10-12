@@ -932,6 +932,7 @@ browser_test(
         ":headless_bundle",
         ":upstream_arrow_answer",
         "//native:compiler",
+        "//python:wheel_duckdb",
     ],
     entry_point = "test/python-engine/python-engine.mjs",
     env = {
@@ -940,6 +941,8 @@ browser_test(
         # DataCube's headless bundle, as //python:headless_test is given it: a page's file is read into Python's DuckDB
         # by it (docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md, step 2b)
         "LEGEND_LITE_DATACUBE": "$(rlocationpath :headless_bundle)",
+        # DuckDB's extensions as the wheel carries them: a page's remote file is read through httpfs
+        "LEGEND_LITE_DUCKDB_EXTENSIONS": "$(rlocationpath //python:wheel_duckdb)",
         "LEGEND_LITE_LIBRARY": "$(rlocationpath //native:compiler)",
         "PYTHON_ENGINE_PAGE": "$(rlocationpath :python_engine_page)",
         "UPSTREAM_ARROW_ANSWER": "$(rlocationpath :upstream_arrow_answer)",

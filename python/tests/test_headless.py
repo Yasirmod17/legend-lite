@@ -5,7 +5,9 @@ checked against pandas computing the same, in the same cell, with no browser."""
 
 import base64
 import json
+import os
 import unittest
+from pathlib import Path
 from decimal import Decimal
 
 import pandas as pd
@@ -269,6 +271,78 @@ class Files(unittest.TestCase):
         with mock.patch.dict(os.environ, {'LEGEND_LITE_DATACUBE': os.path.join(os.sep, 'no', 'such', 'bundle.js')}):
             self.assertFalse(json.loads(self.engine.answer('GET', '/services.json', '', None).body)['files'])
             self.assertEqual(self.file('a.csv', 'a\n1\n', 'files_none').status, 404)
+
+
+
+class Remote(unittest.TestCase):
+    """A page's remote file read through a view in the frames' database (the engine's remote.json; step 2b): by
+    DataCube's own mount, through the httpfs extension the wheel carries, read here from a server on this machine --
+    nothing is downloaded. A URL that is not a remote one is refused before anything runs."""
+
+    @classmethod
+    def setUpClass(cls):
+        import functools
+        import http.server
+        import tempfile
+        import threading
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        cls.folder = tempfile.TemporaryDirectory()
+        pq.write_table(pa.table({'desk': ['FX', 'EQ', 'FX'], 'qty': [1, 2, 3]}), f'{cls.folder.name}/trades.parquet')
+        Path(cls.folder.name, 'desks.csv').write_text('desk,head\nFX,Ana\nEQ,Ben\n')
+        class Quiet(http.server.SimpleHTTPRequestHandler):
+            def log_message(self, *_):
+                pass
+        handler = functools.partial(Quiet, directory=cls.folder.name)
+        cls.server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), handler)
+        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+        cls.base = f'http://127.0.0.1:{cls.server.server_address[1]}'
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.folder.cleanup()
+
+    def setUp(self):
+        self.frames = datacube._session.frames
+        self.engine = Engine(self.frames, headless=datacube._session.headless)
+
+    def mount(self, url, name='remote'):
+        return self.engine.answer('POST', '/remote.json', '', json.dumps({'url': url, 'name': name}))
+
+    def test_the_engine_says_it_reads_remote_files(self):
+        self.assertTrue(json.loads(self.engine.answer('GET', '/services.json', '', None).body)['remote'])
+
+    def test_a_remote_parquet_and_csv_are_read_through_views_their_models_served(self):
+        for url, name, count in ((f'{self.base}/trades.parquet', 'remote_trades', 3), (f'{self.base}/desks.csv', 'remote_desks', 2)):
+            with self.subTest(url=url):
+                answer = self.mount(url, name)
+                self.assertEqual(answer.status, 200, answer.body[:300])
+                model = json.loads(answer.body)['model']
+                self.assertEqual(self.frames.connection.execute(f'SELECT count(*) FROM {name}').fetchone()[0], count)
+                with self.frames.serving() as models:
+                    self.assertEqual(models[name], model)
+        # read with the extension the wheel carries, from its folder: none was downloaded
+        httpfs = self.frames.connection.execute(
+            "SELECT loaded, install_path FROM duckdb_extensions() WHERE extension_name = 'httpfs'").fetchone()
+        self.assertTrue(httpfs[0])
+        self.assertTrue(httpfs[1].startswith(os.environ['LEGEND_LITE_DUCKDB_EXTENSIONS']), httpfs[1])
+
+    def test_a_url_that_is_not_remote_is_refused_before_anything_runs(self):
+        local = Path(self.folder.name, 'desks.csv')
+        for url in (str(local), local.as_uri(), 'C:\\Users\\x\\secret.csv', 'ftp://127.0.0.1/x.csv', 'http://', '~/.ssh/id_rsa'):
+            with self.subTest(url=url):
+                answer = self.mount(url, 'remote_refused')
+                self.assertEqual(answer.status, 400, answer.body[:300])
+                self.assertIn(b'never from this machine', answer.body)
+        self.assertFalse(self.frames.taken('remote_refused'))
+
+    def test_without_the_extensions_the_engine_reads_no_remote_file(self):
+        from unittest import mock
+        with mock.patch.dict(os.environ, {'LEGEND_LITE_DUCKDB_EXTENSIONS': os.path.join(os.sep, 'no', 'such', 'folder')}):
+            self.assertFalse(json.loads(self.engine.answer('GET', '/services.json', '', None).body)['remote'])
+            self.assertEqual(self.mount(f'{self.base}/trades.parquet', 'remote_none').status, 404)
 
 
 if __name__ == '__main__':
