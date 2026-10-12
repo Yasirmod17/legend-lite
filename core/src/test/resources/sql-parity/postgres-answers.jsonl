@@ -1744,6 +1744,32 @@
 {"id":"lite/json/jsonb_equality_is_refused","columns":["id"],"rows":[["i1"]]}
 {"id":"lite/json/containment_is_refused","columns":["id"],"rows":[["i1"]]}
 {"id":"lite/json/a_text_column_has_no_arrow","error":{"state":"42883","message":"ERROR: operator does not exist: character varying -> unknown"}}
+{"id":"lite/lateral/series_alone_named_by_its_alias","columns":["g"],"rows":[["i1"],["i2"],["i3"],["i4"]]}
+{"id":"lite/lateral/series_alone_named_by_the_function","columns":["generate_series"],"rows":[["i3"],["i4"],["i5"]]}
+{"id":"lite/lateral/series_with_steps_up_and_down","columns":["up","down"],"rows":[["i1","i-3"],["i1","i0"],["i1","i3"],["i5","i-3"],["i5","i0"],["i5","i3"],["i9","i-3"],["i9","i0"],["i9","i3"]]}
+{"id":"lite/lateral/series_that_is_empty","columns":["n"],"rows":[["i0"]]}
+{"id":"lite/lateral/series_step_zero_is_an_error","error":{"state":"22023","message":"ERROR: step size cannot equal zero"}}
+{"id":"lite/lateral/series_per_row_with_a_null_bound","columns":["id","v"],"rows":[["i1","i1"],["i2","i1"],["i3","i1"],["i3","i2"],["i4","i1"],["i4","i2"],["i5","i1"],["i5","i2"],["i5","i3"],["i6","i1"],["i6","i2"],["i6","i3"],["i8","i1"],["i9","i1"],["i9","i2"],["i10","i1"],["i10","i2"],["i10","i3"]]}
+{"id":"lite/lateral/series_per_row_from_an_expression","columns":["id","v"],"rows":[["i1","i2"],["i1","i3"],["i2","i4"],["i2","i5"],["i3","i6"],["i3","i7"],["i4","i8"],["i4","i9"],["i5","i10"],["i5","i11"],["i6","i12"],["i6","i13"],["i7","i14"],["i7","i15"],["i8","i16"],["i8","i17"],["i9","i18"],["i9","i19"],["i10","i20"],["i10","i21"]]}
+{"id":"lite/lateral/unnest_constants_per_row","columns":["name","x"],"rows":[["sEngineering","sa"],["sEngineering","sb"],["sMarketing","sa"],["sMarketing","sb"]]}
+{"id":"lite/lateral/unnest_row_values","columns":["id","v"],"rows":[["i1","i1"],["i1","i10"],["i2","i2"],["i2","i20"],["i3","i3"],["i3","i30"]]}
+{"id":"lite/lateral/unnest_decimals","columns":["v"],"rows":[["d-0.5"],["d1.50"],["d2.25"]]}
+{"id":"lite/lateral/unnest_a_nullable_element_is_refused","columns":["v"],"rows":[["i30"],["i25"],["i35"],["i28"],["i45"],["i32"],[null],["i50"],["i22"],["i38"]]}
+{"id":"lite/lateral/string_to_array_rows","columns":["id","part"],"rows":[["i1","sE"],["i1","seeri"],["i1","sg"],["i1","sgi"],["i2","sMarketi"],["i2","sg"],["i3","sSales"],["i4","sHR"],["i5","sFi"],["i5","sa"],["i5","sce"],["i6","sLegal"],["i7","sSupport"],["i8","sResearch"],["i9","sOperatio"],["i9","ss"],["i10","s"],["i10","sDesig"]]}
+{"id":"lite/lateral/string_to_array_edges","columns":["x"],"rows":[["s"],["s"],["sa"],["sb"]]}
+{"id":"lite/lateral/string_to_array_of_an_empty_string_has_no_rows","columns":["n"],"rows":[["i0"]]}
+{"id":"lite/lateral/string_to_array_multi_character_delimiter","columns":["x"],"rows":[["sk1"],["sk2"],["sk3"]]}
+{"id":"lite/lateral/lateral_top_one_per_department","columns":["name","top"],"rows":[["sEngineering","sBob"],["sMarketing","sDiana"],["sSales","sJack"]]}
+{"id":"lite/lateral/lateral_aggregate_per_row","columns":["id","n"],"rows":[["i1","i2"],["i2","i2"],["i3","i1"],["i4","i1"],["i5","i2"],["i6","i1"],["i7","i0"],["i8","i0"],["i9","i0"],["i10","i1"]]}
+{"id":"lite/lateral/lateral_join_on","columns":["id","amount"],"rows":[["i2","d620.00"],["i3","d500.00"],["i4","d450.00"],["i5","d1200.00"]]}
+{"id":"lite/lateral/lateral_name_both_sides_hold","columns":["id","order_id"],"rows":[["i1","i1"],["i1","i2"],["i2","i3"],["i2","i10"],["i3","i4"],["i4","i8"],["i5","i5"],["i5","i6"],["i6","i9"],["i10","i7"]]}
+{"id":"lite/lateral/lateral_reads_the_item_before_it_twice","columns":["id","v","w"],"rows":[["i1","i1","i101"],["i1","i2","i201"],["i2","i1","i102"],["i2","i2","i202"]]}
+{"id":"lite/lateral/left_join_lateral_is_refused","columns":["id","amount"],"rows":[["i1","d150.00"],["i1","d250.00"],["i2","d75.50"],["i2","d620.00"],["i3","d500.00"],["i4","d450.00"],["i5","d300.00"],["i5","d1200.00"],["i6","d175.25"],["i7",null],["i8",null],["i9",null],["i10","d99.99"]]}
+{"id":"lite/lateral/a_subquery_without_lateral_cannot_read_the_items_before_it","error":{"state":"42P01","message":"ERROR: invalid reference to FROM-clause entry for table \"p\""}}
+{"id":"lite/lateral/no_from_is_one_row","columns":["three","xy","yes"],"rows":[["i3","sxy","btrue"]]}
+{"id":"lite/lateral/no_from_filtered_away","columns":["one"],"rows":[]}
+{"id":"lite/lateral/no_from_star_is_an_error","error":{"state":"42601","message":"ERROR: SELECT * with no tables specified is not valid"}}
+{"id":"lite/lateral/lateral_select_without_from","columns":["id","w"],"rows":[["i1","i100"],["i2","i200"],["i3","i300"]]}
 {"id":"lite/subqueries/in_subquery","columns":["name"],"rows":[["sAlice"],["sBob"],["sCharlie"],["sDiana"],["sEve"],["sFrank"],["sJack"]]}
 {"id":"lite/subqueries/not_in_subquery","columns":["name"],"rows":[["sGrace"],["sHank"],["sIvy"]]}
 {"id":"lite/subqueries/not_in_a_null_row_is_never_true","columns":["name"],"rows":[]}

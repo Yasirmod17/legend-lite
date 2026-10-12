@@ -356,6 +356,21 @@ class SqlToPureTest {
                 refusal("select ID -> 'a' from tb('s::DB.T')").kind());
     }
 
+    // ------------------------------------------------------------------ LATERAL, set-returning functions, no FROM
+
+    @Test
+    void aFunctionInFromIsAFlattenAndReadsTheItemsBeforeItThroughLateral() {
+        assertEquals("1->range(3 + 1, 2)->flatten(~g)->select(~[g])",
+                pure("select g from generate_series(1, 3, 2) as g"));
+        assertEquals("#>{s::DB.T}#->lateral(r|[$r.ID, 2]->flatten(~u)->rename(~u, ~x))->select(~[ID, x])",
+                pure("select ID, u.x from tb('s::DB.T') t, unnest(array[ID, 2]) as u(x)"));
+        assertEquals("#>{s::DB.T}#->lateral(r|#>{s::DB.T}#->filter(r1|$r1.ID < $r.ID)->aggregate(~[n:r1|1:y1|$y1->count()])->select(~[n]))->select(~[ID, n])",
+                pure("select ID, s.n from tb('s::DB.T') t cross join lateral (select count(*) as n"
+                + " from tb('s::DB.T') q where q.ID < t.ID) s"));
+        assertEquals("#TDS{\n_sql_row\n1\n}#->extend(~[three:r|1 + 2])->select(~[three])",
+                pure("select 1 + 2 as three"));
+    }
+
     @Test
     void isDistinctFromIsPureEquality() {
         assertEquals("#>{s::DB.T}#->filter(r|$r.firstName != $r.dept)->select(~[ID])",

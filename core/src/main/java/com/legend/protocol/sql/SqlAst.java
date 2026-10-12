@@ -126,7 +126,7 @@ public final class SqlAst {
 
     /** {@code (query) [[AS] alias [(columns)]]}: Postgres 16 lets the alias go unwritten. */
     public record SubqueryFrom(Statement query, @com.legend.base.Nullable Ident alias, List<Ident> columnAliases,
-            Pos pos) implements FromItem {
+            boolean lateral, Pos pos) implements FromItem {
         public SubqueryFrom {
             columnAliases = List.copyOf(columnAliases);
         }
@@ -153,7 +153,7 @@ public final class SqlAst {
     /** A value expression. */
     public sealed interface Expr permits ColumnRef, IntegerLit, NumericLit, StringLit, BooleanLit, NullLit, TypedLit,
             Param, Unary, Binary, Operator, IsNull, IsTruth, IsDistinct, InList, Between, Like, Case, FunctionCall,
-            Cast, ScalarSubquery, Exists, InSubquery, Quantified, Window, Subscript {
+            Cast, ScalarSubquery, Exists, InSubquery, Quantified, Window, Subscript, ArrayConstructor {
         Pos pos();
     }
 
@@ -211,6 +211,13 @@ public final class SqlAst {
      *  means is the translator's business, which refuses those it does not know. */
     public record Operator(String operator, @com.legend.base.Nullable Expr left, Expr right, Pos pos)
             implements Expr {
+    }
+
+    /** {@code ARRAY[e, ...]}: an array of the elements' values. */
+    public record ArrayConstructor(List<Expr> elements, Pos pos) implements Expr {
+        public ArrayConstructor {
+            elements = List.copyOf(elements);
+        }
     }
 
     /** A subscript: {@code base[index]} (a jsonb member or element, or an array's element). */

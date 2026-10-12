@@ -421,7 +421,20 @@ public final class SqlParser {
     private SqlAst.FromItem fromPrimary() {
         Token t = peek();
         if (t.is("lateral")) {
-            throw unsupported("LATERAL is");
+            // LATERAL (subquery): it sees the FROM items before it; a function in FROM always does
+            at++;
+            if (peek().kind() == Kind.LPAREN && queryAhead(1)) {
+                Token open = next();
+                SqlAst.Statement query = statement();
+                expect(Kind.RPAREN);
+                Alias alias = alias();
+                return new SqlAst.SubqueryFrom(query, alias.name(), alias.columns(), true, open.pos());
+            }
+            SqlAst.FromItem item = fromPrimary();
+            if (!(item instanceof SqlAst.TableFunction)) {
+                throw new SqlSyntaxException("syntax error at or near \"" + t.text() + "\"", t.pos());
+            }
+            return item;
         }
         if (t.is("only")) {
             throw unsupported("FROM ONLY is");
@@ -432,7 +445,7 @@ public final class SqlParser {
                 SqlAst.Statement query = statement();
                 expect(Kind.RPAREN);
                 Alias alias = alias();
-                return new SqlAst.SubqueryFrom(query, alias.name(), alias.columns(), t.pos());
+                return new SqlAst.SubqueryFrom(query, alias.name(), alias.columns(), false, t.pos());
             }
             at++;
             SqlAst.FromItem inner = fromItem();
@@ -905,7 +918,23 @@ public final class SqlParser {
                 expect(Kind.RPAREN);
                 return new SqlAst.Exists(query, t.pos());
             }
-            case "array" -> throw unsupported("ARRAY constructors are");
+            case "array" -> {
+                if (peekAt(1).kind() != Kind.LBRACKET) {
+                    throw unsupported("ARRAY (subquery) is");
+                }
+                at += 2;
+                List<SqlAst.Expr> elements = new ArrayList<>();
+                if (peek().kind() != Kind.RBRACKET) {
+                    do {
+                        if (peek().kind() == Kind.LBRACKET) {
+                            throw unsupported("multidimensional arrays are");
+                        }
+                        elements.add(expr());
+                    } while (accept(Kind.COMMA));
+                }
+                expect(Kind.RBRACKET);
+                return new SqlAst.ArrayConstructor(elements, t.pos());
+            }
             case "interval" -> throw unsupported("INTERVAL constants are");
             case "row" -> throw unsupported("ROW constructors are");
             default -> {

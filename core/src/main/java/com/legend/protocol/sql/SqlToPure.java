@@ -520,15 +520,28 @@ public final class SqlToPure {
     // ------------------------------------------------------------------ the query
 
     private Rel select(SqlAst.Select s) {
-        if (s.from().isEmpty()) {
-            throw SqlTranslationException.unsupported("a query without FROM is not supported yet", s.pos());
-        }
+
         if (s.items().isEmpty()) {
             throw SqlTranslationException.unsupported("a select list with no columns is not supported yet", s.pos());
         }
-        Source src = null;
+        if (s.from().isEmpty() && env.outer() != null) {
+            // legend-lite cannot yet lower a row of an enclosing query read by a one-row relation of its own
+            throw SqlTranslationException.unsupported("a subquery without FROM is not supported yet", s.pos());
+        }
+        if (s.from().isEmpty() && s.items().stream().anyMatch(i -> i instanceof SqlAst.AllColumns)) {
+            throw SqlTranslationException.invalid("SELECT * with no tables specified is not valid", s.pos());
+        }
+        // no FROM: one row, of no columns the query can name
+        String one = "\n" + SYNTHETIC + "row\n1\n";
+        Source src = s.from().isEmpty() ? new Source(com.legend.protocol.spec.TdsLiteral.of(one, "#TDS" + one + "#",
+                null), List.of(), List.of()) : null;
         for (SqlAst.FromItem item : s.from()) {
-            // a comma is a cross join, binding looser than JOIN (the ON of a JOIN sees its own two sides only)
+            // a comma is a cross join, binding looser than JOIN (the ON of a JOIN sees its own two sides only); a
+            // function or a LATERAL subquery reads the items before it
+            if (src != null && lateral(item)) {
+                src = lateralJoin(src, item, SqlAst.JoinType.CROSS, null, item.pos());
+                continue;
+            }
             Source next = from(item);
             src = src == null ? next : join(src, next, SqlAst.JoinType.CROSS, null, List.of(), false, item.pos());
         }
@@ -560,6 +573,8 @@ public final class SqlToPure {
                 SqlAst.Ident alias = t.alias();
                 yield bound(cte, alias != null ? alias : t.name().get(0), t.columnAliases(), t.pos());
             }
+            case SqlAst.TableFunction f when !isSourceFunction(f) -> functionSource(f, new Input(List.of(), List.of(),
+                    "FROM"));
             case SqlAst.TableFunction f -> {
                 ValueSpecification relation = tableFunction(f);
                 List<OutCol> columns = new ArrayList<>();
@@ -574,6 +589,8 @@ public final class SqlToPure {
                 Rel rel = new SqlToPure(sources, env.with(env.ctes())).statement(q.query());
                 yield bound(rel, q.alias(), q.columnAliases(), q.pos());
             }
+            case SqlAst.Join j when lateral(j.right()) && j.using().isEmpty() && !j.natural() ->
+                    lateralJoin(from(j.left()), j.right(), j.type(), j.on(), j.pos());
             case SqlAst.Join j -> join(from(j.left()), from(j.right()), j.type(), j.on(), j.using(), j.natural(),
                     j.pos());
         };
@@ -676,23 +693,9 @@ public final class SqlToPure {
         return AppliedFunction.tableReference(p.substring(0, dot), p.substring(dot + 1), null);
     }
 
-    /** Two FROM items joined: the right side's columns renamed where the left has the name (a Pure relation's
-     *  column names are distinct), then Pure's join, its condition over the two sides' rows. An outer join's
-     *  other side may be NULL; a USING or NATURAL join's columns are merged, shown once, first. */
-    private Source join(Source left, Source right, SqlAst.JoinType type, SqlAst.@com.legend.base.Nullable Expr on,
-            List<SqlAst.Ident> using, boolean natural, SqlAst.Pos pos) {
-        for (Binding l : left.bindings()) {
-            for (Binding r : right.bindings()) {
-                SqlAst.Ident lq = l.qualifier();
-                SqlAst.Ident rq = r.qualifier();
-                if (lq != null && rq != null && (lq.quoted() ? lq.text() : fold(lq.text())).equals(
-                        rq.quoted() ? rq.text() : fold(rq.text()))) {
-                    throw SqlTranslationException.invalid("table name \"" + rq.text() + "\" specified more than once",
-                            rq.pos());
-                }
-            }
-        }
-        // the right side's columns, renamed apart from the left's
+    /** {@code right} with its columns renamed apart from {@code left}'s (a Pure relation's column names are
+     *  distinct): a taken name becomes the qualifier's {@code t_name}, or a fresh one. */
+    private Source apart(Source left, Source right) {
         Set<String> taken = new HashSet<>();
         left.bindings().forEach(b -> b.columns().forEach(c -> taken.add(c.col().name())));
         right.bindings().forEach(b -> b.columns().forEach(c -> taken.add(c.col().name())));
@@ -729,6 +732,206 @@ public final class SqlToPure {
             String to = renames.get(c.name());
             rightStar.add(to == null ? c : new Col(to, c.kind(), c.nullable(), c.var(), c.label()));
         }
+        return new Source(rightRel, rights, rightStar);
+    }
+
+    /**
+     * {@code left, item} where the item reads the left's rows: a function in FROM (always lateral in Postgres) or
+     * {@code LATERAL (subquery)}, by comma, {@code CROSS JOIN} or {@code [INNER] JOIN ... ON}. Pure's {@code lateral}:
+     * the item's relation for each left row, that row's columns read through the lambda's parameter, the rows paired.
+     */
+    private Source lateralJoin(Source left, SqlAst.FromItem item, SqlAst.JoinType type,
+            SqlAst.@com.legend.base.Nullable Expr on, SqlAst.Pos pos) {
+        if (type != SqlAst.JoinType.CROSS && type != SqlAst.JoinType.INNER) {
+            throw SqlTranslationException.unsupported(type + " JOIN LATERAL is not supported yet", pos);
+        }
+        Input outer = new Input(left.bindings(), left.star(), "a LATERAL item");
+        Source right = switch (item) {
+            case SqlAst.TableFunction f -> functionSource(f, outer);
+            case SqlAst.SubqueryFrom q -> bound(new SqlToPure(sources, new Env(env.ctes(), outer, row, env.level() + 1))
+                    .statement(q.query()), q.alias(), q.columnAliases(), q.pos());
+            default -> throw new IllegalStateException("not a lateral item: " + item);
+        };
+        Source apart = apart(left, right);
+        List<Binding> bindings = new ArrayList<>(left.bindings());
+        bindings.addAll(apart.bindings());
+        List<Col> star = new ArrayList<>(left.star());
+        star.addAll(apart.star());
+        ValueSpecification relation = call("lateral", left.relation(), lambda(row, apart.relation()));
+        if (on != null) {
+            relation = call("filter", relation, lambda(row, condition(on, new Input(bindings, star, "JOIN/ON"),
+                    "JOIN/ON")));
+        }
+        return new Source(relation, bindings, star);
+    }
+
+    /** True iff {@code item} may read the FROM items before it: a function (not the source function) or a LATERAL
+     *  subquery. */
+    private static boolean lateral(SqlAst.FromItem item) {
+        return item instanceof SqlAst.TableFunction f && !isSourceFunction(f)
+                || item instanceof SqlAst.SubqueryFrom q && q.lateral();
+    }
+
+    private static boolean isSourceFunction(SqlAst.TableFunction f) {
+        return f.name().size() == 1 && TABLE_FUNCTION.equals(functionName(f.name().get(0)));
+    }
+
+    /** A set-returning function in FROM, under its alias: its one column named by the column alias, else the table
+     *  alias, else the function (Postgres's naming). */
+    private Source functionSource(SqlAst.TableFunction f, Scope scope) {
+        String fn = functionName(f.name().get(f.name().size() - 1));
+        SqlAst.Ident alias = f.alias();
+        String column = alias != null ? alias.quoted() ? alias.text() : fold(alias.text()) : fn;
+        Rel rel = setReturning(f, fn, column, scope);
+        return bound(rel, alias != null ? alias : f.name().get(f.name().size() - 1), f.columnAliases(), f.pos());
+    }
+
+    /** {@code generate_series} and {@code unnest} as Pure's {@code flatten} of a collection: one row per element. */
+    private Rel setReturning(SqlAst.TableFunction f, String fn, String column, Scope scope) {
+        if (f.name().size() != 1) {
+            throw SqlTranslationException.unsupported("function \"" + f.name().get(f.name().size() - 1).text()
+                    + "\" in FROM is not supported yet", f.pos());
+        }
+        List<SqlAst.Expr> argExprs = new ArrayList<>();
+        for (SqlAst.Arg a : f.args()) {
+            if (a.name() != null) {
+                throw SqlTranslationException.unsupported("named arguments are not supported yet", f.pos());
+            }
+            argExprs.add(a.value());
+        }
+        ValueSpecification collection;
+        Kind kind;
+        switch (fn) {
+            case "generate_series" -> {
+                collection = series(argExprs, scope, f.pos());
+                kind = Kind.INTEGER;
+            }
+            case "unnest" -> {
+                if (argExprs.size() != 1) {
+                    throw SqlTranslationException.unsupported("unnest of " + argExprs.size() + " arrays is not"
+                            + " supported yet", f.pos());
+                }
+                Tx elements = array(argExprs.get(0), scope);
+                collection = elements.vs();
+                kind = elements.kind();
+            }
+            default -> throw SqlTranslationException.unsupported("function \"" + fn + "\" in FROM is not supported yet",
+                    f.pos());
+        }
+        return new Rel(call("flatten", collection, colSpec(column)), List.of(new OutCol(column, kind, false)));
+    }
+
+    /** {@code generate_series(start, stop [, step])} of integers, Pure's {@code range} (whose stop is exclusive): no
+     *  rows when an argument is NULL. The step is a constant: zero is Postgres's error. */
+    private ValueSpecification series(List<SqlAst.Expr> args, Scope scope, SqlAst.Pos pos) {
+        if (args.size() != 2 && args.size() != 3) {
+            throw SqlTranslationException.unsupported("generate_series of " + args.size() + " arguments is not"
+                    + " supported yet", pos);
+        }
+        long step = 1;
+        if (args.size() == 3) {
+            SqlAst.Expr s = args.get(2);
+            java.math.BigInteger k = s instanceof SqlAst.IntegerLit n ? n.value()
+                    : s instanceof SqlAst.Unary u && u.op() == SqlAst.UnaryOp.MINUS
+                            && u.operand() instanceof SqlAst.IntegerLit n ? n.value().negate() : null;
+            if (k == null) {
+                throw SqlTranslationException.unsupported("a generate_series step other than an integer constant is"
+                        + " not supported yet", s.pos());
+            }
+            if (k.signum() == 0) {
+                throw SqlTranslationException.invalid("step size cannot equal zero", s.pos());
+            }
+            step = k.longValueExact();
+        }
+        List<Tx> bounds = new ArrayList<>();
+        for (SqlAst.Expr e : args.subList(0, 2)) {
+            Tx t = tx(e, scope, row);
+            if (t.kind() != Kind.INTEGER) {
+                throw SqlTranslationException.unsupported("generate_series of values other than integers is not"
+                        + " supported yet", e.pos());
+            }
+            bounds.add(t);
+        }
+        long by = step;
+        Tx range = strict(Kind.INTEGER, bounds, v -> call("range", v.get(0),
+                AppliedFunction.infixRun("plus", List.of(v.get(1), new CInteger(by > 0 ? 1L : -1L))),
+                new CInteger(by)));
+        return range.vs();
+    }
+
+    /** An array, as Pure's collection of its elements: {@code ARRAY[...]} of values that are never NULL (a Pure
+     *  collection holds no NULL), or {@code string_to_array(text, 'delimiter')}. */
+    private Tx array(SqlAst.Expr e, Scope scope) {
+        if (e instanceof SqlAst.ArrayConstructor a) {
+            if (a.elements().isEmpty()) {
+                throw SqlTranslationException.unsupported("an empty ARRAY[] is not supported yet", a.pos());
+            }
+            List<ValueSpecification> values = new ArrayList<>();
+            Kind kind = null;
+            for (SqlAst.Expr x : a.elements()) {
+                Tx t = tx(x, scope, row);
+                if (t.nullable() || t.kind() == Kind.NULL) {
+                    throw SqlTranslationException.unsupported("an array element that may be NULL is not supported yet"
+                            + " (a Pure collection holds no NULL)", x.pos());
+                }
+                if (t.kind() == Kind.OTHER || t.kind() == Kind.BOOLEAN && t.whenFalse() != null) {
+                    throw SqlTranslationException.unsupported("an array of this type is not supported yet", x.pos());
+                }
+                if (kind != null && kind != t.kind()) {
+                    throw SqlTranslationException.unsupported("an array of " + kind.name().toLowerCase(Locale.ROOT)
+                            + " and " + t.kind().name().toLowerCase(Locale.ROOT) + " values is not supported yet",
+                            x.pos());
+                }
+                kind = t.kind();
+                values.add(t.vs());
+            }
+            return Tx.value(new PureCollection(values), java.util.Objects.requireNonNull(kind), false);
+        }
+        if (e instanceof SqlAst.FunctionCall f && f.name().size() == 1
+                && functionName(f.name().get(0)).equals("string_to_array")) {
+            if (f.args().size() != 2) {
+                throw SqlTranslationException.unsupported("string_to_array with a null string is not supported yet",
+                        f.pos());
+            }
+            if (!(f.args().get(1) instanceof SqlAst.StringLit d) || d.value().isEmpty()) {
+                throw SqlTranslationException.unsupported("a string_to_array delimiter other than a non-empty constant"
+                        + " is not supported yet", f.args().get(1).pos());
+            }
+            Tx text = tx(f.args().get(0), scope, row);
+            if (text.kind() != Kind.STRING) {
+                throw SqlTranslationException.invalid("function string_to_array needs text", f.args().get(0).pos());
+            }
+            // an empty text is an empty array in Postgres
+            return strict(Kind.STRING, List.of(text), v -> call("if", call("equal", v.get(0), new CString("")),
+                    thunk(empty()), thunk(call("split", v.get(0), new CString(d.value())))));
+        }
+        throw SqlTranslationException.unsupported("unnest of an array other than ARRAY[...] or string_to_array(...) is"
+                + " not supported yet", e.pos());
+    }
+
+    /** Two FROM items joined: the right side's columns renamed where the left has the name (a Pure relation's
+     *  column names are distinct), then Pure's join, its condition over the two sides' rows. An outer join's
+     *  other side may be NULL; a USING or NATURAL join's columns are merged, shown once, first. */
+    private Source join(Source left, Source right, SqlAst.JoinType type, SqlAst.@com.legend.base.Nullable Expr on,
+            List<SqlAst.Ident> using, boolean natural, SqlAst.Pos pos) {
+        for (Binding l : left.bindings()) {
+            for (Binding r : right.bindings()) {
+                SqlAst.Ident lq = l.qualifier();
+                SqlAst.Ident rq = r.qualifier();
+                if (lq != null && rq != null && (lq.quoted() ? lq.text() : fold(lq.text())).equals(
+                        rq.quoted() ? rq.text() : fold(rq.text()))) {
+                    throw SqlTranslationException.invalid("table name \"" + rq.text() + "\" specified more than once",
+                            rq.pos());
+                }
+            }
+        }
+        Source apart = apart(left, right);
+        Set<String> taken = new HashSet<>();
+        left.bindings().forEach(b -> b.columns().forEach(c -> taken.add(c.col().name())));
+        apart.bindings().forEach(b -> b.columns().forEach(c -> taken.add(c.col().name())));
+        ValueSpecification rightRel = apart.relation();
+        List<Binding> rights = apart.bindings();
+        List<Col> rightStar = apart.star();
         // USING and NATURAL: the columns the two sides share by name
         List<SqlAst.Ident> shared = new ArrayList<>(using);
         if (natural) {
@@ -1625,6 +1828,7 @@ public final class SqlToPure {
             case SqlAst.Case c -> "case";
             // a subscripted value keeps its name (Postgres's FigureColname reads through the indirection)
             case SqlAst.Subscript sub -> defaultName(sub.base());
+            case SqlAst.ArrayConstructor a -> "array";
             case SqlAst.Cast c -> defaultName(c.operand()).equals("?column?") ? c.type().name()
                     : defaultName(c.operand());
             default -> "?column?";
@@ -2085,6 +2289,8 @@ public final class SqlToPure {
             case SqlAst.Operator o when o.left() != null && JSON_OPERATORS.contains(o.operator()) ->
                     jsonOperator(o, scope, row);
             case SqlAst.Subscript sub -> subscript(sub, scope, row);
+            case SqlAst.ArrayConstructor a -> throw SqlTranslationException.unsupported("arrays other than unnest's"
+                    + " argument are not supported yet", a.pos());
             case SqlAst.Operator o -> throw SqlTranslationException.unsupported((REGEX_OPERATORS.contains(o.operator())
                     ? "regular expression operators (~, ~*, !~, !~*) are" : "the operator " + o.operator() + " is")
                     + " not supported yet", o.pos());
@@ -3523,6 +3729,7 @@ public final class SqlToPure {
             case SqlAst.Quantified q -> "quantified@" + q.pos().line() + ":" + q.pos().column();
             case SqlAst.Window w -> "window@" + w.pos().line() + ":" + w.pos().column();
             case SqlAst.Subscript sub -> "subscript(" + canon(sub.base(), in) + "," + canon(sub.index(), in) + ")";
+            case SqlAst.ArrayConstructor a -> "array(" + list(a.elements(), in) + ")";
         };
     }
 
@@ -3599,6 +3806,7 @@ public final class SqlToPure {
                 yield all;
             }
             case SqlAst.Subscript sub -> List.of(sub.base(), sub.index());
+            case SqlAst.ArrayConstructor a -> a.elements();
         };
     }
 

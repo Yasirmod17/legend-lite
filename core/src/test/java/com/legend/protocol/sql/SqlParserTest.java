@@ -327,7 +327,7 @@ class SqlParserTest {
     @Test
     void notYetSupportedFormsAreRefusedByName() {
         List<String> forms = List.of(
-                "select a from t, lateral (select 1) x", "LATERAL is not supported yet",
+                "select a from unnest(x) with ordinality", "WITH ORDINALITY is not supported yet",
                 "values (1)", "VALUES lists are not supported yet",
                 "select a = any(array[1]) from t", "ANY, SOME and ALL over an array are not supported yet",
                 "select E'x'", "escape string constants (E'...') are not supported yet",
