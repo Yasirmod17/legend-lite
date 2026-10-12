@@ -1243,6 +1243,8 @@ final class ArchitectureTest {
                 // -Dlegend.diagnostics=primitives; measurement only, never verdict-affecting (the SqlTypeCensus
                 // pattern)
                 "com.legend.exec.PrimitiveCensus.TALLY",
+                // and its per-test sets under primitives=per-test (the same day): bounded by tests x vocabulary
+                "com.legend.exec.PrimitiveCensus.TESTS",
                 // serializer registry: written once at static init; the
                 // ConcurrentHashMap spelling is for safe publication
                 "com.legend.server.serial.SerializerRegistry.SERIALIZERS",

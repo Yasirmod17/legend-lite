@@ -27,6 +27,8 @@ import java.util.concurrent.atomic.LongAdder;
  * statement succeeded. At the JVM's exit the tally is printed, one line a primitive:
  * {@code [primitives] ok=<n> fail=<m> <primitive>}. The coverage map joins a corpus run's tally with each database's
  * PCT run's: a primitive the corpus uses that no statement carried to success on a database is that database's gap.
+ * Under {@code primitives=per-test} each attributed test's primitives are printed too
+ * ({@code [primitives-test] <test><TAB><primitive>}), the input of a subset of tests that covers them all.
  */
 public final class PrimitiveCensus {
 
@@ -35,6 +37,21 @@ public final class PrimitiveCensus {
     private static final boolean ON = com.legend.diagnostics.Diagnostics.on("primitives");
 
     private static final Map<String, LongAdder[]> TALLY = new ConcurrentHashMap<>();
+
+    /** {@code primitives=per-test}: also each attributed test's primitives ({@link #attributeTo}, which the corpus
+     *  sets per test), from its statements that succeeded -- a coverage-driven subset's input. */
+    private static final boolean PER_TEST = "per-test".equals(com.legend.diagnostics.Diagnostics.value("primitives"));
+
+    private static final Map<String, Set<String>> TESTS = new ConcurrentHashMap<>();
+
+    /** Who is running (a final holder: the static-final rule); injected, as CanonicalDivergence's is. */
+    private static final java.util.concurrent.atomic.AtomicReference<java.util.function.Supplier<String>> CONTEXT =
+            new java.util.concurrent.atomic.AtomicReference<>(() -> "<unattributed>");
+
+    /** Attribute the statements from here on to {@code source}'s answer (the corpus: the running test). */
+    public static void attributeTo(java.util.function.Supplier<String> source) {
+        CONTEXT.set(java.util.Objects.requireNonNull(source, "source"));
+    }
 
     static {
         if (ON) {
@@ -47,8 +64,12 @@ public final class PrimitiveCensus {
         if (!ON) {
             return;
         }
-        for (String key : primitives(plan)) {
+        Set<String> keys = primitives(plan);
+        for (String key : keys) {
             TALLY.computeIfAbsent(key, k -> new LongAdder[] {new LongAdder(), new LongAdder()})[ok ? 0 : 1].increment();
+        }
+        if (PER_TEST && ok) {
+            TESTS.computeIfAbsent(CONTEXT.get().get(), t -> ConcurrentHashMap.newKeySet()).addAll(keys);
         }
     }
 
@@ -63,6 +84,11 @@ public final class PrimitiveCensus {
         for (Map.Entry<String, LongAdder[]> e : new TreeMap<>(TALLY).entrySet()) {
             System.out.println("[primitives] ok=" + e.getValue()[0].sum() + " fail=" + e.getValue()[1].sum() + " "
                     + e.getKey());
+        }
+        for (Map.Entry<String, Set<String>> e : new TreeMap<>(TESTS).entrySet()) {
+            for (String key : new TreeSet<>(e.getValue())) {
+                System.out.println("[primitives-test] " + e.getKey() + "\t" + key);
+            }
         }
     }
 

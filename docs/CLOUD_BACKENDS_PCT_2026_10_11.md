@@ -858,3 +858,46 @@ Nullable text (Relation went 389 / 62 / 7 to 445 / 7 / 0).
 
 The lanes were measured with `bazel test //pct:pct_clickhouse --local_test_jobs=1`, as Trino's. Measured on Linux
 x86_64, the one platform with a pinned build. The lanes are `manual`, in `//gates:heavy`.
+
+## 20. The coverage map, and the corpus on every database (2026-10-12)
+
+**The map** (`docs/PRIMITIVE_COVERAGE_2026_10_12.md`, measured; the recipe `tools/census/README.md` section 3): the
+primitive census (`-Dlegend.diagnostics=primitives`) reads each plan the executor sends for the MIR primitives a
+dialect must spell, and tallies them by outcome. The relational corpus carries 244 to success on DuckDB; 48 of them
+PCT never exercises on any database (graph fetch's JSON constructors, checked graph fetch, a relation's row order,
+`BOOL_AND`, `COUNT(DISTINCT)`, `NOW`, a model's raw SQL, a DISTINCT union, ...), and past those each database adds
+0 to 4 (Postgres 4, SQLite 3, Trino and ClickHouse 1; H2 104, its relation suite alone). Many of the 48 come only
+from a model (mappings, stores, graph fetch, constraints), so the gap closes with the corpus itself: **77 corpus
+tests carry all 244** (a greedy cover, `primitive_cover.py`), and run on a database they exercise everything the
+corpus needs there.
+
+**So the next build is the corpus harness on any database** -- the 77 on every lane, then the whole corpus on the
+clouds (§2's next item). The harness today is DuckDB's and H2's (`spec/.../rcorpus/MinimalCorpus.java`,
+`DuckWorkspaces.java`), and fast for reasons that must survive the move (measured: 2,613 tests, about 35 s a pass,
+about 4.3 executor round trips a test):
+
+- one compile of the whole world, once per JVM;
+- one long-lived database, a cheap workspace per test package (an attached in-memory catalog; about 313 packages),
+  the package's tests sharing it in the engine's order;
+- each setup's statements, and each effect segment, sent as ONE script; a test's assertions as ONE fused statement;
+  bare literals answered without a round trip;
+- the H2 referee in-process, consulted only when a SQL-text assert's text differs.
+
+What it does not do yet, and what a cloud's 50-300 ms round trip makes decisive (the design, before code):
+
+1. **Seed the shared fixture once per lane, not once per package.** About 307 of the 313 packages re-seed the same
+   ~220-statement fixture today. A package that only reads it, which is most, reads the one seeded copy; a package
+   that writes, or adds a setup of its own, gets a copy: Snowflake's zero-copy `CREATE DATABASE w CLONE fixture`,
+   Postgres's `CREATE DATABASE w TEMPLATE fixture`, Databricks' `SHALLOW CLONE` per table, BigQuery's
+   `CREATE TABLE ... CLONE` per table; the fixture keyed by a hash of its statements, so a second run reuses it.
+2. **Packages in parallel**, one workspace each (the harness's per-test state moved off statics, or one JVM per
+   shard): a warehouse serves many sessions at once, and the run's length becomes its longest shard.
+3. **A session's setup once per connection**, not once per execution (`Execution.dialectOf` re-runs it, and reads
+   the product's name and version, on every `executeResolved`).
+4. **Every network call counted** (a counting connection: metadata calls, describes, commits, connection opens are
+   uncounted today), so each lane's round trips are a number to drive down.
+5. **No transactional DDL to lean on**: a writing test's isolation on a cloud is its own copy (or a fresh copy after
+   it fails), not a rollback.
+
+Postgres first (local, a template database is native, and its PCT lane is green), then the 77 on every lane, then
+the whole corpus on Snowflake, Databricks and BigQuery.

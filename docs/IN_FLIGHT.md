@@ -833,8 +833,14 @@ frame's edge, JSON constructors, typed descending keys, out-of-range date litera
 `abs` is its own arm); `exec/DynamicPivot.java` (an integral key delivered as a BigInteger, the `BigDecimal` arm's
 twin; `JavaEvalLedgerTest`'s pin 111 -> 112, dated); `exec/SqlTypeCensus.java` (ClickHouse's spellings and its
 carrier JSON <- VARCHAR); five suite classes and `ChannelBLane`'s pins.
-**Next** (the user's order): the coverage map of the primitives the corpus uses that PCT never exercises, the
-relational corpus on Snowflake, Databricks and BigQuery, MongoDB, Elasticsearch, SingleStore (the plan's §2).
+**2026-10-12, the coverage map measured** (the plan's §20, `docs/PRIMITIVE_COVERAGE_2026_10_12.md`): new
+`exec/PrimitiveCensus.java` (`-Dlegend.diagnostics=primitives[=per-test]`, measurement only; `Executor` records each
+plan by outcome; `ArchitectureTest` registers its two tallies, dated); `spec/.../rcorpus/MinimalCorpus.java`
+attributes it per test; `tools/census/primitive_map.py` and `primitive_cover.py` (README section 3). The corpus needs
+244 primitives; 48 PCT never runs anywhere; 77 corpus tests carry all 244.
+**Next** (the user's order): the corpus harness on any database, built for speed (§20: the fixture seeded once,
+packages in parallel, every round trip counted) -- Postgres first, then the 77 on every lane, then the whole corpus
+on Snowflake, Databricks and BigQuery; then MongoDB, Elasticsearch, SingleStore (the plan's §2).
 
 ## Rules between sessions
 

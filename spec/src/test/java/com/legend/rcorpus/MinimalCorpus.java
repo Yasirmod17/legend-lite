@@ -550,6 +550,8 @@ public final class MinimalCorpus {
             // the byte-channel census attributes its disagreement samples
             // (leg 3.0: database mode's bug list) to the running test
             com.legend.exec.CanonicalDivergence.attributeTo(t::fqn);
+            // the primitive census's per-test tally (measurement only, under -Dlegend.diagnostics=primitives=per-test)
+            com.legend.exec.PrimitiveCensus.attributeTo(t::fqn);
             if (com.legend.diagnostics.Diagnostics.on("progress")) {
                 System.err.println("[corpus2] > " + t.fqn());
             }
