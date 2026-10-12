@@ -755,6 +755,23 @@ green on every job after one re-run of windows / warehouse; diagnostics run 3819
 - **The independent review's one finding** (fix 4 let a row's own window column resolve to the enclosing row's) is
   fixed in `Lowerer.scopedResolver`, with two tests.
 
+**Announced 2026-10-12 -- the semi-structured step: jsonb, LATERAL, set-returning functions** (the user's ask: JSON
+and Variant are what lite's DuckDB users do; branch `claude/loving-euler-gjta59`, three commits over main c03ac6b; the
+study's §9.2). It lands as a pull request, merged after its full CI run.
+- **The SQL front end:** `protocol/sql/` `SqlAst.java` (subscripts, `ARRAY[...]`, LATERAL subqueries), `SqlLexer.java`
+  (a slice's `:`), `SqlParser.java`, `SqlToPure.java` (jsonb navigation over Variant; LATERAL; `generate_series`,
+  `unnest`, `json(b)_array_elements(_text)`, `json(b)_object_keys` in FROM and the select list; a query without FROM).
+- **A cross-area edit in `sql/dialect/`, the database owner's** (two fixes the island's cases found in plain Pure):
+  - `DuckDb.java` (`variantElements`): `toMany(@Variant)` keeps an array's JSON null elements (a cast to `JSON[]` made
+    them SQL NULL); a value that is not an array is still Pure's `toMany` error;
+  - `Postgres.java` (`decode`, the `to(@Map)` cast): a value of the wrong shape is Postgres's own error, as Pure's and
+    DuckDB's are, not an empty list or no map.
+  Judged by `//pct:pct_duckdb`, `//pct:pct_postgres`, `//pct:pct_channel_b`, the core suite and the six corpus passes.
+- **Tests:** `SqlParserTest`, `SqlToPureTest`, `testcases/SqlParity.java` (a JSON cell compares as its JSON value),
+  `lowering/LowerRelationTest.java` (two shape pins follow the new elements SQL); `sql-parity/` the ledger, the answers,
+  `lite/json.yaml`, `lite/lateral.yaml`.
+- **Docs:** `docs/SEMANTICS_REGISTER.md` (S49: a Variant is jsonb), the study's §9.2, `docs/GATES.md`.
+
 ## An eighth line, 2026-10-11: Databricks, Snowflake and BigQuery (the user's ask, rule 5)
 
 The user: add Snowflake, Databricks and BigQuery as backends "very similar to how we just added Postgres", the PCT
