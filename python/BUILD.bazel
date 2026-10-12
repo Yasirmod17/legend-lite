@@ -311,11 +311,16 @@ py_test(
 py_binary(
     name = "repl",
     srcs = ["repl.py"],
+    # what the wheel carries beside the package, by their runfiles paths: DataCube's headless bundle (a page's files,
+    # examples and remote files read by DataCube's own code; grid.view(), to_pandas()) and DuckDB's httpfs as the wheel
+    # lays it out -- so the repl answers as `pip install 'legend-lite[datacube]'` does
     data = [
+        ":wheel_duckdb",
         "//datacube:dist",
+        "//datacube:headless_bundle",
         "//native:compiler",
     ],
-    env = {
+    env = _HEADLESS_ENV | {
         "LEGEND_LITE_LIBRARY": "$(rlocationpath //native:compiler)",
         "LEGEND_LITE_SITE": "$(rlocationpath //datacube:dist)",
         "PYTHONDONTWRITEBYTECODE": "1",
@@ -324,6 +329,7 @@ py_binary(
     main = "repl.py",
     target_compatible_with = _PLATFORMS,
     deps = [
+        ":headless",
         ":legend_lite",
         "@pypi//pandas",
         "@pypi//polars",
