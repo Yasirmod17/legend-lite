@@ -88,6 +88,8 @@ export async function browserServices(o: BrowserServicesOptions): Promise<Servic
       writeClipboard: (text) => navigator.clipboard?.writeText(text),
       readSettings,
       writeSettings,
+      address: () => o.location.href,
+      title: { base: document.title, set: (text) => { document.title = text; } },
     },
   };
 }

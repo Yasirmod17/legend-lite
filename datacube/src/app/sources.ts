@@ -803,6 +803,7 @@ export function pageSources(d: SourcesOf): PageSources {
    */
   async function pick<T>(purpose: 'add' | 'open', act: (chosen: Chosen) => Promise<T | null>, start?: SectionId): Promise<T | undefined> {
     const queries = services.queries;
+    const address = services.browser.address;
     const sections: PickerSections<T | null> = {
       files: {
         accept: '.csv,.parquet,.json,.jsonl,.ndjson,text/csv,application/json',
@@ -851,13 +852,16 @@ export function pageSources(d: SourcesOf): PageSources {
           };
         }),
         open: async (id) => act({ kind: 'saved', query: await openedQuery(await queries.store(), id) }),
-        // a link to this page that opens the query as its source (query-store/src/share.ts)
-        copyLink: async (id) => {
+        // a link to this page that opens the query as its source (query-store/src/share.ts), where the page has an
+        // address others can open
+        ...(address ? { copyLink: async (id: string) => {
           const [store, { queryFragment }] = await Promise.all([queries.store(), queryStores()]);
-          const link = `${location.origin}${location.pathname}${location.search}#${await queryFragment(await store.get(id))}`;
-          await navigator.clipboard.writeText(link);
+          const at = new URL(address!());
+          at.hash = await queryFragment(await store.get(id));
+          const link = at.href;
+          await services.browser.writeClipboard(link);
           return `Link copied (${link.length.toLocaleString(UI_LOCALE)} characters): it opens the query as the cube’s source, and holds the query, never its rows.`;
-        },
+        } } : {}),
       },
       ...(warehouse ? { database: databaseSection(warehouse, (session, object) => act({ kind: 'table', session, object })) } : {}),
       remote: {

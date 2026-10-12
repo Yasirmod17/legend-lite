@@ -11,7 +11,6 @@ import type { QueryEngine } from '../../../engine-client/src/engine.ts';
 import type { SeedSource } from '../../../engine-client/src/model-data.ts';
 import type { CatalogObject, WarehouseEngine, WarehouseSession } from '../../../engine-client/src/warehouse.ts';
 import type { QueryReader } from '../../../query-store/src/index.ts';
-import type { ValueSpecification } from '../../../pure-protocol/src/index.ts';
 import type { HeldCopy } from '../app.ts';
 import type { CubeConfiguration } from '../config.ts';
 import type { Planner, SnapTarget } from '../cube.ts';
@@ -20,6 +19,7 @@ import type { FileHandles } from '../file-handles.ts';
 import type { InferredModel, TableModels } from '../infer.ts';
 import type { ModelOptions } from '../planner.ts';
 import type { S3Credentials } from '../remote.ts';
+import type { CubeSnapshot } from '../snapshot.ts';
 import type { UploadResult } from '../upload.ts';
 
 /** Everything a host gives the app. */
@@ -169,13 +169,18 @@ export interface BrowserService {
   /** The grids' settings kept between visits (upstream's settingsData); undefined when none or not readable. */
   readSettings(): Record<string, unknown> | undefined;
   writeSettings(values: Record<string, unknown>): void;
+  /** This page's address, which a share link opens; absent where no one else can open it, and no link is offered. */
+  readonly address?: () => string;
+  /** The page's own tab's title (its name, and whether it changed); absent where the page is not a tab of its own. */
+  readonly title?: { readonly base: string; set(text: string): void };
 }
 
 // --------------------------------------------------------------------------------------------------------- the start
 
 /** The tab's sample: generated rows (or a remote file read through the same model) under the demo's model. */
 export interface Sample {
-  readonly source: ValueSpecification;
+  /** Its opening view, typed by the compiler over its source. */
+  readonly snapshot: () => Promise<CubeSnapshot>;
   readonly snapTarget: SnapTarget;
   /** Generated rows are a copy in the host's database from the start; a mounted remote file is live. */
   readonly heldCopy?: HeldCopy;
