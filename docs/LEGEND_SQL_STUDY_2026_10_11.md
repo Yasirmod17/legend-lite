@@ -970,13 +970,248 @@ as an unprivileged user. It needs `chmod o+x /root` once, then
 `//core:postgres_arm_test` pass. The full local gate on this branch's head otherwise fails only the same 13
 container-bound browser and timeout targets as on the base commit.
 
-**Next steps, by size:**
-1. LATERAL (Pure has `lateral`), queries without FROM, `func(...)` sources (`generate_series`).
-2. Intervals and date arithmetic.
-3. Core: lower `indexOf` 0-based (then `strpos`), a half-away-from-zero `round(x, n)`.
-4. Regular expressions, judged per pattern feature.
+**Next steps, by size** (the semi-structured step came first, at the user's ask: JSON and Variant are what lite's
+DuckDB users do; §9.2):
+1. Intervals and date arithmetic.
+2. Core: lower `indexOf` 0-based (then `strpos`), a half-away-from-zero `round(x, n)`, `parseDecimal`'s precision.
+3. Regular expressions, judged per pattern feature.
+4. jsonb's remaining operators (`@>`, `?`, `||`, `-`), `json_each`, `jsonb_typeof`, an array's length: each waits on
+   a Pure spelling or a platform fix (§9.2's findings).
 
 Then the HTTP routes (`/api/sql/v1/...`), then the wire.
+
+### 9.2 Semi-structured: jsonb, LATERAL, set-returning functions (built 2026-10-12, on the branch)
+
+The user's correction (2026-10-12): upstream passes 13 of its 133 JSON cases, but that is upstream's gap, not the
+feature's worth. Lite's DuckDB users navigate JSON with Pure's `get`, and unnest it with `lateral` and `flatten`. So
+the semi-structured step came before the cheap parity batch.
+
+**What a Variant is in SQL: Postgres's `jsonb`** (register S49). A Legend model has one semi-structured type, so a
+Variant column cannot be both. `jsonb` is the one whose meaning is Pure's: keys without order, no duplicates. `json`'s
+operators and functions read a Variant as `jsonb`'s do.
+
+**What reads now:**
+- **Navigation:** `->` is `get` (a constant key's member; an integer's element from 0, negative from the end; past
+  either end NULL); `->>` is its text (`to(@String)`: a string's own characters, NULL for jsonb's null).
+- **Paths and subscripts** read by jsonb's PATH rule (Postgres's `jsonb_get_element`), not `->`'s: a text names an
+  object's member, or, where it spells an integer (strtol's way: leading white space, a sign), an array's element; an
+  integer subscript reads an array's element or an object's member named by its digits. `#>`, `#>>`,
+  `json(b)_extract_path(_text)` and `x[...]` read each element as `coalesce(member, element)`: an object has no
+  element and an array no member, so whichever the value is, one of the two reads it.
+- **Constants and casts:** `'...'::jsonb`, `jsonb '...'` and `text::jsonb` parse with `fromJson`; `to_jsonb` of text,
+  numbers and booleans is `toVariant`.
+- **Set-returning functions,** in FROM, after a LATERAL, or as a whole select-list item:
+  - `json(b)_array_elements(_text)` (`toMany(@Variant)`, jsonb's null an element), `json(b)_object_keys`;
+  - `generate_series` of integers (`range`), `unnest(ARRAY[...])` and `unnest(string_to_array(...))` (`flatten`).
+  A function in FROM reads the items before it, as in Postgres. Its alias is its value
+  (`FROM jsonb_array_elements(a) e ... e ->> 'x'`).
+- **LATERAL subqueries:** by comma, `CROSS JOIN` or `[INNER] JOIN ... ON`, each Pure's `lateral`.
+- **A query without FROM:** one row (a TDS literal of one hidden column).
+
+**The judge.** A `json` or `jsonb` cell is its JSON value: keys unordered, numbers by value. A JSON value equals only a
+JSON value (a `jsonb` 42 is not the integer 42). The text of an object or array (`->>` of one) compares as JSON: the
+same JSON, written compactly on DuckDB and with `jsonb`'s spaces on Postgres (register S49). Only where Postgres's
+text is exactly jsonb's spelling of its value (`", "`, `": "`, keys shorter first): any other text compares as text.
+
+**Refused by name, each where lite would answer otherwise than Postgres:**
+- `jsonb`'s own order and equality: a `jsonb` value as a sort, group, DISTINCT, set-operation or window key, or
+  compared.
+- A `jsonb` value read out of a `jsonb` constant (`->`, `#>`, subscripts, `jsonb_array_elements`), and a path element
+  that spells an integer read out of one even as text: see finding 3.
+- A key starting with `$` or `/` (finding 4); a member key or a subscript text that is not a constant; a `jsonb`
+  constant with a duplicate key (jsonb keeps the last, DuckDB reads the first).
+- `json(b)_array_length`, `json_each`, `jsonb`'s `-`, `||`, `@>`, `?` and the rest of its operators; `LEFT JOIN
+  LATERAL`; `WITH ORDINALITY`; an array element that may be NULL (a Pure collection holds none); a subquery without
+  FROM (finding 6).
+
+**Platform findings** (the database owner's; the first two fixed on the branch, in `sql/dialect/`):
+1. **Fixed: DuckDB's `toMany(@Variant)` turned jsonb's null elements into SQL's NULL.** A cast to `JSON[]` does this,
+   so a list read them as missing: an array's length dropped them, and `flatten` gave SQL's NULL. It now reads an
+   array's elements with `json_extract(x, '$[*]')`, which keeps them. A value that is not an array is still Pure's
+   `toMany` error (PCT `testToManyFromNonArray`).
+2. **Fixed: Postgres's `toMany(@Variant)` and `to(@Map)` read a value of the wrong shape as an empty list or no map.**
+   Postgres, Pure and DuckDB raise an error there. They now raise Postgres's own (`jsonb_array_elements`,
+   `jsonb_object_keys`).
+3. **Open: the literal-Variant fold.** `CarrierStrategies` folds the navigation of a literal Variant on the list-less
+   dialects (Postgres, H2, the engine text). It re-emits a picked string, number or boolean as a plain SQL literal, so
+   `fromJson('{"a":"x"}')->get('a')` is the text `x` on Postgres, not a Variant. The SQL front end refuses navigating a
+   jsonb constant to a jsonb value.
+4. **Open: DuckDB's arrow reads a key that starts with `$` or `/` as a path.** So Pure's `get('$ref')` misreads a
+   member named `$ref`.
+5. **Open: Postgres's `toOne` of a jsonb value.** Its empty-collection guard is text, so `CASE` cannot match it with
+   the jsonb.
+6. **Open: `toVariant` of a string constant on Postgres** is `to_jsonb('...')`, whose type Postgres cannot resolve.
+7. **Open: a lateral over a correlated one-row relation** (a subquery without FROM reading the enclosing row) does not
+   lower.
+8. **Open: a JSON number on DuckDB is a double.** Every DuckDB extraction re-serializes it (yyjson reads a number as a
+   double): `->>` of `1.50` is `1.5`, of `1e2` is `100.0`, of `12345678901234567.89` is `12345678901234568.0`, where
+   Postgres's jsonb keeps numeric's spelling and digits (`1.50`, `100`). The text of a non-integer JSON number, and a
+   number beyond a double's 17 digits, differ on DuckDB. Neither the corpus nor its data holds one; no Pure spelling
+   recovers the token. For the user to decide: register it, or refuse `->>` where it may meet such a number.
+9. **Residue, not refused:** a `bigint` column as an index (`j -> big_col`) is Postgres's error ("operator does not
+   exist: jsonb -> bigint") and lite's answer (a model column's SQL width is not known to the translator); a duplicate
+   key in a column's JSON text (jsonb keeps the last, DuckDB reads the first).
+
+**The independent review (2026-10-12)** of the step found these, each fixed and pinned by a case in `lite/json.yaml`,
+`lite/lateral.yaml` or `lite/functions.yaml`:
+- subscripts and quoted path elements read as `->` (Postgres reads them by the path rule above);
+- jsonb's null given to `jsonb_array_elements(_text)` or `jsonb_object_keys` gave no rows: Postgres's error ("cannot
+  extract elements from a scalar"). It is now read as another scalar, so that Pure's `toMany` and `to(@Map)` raise;
+- a set operation's ORDER BY and `JOIN ... USING` took a jsonb key;
+- CASE and COALESCE (and GREATEST, LEAST) never resolved one type: an untyped constant now takes the others' type, read
+  by its input rules (`coalesce(j -> 'tags', '[]')` is jsonb; `coalesce(age, '0')` an integer), numbers widen, and
+  text with a number is Postgres's error ("COALESCE types integer and text cannot be matched");
+- a function's alias was no value inside a subquery: a name is now a column at any level first, then a FROM item's
+  (Postgres's order);
+- a select list's set-returning function ran before WHERE, its alias was a column WHERE could read, and `*` listed it:
+  it is now a lateral step after WHERE, its column one no query can name;
+- `to_jsonb('x')` (an untyped constant: Postgres's error), a bigint index (`j -> 3000000000`), a `generate_series` step
+  beyond bigint (crashed the translator).
+
+**The ledger after this step and its review,** identical in both lanes:
+- upstream's 1,703 cases: PASS 1,016 (951 before), REFUSED 558, BOTH_ERROR 61, SKIP 68. Upstream legend-engine passes
+  1,026 of them, with 36 wrong answers and 61 accepted invalid queries;
+- legend-lite's own 269 (177 before; `lite/json.yaml` 56, `lite/lateral.yaml` 30): PASS 205, REFUSED 34, BOTH_ERROR 30;
+- 0 FAIL, 0 BUG, 0 ERROR.
+
+### 9.3 The basics: filters, aggregates, functions and casts (built 2026-10-12, on the branch)
+
+The user's order, after the semi-structured step: the basics first (filters, aggregations, joins, select lists,
+functions), each working well, before regular expressions or the wire.
+
+**A randomized check found most of this step's work.** A scratch generator writes type-correct Postgres queries over
+the parity schema: filters, GROUP BY and HAVING, the four joins, subqueries, set operations, DISTINCT, windows, CTEs,
+CASE and COALESCE, functions, casts, dates and intervals, and the aggregates and window functions below. Each query is
+ordered by all its columns and run through both lanes against Postgres. Thirteen seeds ran, about 6,300 queries; the
+generator grew with each feature. The last seeds found no wrong answer and no crash. Each finding is fixed and pinned
+by a case in `lite/functions.yaml`, `lite/windows.yaml` or `lite/dates.yaml`, among them:
+- `x BETWEEN low AND high` was one strict test of its three values, NULL as soon as a bound was. It is
+  `x >= low AND x <= high` in three-valued logic, so a NULL bound leaves the other to decide FALSE.
+- `x IN (col, 5)` was NULL for a row whose `col` is NULL, even where `x` is 5. With an element that may be NULL it is
+  each `x = e` in three-valued OR.
+- A CASE whose every result is NULL is text in Postgres: `ceil` of it is Postgres's error, not a NULL.
+- `corr` and DuckDB's descending `percentile_disc` at 0 (below).
+
+**What the translator now reads:**
+- **Aggregates.**
+  - `FILTER (WHERE ...)` on every aggregate: the value where the test holds, else none (`if(test, |value, |[])`).
+  - `DISTINCT` in every aggregate.
+  - `string_agg(text, 'sep' [ORDER BY col])`: Pure's joinStrings over the group (ordered: the group-lambda form).
+  - `bool_and`, `bool_or`, `every`: Pure's `and()` and `or()` of the group.
+  - `percentile_cont(p)` and `percentile_disc(p) WITHIN GROUP (ORDER BY x [DESC])`: Pure's percentile. The
+    continuous one reads each value as a double, as Postgres does; DuckDB would interpolate a decimal at its own
+    scale. The discrete one is an integer column's integer again (`->cast(@Integer)`), so that its division
+    truncates and its text has no `.0`.
+  - `corr`, `covar_pop`, `covar_samp`: Pure's over `rowMapper` pairs. Postgres's `corr` is NULL where a value's
+    variance over the pairs is 0, and DuckDB's quotient is NaN there. So the pairs' variances are computed beside it,
+    and the column, extended after the grouping, is NULL where either is 0.
+  - `bool_and`, `bool_or`, `every`, `covar_pop` and `covar_samp` also as window functions. `corr` over a window is
+    refused: its guard would need the variances as window columns first.
+- **Window functions:** `lag(x, n, default)` and `lead(x, n, default)`. The default stands where the other row is
+  outside the partition, never where that row's value is NULL. A computed column that is never NULL (the constant 1)
+  tells which.
+- **Integer division**, truncating toward zero and exact for every bigint. The remainder is taken off, a double
+  estimate shrunk below the quotient, and the rest corrected in exact integer arithmetic.
+- **NULL constants as Postgres types them.**
+  - An operand takes the other operand's type, a function argument its preferred type: Pure's empty collection cast to
+    that type (`CAST(NULL AS BIGINT)`). `NULL + NULL` is Postgres's error ("operator is not unique").
+  - A comparison with NULL is NULL, so a WHERE keeps no row.
+  - An IN list holding NULL is TRUE where the value is found and NULL otherwise, never FALSE.
+- **Text.**
+  - `concat` writes a value by its output function (t or f); `||` casts it (true, false) and needs text on one side.
+  - `substring`/`substr`: Pure's relational substring.
+  - `strpos` and `position`: the relational indexOf, 1-based, 0 when not found (measured equal to Postgres on both
+    databases).
+  - `left` and `right` with a negative count.
+- **Numbers.**
+  - `round(x, n)` and `trunc(x, n)` of a numeric, exactly: scaled, rounded half away from zero (or truncated), scaled
+    back by a decimal constant. Pure's `round(Decimal, n)` breaks ties to even, and `divide(x, 1D, n)` goes through a
+    double on DuckDB.
+  - `ceil`, `floor`, `sign` and `round(x)` keep Postgres's types (numeric for a numeric, double precision otherwise);
+    extract is numeric, date_part double precision.
+  - `power` and `pow` of integers and doubles.
+  - `round(x)` of a double: half to even, Postgres's rint and Pure's round of a Float (measured on both databases).
+- **Dates.**
+  - A date plus or minus an integer is a date (`adjust` by days); a date minus a date the days between them
+    (`dateDiff`).
+  - An interval constant (`INTERVAL '1 month 2 days'`, `INTERVAL '3' DAY`, `'1 week'::interval`), whole amounts with
+    Postgres's units and abbreviations, added to or taken from a date or timestamp. Postgres adds its months first (a
+    day past the month's end is the month's last day), then its days, then its time; so does the chain of `adjust`
+    calls. A date is a timestamp at midnight first, as Postgres's `date + interval` is a timestamp.
+  - `make_date`, `make_timestamp`.
+  - `date_trunc` of a timestamp to a year, quarter, month, week (Monday), day, hour, minute or second: Pure's
+    `firstDayOf...` and `first...Of...`; Pure's first day is a date, made a timestamp at its midnight.
+  - Refused: an interval as a value, a fractional or `HH:MM:SS` interval, a timestamp minus a timestamp (an interval),
+    `date_trunc` of a date (Postgres truncates a timestamp with time zone there).
+- **Casts.**
+  - `integer`, `int4` and `smallint` hold a value in their range, else Postgres's error, raised only on the row that
+    overflows.
+  - A numeric to an integer rounds half away from zero; a double half to even.
+  - `varchar(n)` cuts the text to n characters.
+
+**Inexact numerics: refused where they would show.** Postgres's numeric quotient is exact. Pure's divide is a Float,
+so a quotient of numbers that are not both integers is a double here. So are an average or statistic of non-doubles
+and `sqrt`, `exp`, `ln` and `log` of a numeric. The translator calls such a value INEXACT. It agrees with Postgres to
+about 15 significant digits, but it may fall on either side of the exact value: `0.3 / 0.1` is 2.9999999999999996.
+- Refused: what rounds it or spells it. That is `round`, `ceil`, `floor`, `trunc`, `round(x, n)`, a cast to an
+  integer, and its text. `floor(0.3 / 0.1)` is 3 in Postgres and 2 from the double, a wrong answer the previous steps
+  gave.
+- Translated: a double (a column, a cast, a quotient with a double in it) is a double in Postgres too, so it rounds.
+- Recorded, not refused: a comparison at the exact boundary may fall the other way (`0.3 / 0.1 = 3` is TRUE in
+  Postgres, FALSE here). Refusing comparisons would refuse `HAVING avg(x) > 1000`.
+
+**A numeric is at most 38 digits here.** Pure's Decimal is a 38-digit decimal on every database (DuckDB's widest);
+Postgres's numeric is unbounded. A product beyond it (a 20-digit value squared) is the database's overflow error where
+Postgres answers: an error, never a wrong answer. The randomized check met it once.
+
+**Refused, with the reason measured:**
+- Text values cast to numbers. DuckDB's cast reads `'1.5'` and `'1e3'` as integers and `'1_000'` and `'1e400'` as
+  doubles, all of which Postgres rejects. A string constant is still read by Postgres's input rules.
+- `mode()`: DuckDB breaks a tie otherwise than Postgres, which takes the first value in the order.
+
+**Two fixes in `sql/dialect`,** each announced in IN_FLIGHT:
+- `RootNumericTypes` (5cb0ac1). Under DISTINCT, an ORDER BY key that is a projection cast to its numeric type is
+  ordered by the cast expression. Postgres requires that ("for SELECT DISTINCT, ORDER BY expressions must appear in
+  select list"), and the cast changes no value.
+- `QuantileOrder` (aa0c469, widened 6d5f0e1). DuckDB's descending discrete percentile read element `ceil(p * N)` of
+  the sorted list: element 0 of a 1-based list at `p = 0`, so NULL. Pure's percentile and Postgres's `percentile_disc`
+  both take the first value there; the index is now at least 1. The randomized check found it. The review then found
+  the product computed exactly where Postgres's is float8; both orders now compute it as Postgres does.
+
+**The independent review (2026-10-12)** of the step, by an agent that wrote none of it, traced these wrong answers.
+Each was measured against Postgres and DuckDB, is fixed, and is pinned by a case in `lite/functions.yaml` or
+`lite/dates.yaml`:
+- An inexact numeric met by a double became a double, so it could round: `floor(0.3 / 0.1 * 1::float8)` is 3 in
+  Postgres, 2 here. An inexact numeric now stays inexact through every operator and function, a double in it or not.
+- A double constant's text was read as an exact decimal: `round('2.5'::float8)` is rint's 2, not 3. It is the double
+  nearest the text, and COALESCE's one value is converted to a double, not relabelled one.
+- A sum of integers is Postgres's bigint for int4 values and its numeric for int8 ones. The two divide differently
+  (`sum(b) / 2` is 3.5 for bigints), and a model column's width is not known to the translator. Such a sum is now the
+  kind WHOLE: dividing it by an integer is refused, and `sum(x)::bigint / n` or `sum(x)::numeric / n` says which.
+- `round(int, n)` and `trunc(int, n)` gave the integer itself: they are the numeric with n places (`42.0`).
+- `INTERVAL '1 day 1' MONTH` read the text and the field together; Postgres keeps only the field's part (a month).
+  Only a single whole number takes a trailing field now; a field named twice (`'1 mon 1 month'`) is refused.
+- `sign` of an inexact numeric was not refused.
+- `percentile_disc`: DuckDB picks element `ceil(p * N)` in exact arithmetic, Postgres in float8, and `0.28 * 25` is
+  7 in the one and 8 in the other. `QuantileOrder` (sql/dialect, announced in IN_FLIGHT 6d5f0e1) now computes the
+  element as Postgres does, in both orders.
+- Decimals merged into one value (CASE, COALESCE, GREATEST, LEAST, a lag default, a set operation's column) take one
+  scale in DuckDB (`1.5` reads `1.50`), each its own in Postgres. Their numbers agree; their text is refused.
+
+Recorded, not fixed:
+- `corr` of a column whose values are equal: Postgres's running sums may leave a variance of about 1e-33 where DuckDB's
+  is exactly 0, so Postgres answers with noise where this answers NULL.
+- An inexact numeric's comparisons reach DISTINCT, GROUP BY, IN, BETWEEN and a window's ORDER BY too: at the exact
+  boundary they may fall the other way, as `0.3 / 0.1 = 3` does.
+- `make_date(0, 1, 1)` is Postgres's error and DuckDB's year 0; `-NULL` is Postgres's "not unique" error and a NULL
+  here.
+
+**The ledger after this step,** identical in both lanes:
+- upstream's 1,703 cases: PASS 1,122 (1,016 before), REFUSED 452, BOTH_ERROR 61, SKIP 68. Upstream legend-engine
+  passes 1,026 of them, with 36 wrong answers;
+- legend-lite's own 381 (269 before; `lite/functions.yaml` 139, `lite/windows.yaml` 51, `lite/dates.yaml` 21, new):
+  PASS 284, REFUSED 46, BOTH_ERROR 51;
+- 0 FAIL, 0 BUG, 0 ERROR.
 
 ## 10. Sources
 

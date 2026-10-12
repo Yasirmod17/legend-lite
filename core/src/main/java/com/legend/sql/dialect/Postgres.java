@@ -227,7 +227,11 @@ public final class Postgres extends AnsiSqlRenderer {
         if (t instanceof SqlType.Array a) {
             String e = "__e" + depth;
             String o = "__o" + depth;
-            return w -> w.append("(CASE WHEN jsonb_typeof(").piece(json).append(") = 'array' THEN ARRAY(SELECT ")
+            // NULL for SQL's NULL or jsonb's null; any other value that is not an array is jsonb_array_elements's
+            // error, as Pure's toMany raises one and DuckDB's cast does (it was an empty list here: 2026-10-12, the
+            // #SQL{}# line)
+            return w -> w.append("(CASE WHEN ").piece(json).append(" IS NULL OR jsonb_typeof(").piece(json)
+                    .append(") = 'null' THEN NULL ELSE ARRAY(SELECT ")
                     .piece(held(v -> v.append(e), a.element(), depth + 1)).append(" FROM jsonb_array_elements(")
                     .piece(json).append(") WITH ORDINALITY AS __j" + depth + "(" + e + ", " + o + ") ORDER BY " + o)
                     .append(") END)");
@@ -699,9 +703,13 @@ public final class Postgres extends AnsiSqlRenderer {
             return listCast(writer, c, arr);
         }
         // Map<String, ...> of a Variant: the jsonb object itself (keys and values read by MAP_KEYS / MAP_VALUES)
+        // NULL for SQL's NULL or jsonb's null; any other value that is not an object is jsonb_object_keys's error, as
+        // DuckDB's cast to a MAP raises one (it was NULL here: 2026-10-12, the #SQL{}# line)
         if (c.target() instanceof SqlType.Map && isJson(c.value())) {
             return writer.append("(CASE WHEN jsonb_typeof(").expr(c.value(), 0).append(") = 'object' THEN ")
-                    .expr(c.value(), 0).append(" END)");
+                    .expr(c.value(), 0).append(" WHEN ").expr(c.value(), 0).append(" IS NULL OR jsonb_typeof(")
+                    .expr(c.value(), 0).append(") = 'null' THEN NULL ELSE (SELECT ").expr(c.value(), 0)
+                    .append(" FROM jsonb_object_keys(").expr(c.value(), 0).append(") LIMIT 1) END)");
         }
         if (c.target() instanceof SqlType.Map) {
             throw new DialectCapability("a cast to " + c.target() + " reached Postgres before"

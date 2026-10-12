@@ -130,7 +130,9 @@ public final class SqlLexer {
                     advance(2);
                     return new Token(Kind.OP, "::", pos);
                 }
-                throw new SqlSyntaxException("syntax error at or near \":\"", pos);
+                // an array slice's colon (a[1:2]); no operator level reads one, so anywhere else it is a syntax error
+                advance(1);
+                return new Token(Kind.OP, ":", pos);
             }
             default -> {
                 if (OPERATOR_CHARS.indexOf(c) >= 0) {

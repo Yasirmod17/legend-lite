@@ -50,7 +50,7 @@ public final class SqlParser {
             "second", "to", "union", "varying", "where", "window", "with", "within", "without", "year");
 
     /** The operators the levels below {@code Op} read themselves; Postgres reads every other one at {@code Op}. */
-    private static final Set<String> OWN_LEVEL_OPERATORS = Set.of("+", "-", "*", "/", "%", "^", "<", ">", "=", "<=",
+    private static final Set<String> OWN_LEVEL_OPERATORS = Set.of(":", "+", "-", "*", "/", "%", "^", "<", ">", "=", "<=",
             ">=", "<>", "!=", "::", "=>");
 
     /** The SQL value functions written without parentheses (Postgres §9.9.5): read as calls with no arguments. */
@@ -421,7 +421,20 @@ public final class SqlParser {
     private SqlAst.FromItem fromPrimary() {
         Token t = peek();
         if (t.is("lateral")) {
-            throw unsupported("LATERAL is");
+            // LATERAL (subquery): it sees the FROM items before it; a function in FROM always does
+            at++;
+            if (peek().kind() == Kind.LPAREN && queryAhead(1)) {
+                Token open = next();
+                SqlAst.Statement query = statement();
+                expect(Kind.RPAREN);
+                Alias alias = alias();
+                return new SqlAst.SubqueryFrom(query, alias.name(), alias.columns(), true, open.pos());
+            }
+            SqlAst.FromItem item = fromPrimary();
+            if (!(item instanceof SqlAst.TableFunction)) {
+                throw new SqlSyntaxException("syntax error at or near \"" + t.text() + "\"", t.pos());
+            }
+            return item;
         }
         if (t.is("only")) {
             throw unsupported("FROM ONLY is");
@@ -432,7 +445,7 @@ public final class SqlParser {
                 SqlAst.Statement query = statement();
                 expect(Kind.RPAREN);
                 Alias alias = alias();
-                return new SqlAst.SubqueryFrom(query, alias.name(), alias.columns(), t.pos());
+                return new SqlAst.SubqueryFrom(query, alias.name(), alias.columns(), false, t.pos());
             }
             at++;
             SqlAst.FromItem inner = fromItem();
@@ -812,7 +825,13 @@ public final class SqlParser {
                 Token op = next();
                 e = new SqlAst.Cast(e, typeName(), op.pos());
             } else if (peek().kind() == Kind.LBRACKET) {
-                throw unsupported("array subscripts are");
+                Token open = next();
+                SqlAst.Expr index = expr();
+                if (peek().isOp(":")) {
+                    throw unsupported("array slices are");
+                }
+                expect(Kind.RBRACKET);
+                e = new SqlAst.Subscript(e, index, open.pos());
             } else if (peek().is("at") && (peekAt(1).is("time") || peekAt(1).is("local"))) {
                 throw unsupported("AT TIME ZONE is");
             } else if (peek().is("collate")) {
@@ -899,8 +918,50 @@ public final class SqlParser {
                 expect(Kind.RPAREN);
                 return new SqlAst.Exists(query, t.pos());
             }
-            case "array" -> throw unsupported("ARRAY constructors are");
-            case "interval" -> throw unsupported("INTERVAL constants are");
+            case "array" -> {
+                if (peekAt(1).kind() != Kind.LBRACKET) {
+                    throw unsupported("ARRAY (subquery) is");
+                }
+                at += 2;
+                List<SqlAst.Expr> elements = new ArrayList<>();
+                if (peek().kind() != Kind.RBRACKET) {
+                    do {
+                        if (peek().kind() == Kind.LBRACKET) {
+                            throw unsupported("multidimensional arrays are");
+                        }
+                        elements.add(expr());
+                    } while (accept(Kind.COMMA));
+                }
+                expect(Kind.RBRACKET);
+                return new SqlAst.ArrayConstructor(elements, t.pos());
+            }
+            case "interval" -> {
+                // INTERVAL 'text' [unit]: a typed constant; the SQL standard's trailing unit (INTERVAL '3' DAY) is
+                // the text's unit
+                if (peekAt(1).kind() != Kind.STRING) {
+                    throw unsupported("INTERVAL other than a constant is");
+                }
+                at++;
+                String value = next().text();
+                if (peek().kind() == Kind.IDENT && INTERVAL_UNITS.contains(peek().text().toLowerCase(Locale.ROOT))) {
+                    // Postgres keeps only the field's part of the text (INTERVAL '1 day 1' MONTH is a month): a
+                    // single whole number reads the same either way
+                    String whole = value.strip();
+                    int digit = whole.startsWith("+") || whole.startsWith("-") ? 1 : 0;
+                    boolean number = digit < whole.length();
+                    for (; digit < whole.length(); digit++) {
+                        number &= whole.charAt(digit) >= '0' && whole.charAt(digit) <= '9';
+                    }
+                    if (!number) {
+                        throw unsupported("INTERVAL '...' FIELD other than of one whole number is");
+                    }
+                    value = value + " " + next().text().toLowerCase(Locale.ROOT);
+                    if (peek().is("to")) {
+                        throw unsupported("INTERVAL ... TO ... is");
+                    }
+                }
+                return new SqlAst.TypedLit(new SqlAst.TypeName("interval", List.of(), t.pos()), value, t.pos());
+            }
             case "row" -> throw unsupported("ROW constructors are");
             default -> {
             }
@@ -1117,18 +1178,35 @@ public final class SqlParser {
                 }
                 args.add(expr());
             } while (accept(Kind.COMMA));
-            if (peek().is("order")) {
-                throw unsupported("ORDER BY inside an aggregate is");
-            }
+        }
+        List<SqlAst.SortItem> orderBy = new ArrayList<>();
+        if (!star && acceptWord("order")) {
+            expectWord("by");
+            do {
+                orderBy.add(sortItem());
+            } while (accept(Kind.COMMA));
         }
         expect(Kind.RPAREN);
-        if (peek().is("within")) {
-            throw unsupported("WITHIN GROUP is");
+        List<SqlAst.SortItem> withinGroup = new ArrayList<>();
+        if (acceptWord("within")) {
+            expectWord("group");
+            expect(Kind.LPAREN);
+            expectWord("order");
+            expectWord("by");
+            do {
+                withinGroup.add(sortItem());
+            } while (accept(Kind.COMMA));
+            expect(Kind.RPAREN);
         }
-        if (peek().is("filter")) {
-            throw unsupported("FILTER (WHERE ...) is");
+        SqlAst.Expr filter = null;
+        if (acceptWord("filter")) {
+            expect(Kind.LPAREN);
+            expectWord("where");
+            filter = expr();
+            expect(Kind.RPAREN);
         }
-        SqlAst.FunctionCall call = new SqlAst.FunctionCall(name, args, distinct, star, first.pos());
+        SqlAst.FunctionCall call = new SqlAst.FunctionCall(name, args, distinct, star, orderBy, withinGroup, filter,
+                first.pos());
         if (acceptWord("over")) {
             Token over = tokens.get(at - 1);
             if (accept(Kind.LPAREN)) {
@@ -1317,6 +1395,10 @@ public final class SqlParser {
         }
         return new SqlSyntaxException("syntax error at or near \"" + t.text() + "\"", t.pos());
     }
+
+    /** The units an INTERVAL constant may name after its text (INTERVAL '3' DAY). */
+    private static final java.util.Set<String> INTERVAL_UNITS = java.util.Set.of("year", "month", "day", "hour",
+            "minute", "second");
 
     private SqlSyntaxException unsupported(String what) {
         return SqlSyntaxException.unsupported(what + " not supported yet", peek().pos());
