@@ -787,7 +787,7 @@ export async function openDataCube(o: OpenDataCube): Promise<DataCubeApp> {
         sub.className = 'dc-picker-subtitle';
         sub.textContent = pages.memoryOnly
           ? 'Kept for this visit only (this browser refused storage). Each reopens over its own file, or regenerates its example.'
-          : 'Saved in this browser. Each reopens over its own file (asked for when needed), or regenerates its example.';
+          : `Saved ${pages.where}. Each reopens over its own source (a file asked for when needed), or regenerates its example.`;
         titles.append(title, sub);
         const close = document.createElement('button');
         close.type = 'button';

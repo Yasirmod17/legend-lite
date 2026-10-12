@@ -53,6 +53,7 @@ import pyarrow.ipc
 
 from . import _json, compiler
 from .frames import Frames
+from ._home import SavedPages
 
 _API = '/api/pure/v1/'
 _EXECUTE = _API + 'execution/execute'
@@ -67,6 +68,8 @@ _MAX_FILE_BODY = 256 * 1024 * 1024
 # the calls that bring a page's data in and let it go (each changes the engine's data), and what Python's host offers
 # the page (docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md §3.4, §4.3): each the engine's own page's, so each carries the token
 _FILE_IN, _FILE_OUT, _REMOTE, _SERVICES = '/file.json', '/forget.json', '/remote.json', '/services.json'
+# the page's saved pages, as the browser keeps its records (step 2d): all, one, put, remove
+_SAVED = '/saved-pages.json'
 # the only places a page's remote file may be read from (remote.json): never this machine's own files, which Python's
 # DuckDB can read and a page must not make it (R4's reason)
 _REMOTE_SCHEMES = ('http', 'https', 's3', 's3a', 's3n', 'gs', 'gcs', 'r2', 'az', 'azure', 'abfss', 'hf')
@@ -167,7 +170,7 @@ def private(path: str) -> bool:
     """Whether a call reads the engine's data -- the API, a frame's cube, its version -- and so, over HTTP, carries the
     token. The site's files are the page's own and carry no secret."""
     return path.startswith(_API) or path in ('/cube.json', '/version.json', '/page.json', _FILE_IN, _FILE_OUT, _REMOTE,
-                                             _SERVICES)
+                                             _SAVED, _SERVICES)
 
 
 def _arrow_requested(query: str) -> bool:
@@ -236,15 +239,18 @@ class Engine:
     messages."""
 
     def __init__(self, frames: Frames, site: str | Path | None = None,
-                 headless: Callable[[], Any] | None = None, planner: Planner | None = None) -> None:
+                 headless: Callable[[], Any] | None = None, planner: Planner | None = None,
+                 pages: SavedPages | None = None) -> None:
         """``headless``: DataCube's own non-screen code over the frames' database (legend_lite._headless), made when
         first asked for -- what reads a page's file into it (file.json). Absent, the engine takes no file, and says so
-        (services.json). ``planner``: where every query is planned, chosen once (R3): Python's own when not given."""
+        (services.json). ``planner``: where every query is planned, chosen once (R3): Python's own when not given.
+        ``pages``: where the page's Save and Open… keep pages (step 2d): this user's folder (``home()``) when not given."""
         self.frames = frames
         self._headless = headless
         # where the frames' DuckDB was pointed for its extensions (a remote file's httpfs), once it was
         self._extensions: Path | None = None
         self.planner = planner if planner is not None else NativePlanner()
+        self._saved_pages = pages
         self.site = Path(site).resolve() if site is not None else None
         if self.site is not None and not self.site.is_dir():
             raise ValueError(f'the site {site} is not a directory')
@@ -277,6 +283,8 @@ class Engine:
                 return self._file_out(body or '')
             if path == _REMOTE:
                 return self._remote(body or '')
+            if path == _SAVED:
+                return self._saved(body or '')
             if not path.startswith(_API):
                 return _said(404, f'no such path: {path}')
             return _workers().submit(self._api, path, query, body or '').result()
@@ -298,7 +306,47 @@ class Engine:
         it reads a page's file, and where it plans -- the plane it plans on, and every plane it offers (today only its
         own: choosing another is step 2c's)."""
         plane = {'word': self.planner.plane, 'label': self.planner.label}
-        return {'files': self.takes_files(), 'remote': self.takes_remote(), 'plane': plane, 'planes': [plane]}
+        # where the page's saved pages are, and whose: the folder's one owner, this user (as the browser's store is
+        # 'this browser''s)
+        pages = {'where': str(self.saved_pages().folder), 'user': 'this user'}
+        return {'files': self.takes_files(), 'remote': self.takes_remote(), 'pages': pages, 'plane': plane,
+                'planes': [plane]}
+
+    def saved_pages(self) -> SavedPages:
+        """Where the page's saved pages are kept: the folder given, else this user's (``home()``), as it is now."""
+        return self._saved_pages if self._saved_pages is not None else SavedPages()
+
+    def _saved(self, body: str) -> Answer:
+        """The page's saved pages, as the browser keeps its records (``{"call": "all" | "find" | "put" | "remove", "id"?,
+        "record"?}``; step 2d): the records, kept whole, one file each in this user's folder. The store's rules are the
+        page's own (cube-store.ts's RuleStore), as they are over the browser's IndexedDB."""
+        try:
+            asked = json.loads(body)
+        except ValueError:
+            return _said(400, 'a call on the saved pages is {"call", "id"?, "record"?}, as JSON')
+        if not isinstance(asked, dict):
+            return _said(400, 'a call on the saved pages is {"call", "id"?, "record"?}')
+        store, call = self.saved_pages(), asked.get('call')
+        try:
+            if call == 'all':
+                return Answer(200, 'application/json', json.dumps(store.all(), ensure_ascii=False).encode('utf-8'))
+            if call == 'find':
+                # none found is an answer, not a refusal: the store asks before it saves a new page that its id is free
+                return Answer(200, 'application/json', json.dumps(store.find(asked.get('id')), ensure_ascii=False).encode('utf-8'))
+            if call == 'put':
+                record = asked.get('record')
+                if not isinstance(record, dict):
+                    return _said(400, 'a saved page is put as its record')
+                store.put(record)
+                return Answer(204, 'text/plain; charset=utf-8', b'')
+            if call == 'remove':
+                store.remove(asked.get('id'))
+                return Answer(204, 'text/plain; charset=utf-8', b'')
+        except ValueError as refused:
+            return _said(400, str(refused))
+        except OSError as failure:
+            return _said(500, f'the saved pages could not be read or written in {store.folder}: {failure}')
+        return _said(400, f'a call on the saved pages is all, find, put or remove, not {call!r}')
 
     def takes_files(self) -> bool:
         """Whether a page's file can be read into the frames' database here: DataCube's own code runs headless (its
@@ -761,8 +809,9 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 -- the stdlib's name
         url = urlsplit(self.path)
-        # the API, an open page saying what it is now (page.json: Python's page.read()), and a page's file in or out
-        if not (url.path.startswith(_API) or url.path in ('/page.json', _FILE_IN, _FILE_OUT, _REMOTE)):
+        # the API, an open page saying what it is now (page.json: Python's page.read()), a page's file in or out, and
+        # the saved pages
+        if not (url.path.startswith(_API) or url.path in ('/page.json', _FILE_IN, _FILE_OUT, _REMOTE, _SAVED)):
             self._refuse_unread(404, f'no such path: {url.path}')
             return
         if not self._admitted(url.path):

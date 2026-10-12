@@ -22,12 +22,15 @@
 import { LegendEngineExecutor } from '../../../engine-client/src/engine-remote.ts';
 import { ExactNumber, fromJson, type ValueSpecification } from '../../../pure-protocol/src/index.ts';
 import { base64 } from '../headless/web.ts';
+import { HostRecords, RuleStore, type HostRecordsCall } from '../cube-store.ts';
 import { pageToJson, readPage, type PageDocument } from '../page-document.ts';
 import { RemoteRun } from '../runner.ts';
 import type { InferredModel } from '../infer.ts';
 import type { S3Credentials } from '../remote.ts';
 import type { UploadResult } from '../upload.ts';
-import type { BrowserService, DatabaseService, FrameModel, LivePage, Plane, PlaneService, PlaneWord, Services, Versions } from '../app/services.ts';
+import type {
+  BrowserService, DatabaseService, FrameModel, LivePage, PageService, Plane, PlaneService, PlaneWord, Services, Versions,
+} from '../app/services.ts';
 
 /** How the page reaches Python's engine. */
 export interface PythonLink {
@@ -54,6 +57,8 @@ export interface PythonOffers {
   readonly files: boolean;
   /** Whether it reads a page's remote file (the httpfs extension it carries). */
   readonly remote: boolean;
+  /** Where it keeps the page's saved pages (this user's folder), and whose they are. */
+  readonly pages: { readonly where: string; readonly user: string };
   readonly plane: PythonPlane;
   readonly planes: readonly PythonPlane[];
 }
@@ -121,12 +126,20 @@ async function frameOf(link: PythonLink, name: string): Promise<FrameModel> {
 
 /** What Python's host offers the page (`services.json`), or why it did not say. */
 export async function askedOffers(link: PythonLink): Promise<PythonOffers> {
-  const said = JSON.parse(await asked(link, 'services.json')) as { files?: unknown; remote?: unknown; plane?: unknown; planes?: unknown };
+  const said = JSON.parse(await asked(link, 'services.json')) as {
+    files?: unknown; remote?: unknown; pages?: { where?: unknown; user?: unknown }; plane?: unknown; planes?: unknown;
+  };
   if (typeof said.files !== 'boolean' || typeof said.remote !== 'boolean') {
     throw new Error(`the engine did not say which of a page's files it reads: ${JSON.stringify(said)}`);
   }
+  if (typeof said.pages?.where !== 'string' || typeof said.pages.user !== 'string') {
+    throw new Error(`the engine did not say where it keeps saved pages: ${JSON.stringify(said)}`);
+  }
   if (!Array.isArray(said.planes)) throw new Error(`the engine did not say which planes it offers: ${JSON.stringify(said)}`);
-  return { files: said.files, remote: said.remote, plane: planeOf(said.plane), planes: said.planes.map(planeOf) };
+  return {
+    files: said.files, remote: said.remote, pages: { where: said.pages.where, user: said.pages.user },
+    plane: planeOf(said.plane), planes: said.planes.map(planeOf),
+  };
 }
 
 /** A call carrying JSON to Python: its answer's text, or -- refused -- Python's reason. */
@@ -160,6 +173,33 @@ function pythonDatabase(link: PythonLink, offers: PythonOffers): DatabaseService
       mountRemote: async (url: string, s3: S3Credentials | undefined, name: string) =>
         JSON.parse(await posted(link, 'remote.json', { url, name, ...(s3 ? { s3 } : {}) })) as InferredModel,
     } : {}),
+  };
+}
+
+/**
+ * THE SAVED PAGES, in this user's folder (step 2d): the store's rules the page's own (RuleStore), over the records
+ * Python keeps -- the browser's IndexedDB, in Python's terms (§6, Q1). Kept on disk, so nothing more to ask for to keep
+ * them.
+ */
+function pythonPages(link: PythonLink, offers: PythonOffers): PageService {
+  const carry = async (call: HostRecordsCall): Promise<unknown> => {
+    const answer = await link.fetch(`${link.baseUrl}/saved-pages.json`, {
+      method: 'POST',
+      headers: { ...headers(link), 'Content-Type': 'application/json' },
+      body: JSON.stringify(call),
+    }).catch((e: unknown) => { throw new Error(`the engine did not answer: ${String(e)}`); });
+    // every answer read whole, an empty one too: a response left unread is cancelled by the browser (it reported the
+    // put as aborted, though Python had kept the record)
+    const text = await answer.text();
+    if (!answer.ok) throw new Error(`the engine refused the saved pages' ${call.call}: ${answer.status} ${text}`);
+    // a record, the records, or -- none found, or put and removed -- nothing
+    return text === '' ? undefined : (JSON.parse(text) as unknown) ?? undefined;
+  };
+  return {
+    store: new RuleStore(new HostRecords(carry), offers.pages.user),
+    where: `in ${offers.pages.where}`,
+    memoryOnly: false,
+    persist: async () => true,
   };
 }
 
@@ -225,6 +265,7 @@ export function pythonServices(o: PythonServicesOptions): Services {
       },
       database: pythonDatabase(link, o.offers),
     },
+    pages: Promise.resolve(pythonPages(link, o.offers)),
     live: {
       watch: o.watch,
       ...('page' in o.shows ? { page: livePage(link, o.shows.page) } : {}),

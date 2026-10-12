@@ -21,6 +21,7 @@ py_library(
         ["legend_lite/**/*.py"],
         exclude = [
             "legend_lite/_headless.py",
+            "legend_lite/_home.py",
             "legend_lite/datacube.py",
             "legend_lite/engine.py",
             "legend_lite/frames.py",
@@ -39,6 +40,9 @@ py_library(
     # //datacube:engine_fixture serves a frame to DataCube's browser test
     visibility = ["//datacube:__pkg__"],
     srcs = [
+        # this user's legend-lite folder, and the pages DataCube saves in it (docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md,
+        # step 2d): the engine keeps them
+        "legend_lite/_home.py",
         "legend_lite/datacube.py",
         "legend_lite/engine.py",
         "legend_lite/frames.py",

@@ -22,6 +22,7 @@ import pyarrow.ipc
 
 import legend_lite as ll
 from legend_lite.engine import Engine, NativePlanner, WebServer
+from legend_lite._home import SavedPages
 
 GROUP = "->filter(x|$x.qty > 5)->groupBy(~[desk], ~[q: x|$x.qty : y|$y->sum()])->sort(~desk->ascending())"
 
@@ -219,6 +220,67 @@ class Planes(Served):
         self.arrow(GROUP)
         self.post('/api/pure/v1/grammar/grammarToJson/lambda', '|1')
         self.assertEqual(asked, ['execute', '/api/pure/v1/grammar/grammarToJson/lambda'])
+
+
+class SavedPagesKept(unittest.TestCase):
+    """The page's saved pages (step 2d): the browser's records, kept whole, one file each in this user's folder, the
+    store's rules the page's own -- the engine answers only all, find, put and remove."""
+
+    def setUp(self):
+        self.place = tempfile.TemporaryDirectory()
+        self.addCleanup(self.place.cleanup)
+        self.folder = Path(self.place.name) / 'pages'
+        self.engine = Engine(ll.Frames(), pages=SavedPages(self.folder))
+
+    def call(self, **asked):
+        return self.engine.answer('POST', '/saved-pages.json', '', json.dumps(asked))
+
+    def test_all_find_put_remove_as_the_browser_keeps_them(self):
+        record = {'id': 'p-1', 'name': 'Q3', 'content': '{"kind":"datacube.page","dec":12.30}', 'owner': 'this user',
+                  'createdAt': 1, 'lastUpdatedAt': 2, 'lastOpenAt': 2}
+        self.assertEqual(self.call(call='put', record=record).status, 204)
+        self.assertEqual(json.loads(self.call(call='all').body), [record])
+        # kept exactly as sent: its content the page's JSON text, never read here
+        self.assertEqual(json.loads(self.call(call='find', id='p-1').body)['content'], record['content'])
+        none = self.call(call='find', id='p-2')
+        self.assertEqual((none.status, json.loads(none.body)), (200, None))
+        self.assertEqual(self.call(call='remove', id='p-1').status, 204)
+        self.assertEqual(json.loads(self.call(call='all').body), [])
+        # every write whole: nothing half-written left beside the records
+        self.assertEqual([p.name for p in self.folder.iterdir() if p.suffix == '.part'], [])
+
+    def test_an_id_that_could_name_another_place_is_refused(self):
+        for bad in ('../escape', '.lock', '', 'a/b', 'a\\b', 'C:x', 7):
+            with self.subTest(id=bad):
+                self.assertEqual(self.call(call='find', id=bad).status, 400)
+                self.assertEqual(self.call(call='put', record={'id': bad, 'name': 'x', 'content': '{}'}).status, 400)
+        self.assertEqual(self.call(call='put', record={'id': 'ok', 'name': 'x', 'content': {'not': 'text'}}).status, 400)
+        self.assertEqual(self.call(call='rename').status, 400)
+
+    def test_one_writer_at_a_time_across_its_holders(self):
+        # another holder of the folder's lock (another notebook's process takes the same file lock) holds it: a put waits
+        store = SavedPages(self.folder)
+        order = []
+        with store._locked():
+            writer = threading.Thread(target=lambda: (store.put({'id': 'w', 'name': 'W', 'content': '{}'}), order.append('put')))
+            writer.start()
+            time.sleep(0.3)
+            order.append('released')
+        writer.join(timeout=10)
+        self.assertEqual(order, ['released', 'put'])
+
+    def test_the_folder_is_this_users_unless_pointed_elsewhere(self):
+        from unittest import mock
+        import importlib
+        home_module = importlib.import_module('legend_lite._home')
+        with mock.patch.dict(os.environ, {'LEGEND_LITE_HOME': self.place.name}):
+            self.assertEqual(ll.home(), Path(self.place.name))
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('LEGEND_LITE_HOME', None)
+            self.addCleanup(setattr, home_module, '_chosen', home_module._chosen)
+            self.assertEqual(ll.home(self.place.name), Path(self.place.name).resolve())
+        said = json.loads(self.engine.answer('GET', '/services.json', '', None).body)
+        self.assertEqual(said['pages'], {'where': str(self.folder), 'user': 'this user'})
 
 
 class NoFiles(Served):

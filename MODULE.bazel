@@ -474,7 +474,9 @@ http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_
 }.items()]
 
 # DuckDB's httpfs extension for Python's DuckDB (1.5.5, as duckdb's Python wheel is pinned: tools/python/requirements.in;
-# it must match exactly), one per platform, pinned by content: a page on Python reads a remote file through it
+# it must match exactly), one per platform, pinned by content. Pinned 2026-10-12 on the user's ruling that day: httpfs
+# hermetic in the build (never downloaded where legend-lite runs, CI reading remote files offline), and Python reading
+# only remote URL schemes. A page on Python reads a remote file through it
 # (docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md, step 2b). The wheel carries it (//python:wheel_duckdb); nothing is
 # downloaded where it runs.
 [http_file(

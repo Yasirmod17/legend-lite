@@ -551,6 +551,32 @@ Python's in-process services.
      (`LEGEND_LITE_DATACUBE`), as `//python:headless_test` does. `node_test` takes `platform_env`, a select merged last
      (Compiler Rewrite's review), which gives the test Windows' `PROCESSOR_ARCHITECTURE` as `//python`'s tests have it.
 
+   **2c's seams, as built (2026-10-12)** (the user: no remote-engine calls in this phase, but the code "pluggable even if
+   we never plug in the others").
+   - Python's engine answers every call the compiler answers -- a query's types, a parse, a print, and an execute's
+     plan -- through the one `Planner` it was made with, chosen once (R3); today `NativePlanner`, the native library,
+     on the `local` plane. One on a server is another `Planner`, with no other change to the engine.
+   - `services.json` names the plane Python plans on and the planes it offers (today its own), and the page builds its
+     planner menu and its status word from them: no plane is written into the page. Choosing another plane is Python's
+     (`ll.show(..., planner=...)`, when 2c is built).
+
+   **2d, as built (2026-10-12): Save and Open… on Python** (the user's choice of the two shapes: the page keeps the
+   store's rules, Python keeps the records).
+   - **Python's side** (`python/legend_lite/_home.py`): `home()` is this user's legend-lite folder (Q1: the operating
+     system's per-user data folder; `LEGEND_LITE_HOME`, or `home(path)` for this process, points it elsewhere), and
+     `SavedPages` keeps the page's saved pages in `home()/pages`: the browser's records, one `<id>.json` file each, the
+     page's content kept as its exact JSON text and never read in Python. Four calls (`saved-pages.json`: all, find, put,
+     remove), each record written whole (beside, then moved over), under a lock file several Python processes share;
+     an id that could name another place is refused.
+   - **The page's side**: `cube-store.ts`'s `HostRecords`, a third backend beside memory and IndexedDB, carries the four
+     calls to the host, and the store's rules are `RuleStore`'s, unchanged. Python's services give `pages` from it; the
+     save window and Open… say where (`in <home>/pages`), and its owner is `this user`, as the browser's is `this
+     browser`. Open… on Python lists Python's pages, the tab's its browser's: one store per place, as Q1 has it.
+   - **Proven**: `engine_test` (the four calls; ids refused; a write whole; the lock holding a second writer off;
+     `home()`), `cube_store_test` (RuleStore over host-kept records, the content's exact numbers kept), and
+     `python_engine_test`: Save As… on Python's page writes a record in the test's own folder, and Open… opens it again
+     over its remote file.
+
 3. **Python's model home.**
    - The SDLC, Depot and query store in the native library over Python's per-user folders (§6), served by Python.
    - Nothing is built for Create a Class… itself: the app's model actions are already on Python's pages from step 2,

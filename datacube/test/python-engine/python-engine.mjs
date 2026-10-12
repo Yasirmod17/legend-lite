@@ -9,7 +9,8 @@
 // first: points Playwright at the Chromium Bazel fetched
 import '../../../tools/browser/pinned-chromium.mjs';
 import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { chromium } from 'playwright';
 import { runfileFromEnv } from '../../../tools/js/runfiles.mts';
@@ -18,13 +19,15 @@ const fixture = runfileFromEnv('ENGINE_FIXTURE');
 const site = runfileFromEnv('DATACUBE_SITE');
 const bundle = readFileSync(runfileFromEnv('PYTHON_ENGINE_PAGE'));
 const upstream = readFileSync(runfileFromEnv('UPSTREAM_ARROW_ANSWER'));
+// this user's legend-lite folder, the test's own (the pages Save writes go there, never into a real home)
+const home = mkdtempSync(join(process.env.TEST_TMPDIR, 'legend-lite-home-'));
 
 // the library by its runfiles path, as //python's tests are given it: a program a test starts gets no BUILD env
 const engine = spawn(fixture, ['--site', site], {
   stdio: ['pipe', 'pipe', 'pipe'],
   env: { ...process.env, LEGEND_LITE_LIBRARY: runfileFromEnv('LEGEND_LITE_LIBRARY'),
     LEGEND_LITE_DATACUBE: runfileFromEnv('LEGEND_LITE_DATACUBE'),
-    LEGEND_LITE_DUCKDB_EXTENSIONS: runfileFromEnv('LEGEND_LITE_DUCKDB_EXTENSIONS'), PYTHONUTF8: '1',
+    LEGEND_LITE_DUCKDB_EXTENSIONS: runfileFromEnv('LEGEND_LITE_DUCKDB_EXTENSIONS'), LEGEND_LITE_HOME: home, PYTHONUTF8: '1',
     PYTHONDONTWRITEBYTECODE: '1' },
 });
 // the engine's own account, in this test's log: a server-side reason is then never invisible
@@ -100,7 +103,7 @@ try {
   // token in its fragment; the cube opens over the engine and shows the frame's rows, with nothing run in the tab
   const cube = await browser.newPage();
   cube.on('pageerror', (e) => { console.log(`engine page error: ${e.message}`); failed = true; });
-  cube.on('requestfailed', (r) => console.log(`engine page request failed: ${r.url()} -- ${r.failure()?.errorText ?? ''}`));
+  cube.on('requestfailed', (r) => console.log(`engine page request failed: ${r.url()} ${r.postData() ?? ''} -- ${r.failure()?.errorText ?? ''}`));
   cube.on('console', (m) => console.log(`engine page console ${m.type()}: ${m.text()}`));
   // every file and call the page asks for is answered: a refusal (a missing file, a refused call) fails the test
   cube.on('response', (r) => {
@@ -207,6 +210,43 @@ try {
   console.log(`${remoteRead ? 'ok  ' : 'FAIL'} a remote file opened on Python's page is read by Python's DuckDB, through the httpfs it carries`);
   if (!remoteRead) {
     console.log(`  the page showed: ${(await cube.evaluate(() => document.body.innerText.slice(0, 300)))}`);
+    failed = true;
+  }
+
+  // SAVE AND OPEN ON PYTHON (step 2d): the page saved by the app's own Save As…, its record in this user's folder (the
+  // store's rules the page's own, Python keeping the records), then opened again from Open… over its source as it is now
+  const menuEntry = async (label) => {
+    await cube.click('.dc-titlebar-menu');
+    await cube.locator(`.dc-menu-item:has(> .dc-menu-label:text-is(${JSON.stringify(label)}))`).first().click();
+  };
+  await menuEntry('Save As\u2026');
+  await cube.locator('.dc-save').waitFor({ timeout: 10_000 });
+  await cube.fill('.dc-save-input', 'Books from Python');
+  await cube.locator('.dc-save-foot .dc-primary').click();
+  const saved = await cube.locator('.dc-save').waitFor({ state: 'detached', timeout: 30_000 }).then(() => true, () => false);
+  const records = saved ? readdirSync(join(home, 'pages')).filter((f) => f.endsWith('.json')) : [];
+  const record = records.length === 1 ? JSON.parse(readFileSync(join(home, 'pages', records[0]), 'utf8')) : undefined;
+  const inFolder = saved && record?.name === 'Books from Python' && record.owner === 'this user' && typeof record.content === 'string';
+  console.log(`${inFolder ? 'ok  ' : 'FAIL'} a page saved on Python's page is a record in this user's folder`);
+  if (!inFolder) {
+    console.log(`  saved: ${saved}, records: ${JSON.stringify(records)}, record: ${JSON.stringify(record)?.slice(0, 300)}`);
+    failed = true;
+  }
+  // a blank page, then the saved one opened from Open…: its grid over its remote file again
+  await cube.click('.dc-titlebar-menu');
+  await cube.locator('.dc-menu .dc-menu-item', { has: cube.locator(':scope > .dc-menu-label:text-is("New")') }).hover();
+  await cube.locator('.dc-menu .dc-menu-item', { has: cube.locator(':scope > .dc-menu-label:text-is("Blank Page")') }).click();
+  await cube.locator('.dc-blank').waitFor({ timeout: 10_000 });
+  await menuEntry('Open\u2026');
+  const row = cube.locator('#cubelib .dc-lib-row', { hasText: 'Books from Python' });
+  const listed = await row.waitFor({ timeout: 10_000 }).then(() => true, () => false);
+  if (listed) await row.locator('.dc-lib-button', { hasText: 'Open' }).click();
+  const reopened = listed && await cube.waitForFunction(() => /\b3 rows\b/.test(document.body.innerText)
+    && document.body.innerText.includes('Ulysses') && document.querySelector('.dc-page-name')?.textContent?.includes('Books from Python'),
+  undefined, { timeout: 60_000 }).then(() => true, () => false);
+  console.log(`${reopened ? 'ok  ' : 'FAIL'} a page saved on Python opens again from Open…, over its source`);
+  if (!reopened) {
+    console.log(`  listed: ${listed}; the page showed: ${(await cube.evaluate(() => document.body.innerText.slice(0, 300)))}`);
     failed = true;
   }
 
