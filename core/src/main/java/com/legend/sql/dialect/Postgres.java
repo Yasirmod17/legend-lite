@@ -361,7 +361,11 @@ public final class Postgres extends AnsiSqlRenderer {
         if (t instanceof SqlType.Array a) {
             String e = "__e" + depth;
             String o = "__o" + depth;
-            return w -> w.append("(CASE WHEN jsonb_typeof(").piece(json).append(") = 'array' THEN ARRAY(SELECT ")
+            // NULL for SQL's NULL or jsonb's null; any other value that is not an array is jsonb_array_elements's
+            // error, as Pure's toMany raises one and DuckDB's cast does (it was an empty list here: 2026-10-12, the
+            // #SQL{}# line)
+            return w -> w.append("(CASE WHEN ").piece(json).append(" IS NULL OR jsonb_typeof(").piece(json)
+                    .append(") = 'null' THEN NULL ELSE ARRAY(SELECT ")
                     .piece(held(v -> v.append(e), a.element(), depth + 1)).append(" FROM jsonb_array_elements(")
                     .piece(json).append(") WITH ORDINALITY AS __j" + depth + "(" + e + ", " + o + ") ORDER BY " + o)
                     .append(") END)");
@@ -903,10 +907,13 @@ public final class Postgres extends AnsiSqlRenderer {
         if (c.target() instanceof SqlType.Array arr) {
             return listCast(writer, c, arr);
         }
-        // a Variant as a map: its members as entries, in jsonb's own key order; NULL when it is no object
+        // a Variant as a map: its members as entries, in jsonb's own key order. NULL for SQL's NULL or jsonb's null;
+        // any other value that is not an object is jsonb_each's error, as DuckDB's cast to a MAP raises one (it was
+        // NULL here: 2026-10-12, the #SQL{}# line)
         if (c.target() instanceof SqlType.Map && isJson(c.value())) {
-            return writer.append("(CASE WHEN jsonb_typeof(").expr(c.value(), 0).append(") = 'object' THEN ARRAY(SELECT"
-                    + " jsonb_build_object('key', to_jsonb(__mk), 'value', __mv) FROM jsonb_each(").expr(c.value(), 0)
+            return writer.append("(CASE WHEN ").expr(c.value(), 0).append(" IS NULL OR jsonb_typeof(")
+                    .expr(c.value(), 0).append(") = 'null' THEN NULL ELSE ARRAY(SELECT jsonb_build_object('key',"
+                    + " to_jsonb(__mk), 'value', __mv) FROM jsonb_each(").expr(c.value(), 0)
                     .append(") WITH ORDINALITY AS __mj(__mk, __mv, __mo) ORDER BY __mo) END)");
         }
         // a map to another map's key and value types: its entries are jsonb, so it is itself (a NULL or the empty map

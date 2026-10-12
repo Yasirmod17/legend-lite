@@ -126,7 +126,7 @@ public final class SqlAst {
 
     /** {@code (query) [[AS] alias [(columns)]]}: Postgres 16 lets the alias go unwritten. */
     public record SubqueryFrom(Statement query, @com.legend.base.Nullable Ident alias, List<Ident> columnAliases,
-            Pos pos) implements FromItem {
+            boolean lateral, Pos pos) implements FromItem {
         public SubqueryFrom {
             columnAliases = List.copyOf(columnAliases);
         }
@@ -153,7 +153,7 @@ public final class SqlAst {
     /** A value expression. */
     public sealed interface Expr permits ColumnRef, IntegerLit, NumericLit, StringLit, BooleanLit, NullLit, TypedLit,
             Param, Unary, Binary, Operator, IsNull, IsTruth, IsDistinct, InList, Between, Like, Case, FunctionCall,
-            Cast, ScalarSubquery, Exists, InSubquery, Quantified, Window {
+            Cast, ScalarSubquery, Exists, InSubquery, Quantified, Window, Subscript, ArrayConstructor {
         Pos pos();
     }
 
@@ -213,6 +213,17 @@ public final class SqlAst {
             implements Expr {
     }
 
+    /** {@code ARRAY[e, ...]}: an array of the elements' values. */
+    public record ArrayConstructor(List<Expr> elements, Pos pos) implements Expr {
+        public ArrayConstructor {
+            elements = List.copyOf(elements);
+        }
+    }
+
+    /** A subscript: {@code base[index]} (a jsonb member or element, or an array's element). */
+    public record Subscript(Expr base, Expr index, Pos pos) implements Expr {
+    }
+
     /** {@code x IS [NOT] NULL}. */
     public record IsNull(Expr operand, boolean negated, Pos pos) implements Expr {
     }
@@ -256,12 +267,21 @@ public final class SqlAst {
     public record When(Expr condition, Expr result) {
     }
 
-    /** {@code name([DISTINCT] args)} or {@code name(*)}. */
-    public record FunctionCall(List<Ident> name, List<Expr> args, boolean distinct, boolean star, Pos pos)
+    /** {@code name([DISTINCT] args [ORDER BY ...]) [WITHIN GROUP (ORDER BY ...)] [FILTER (WHERE ...)]} or
+     *  {@code name(*)}: the last three an aggregate's only. */
+    public record FunctionCall(List<Ident> name, List<Expr> args, boolean distinct, boolean star,
+            List<SortItem> orderBy, List<SortItem> withinGroup, @com.legend.base.Nullable Expr filter, Pos pos)
             implements Expr {
         public FunctionCall {
             name = List.copyOf(name);
             args = List.copyOf(args);
+            orderBy = List.copyOf(orderBy);
+            withinGroup = List.copyOf(withinGroup);
+        }
+
+        /** A call with none of an aggregate's clauses. */
+        public FunctionCall(List<Ident> name, List<Expr> args, boolean distinct, boolean star, Pos pos) {
+            this(name, args, distinct, star, List.of(), List.of(), null, pos);
         }
     }
 

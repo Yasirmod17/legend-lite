@@ -45,6 +45,10 @@ class SqlToPureTest {
         return assertThrows(SqlTranslationException.class, () -> pure(sql));
     }
 
+    private static SqlTranslationException refusal(String sql, List<Col> columns) {
+        return assertThrows(SqlTranslationException.class, () -> pure(sql, columns));
+    }
+
     // ------------------------------------------------------------------ shapes
 
     @Test
@@ -249,15 +253,21 @@ class SqlToPureTest {
         assertEquals("#>{s::DB.T}#->extend(~[r:r|if($r.ID * 1.5D >= 0, |floor(($r.ID * 1.5D) + 0.5D),"
                 + " |(($r.ID * 1.5D) - 0.5D)->ceiling())])->select(~[r])",
                 pure("select round(ID * 1.5) as r from tb('s::DB.T')"));
-        assertEquals("round(x, n) is not supported yet (Pure's round is half to even, Postgres's half away from zero)",
-                refusal("select round(age * 1.5, 1) from tb('s::DB.T')").getMessage());
+        // to n places, exactly: scaled, rounded half away from zero, scaled back by a decimal constant
+        assertEquals("#>{s::DB.T}#->extend(~[r:r|if(if($r.age->isEmpty(), |[], |$r.age->toOne() * 1.5D)->isEmpty(), |[], |"
+                + "if(if($r.age->isEmpty(), |[], |$r.age->toOne() * 1.5D)->toOne() * 10 >= 0, |floor((if($r.age->isEmpt"
+                + "y(), |[], |$r.age->toOne() * 1.5D)->toOne() * 10) + 0.5D), |((if($r.age->isEmpty(), |[], |$r.age->to"
+                + "One() * 1.5D)->toOne() * 10) - 0.5D)->ceiling()) * 0.1D)])->select(~[r])",
+                pure("select round(age * 1.5, 1) as r from tb('s::DB.T')"));
+        assertEquals(SqlTranslationException.Kind.UNSUPPORTED,
+                refusal("select round(age / 3.0, 1) from tb('s::DB.T')").kind());
     }
 
     @Test
     void nullifAndGreatestSpellPostgresNullsOut() {
         // greatest ignores a NULL: age's NULL gives ID
         assertEquals("#>{s::DB.T}#->extend(~[d:r|if($r.dept == 'eng', |[], |$r.dept), g:r|if($r.age->isEmpty(), |$r.ID,"
-                        + " |if($r.ID >= $r.age->toOne(), |$r.ID, |$r.age))])->select(~[d, g])",
+                        + " |if($r.ID >= $r.age->toOne(), |$r.ID, |$r.age->toOne()))])->select(~[d, g])",
                 pure("select nullif(dept, 'eng') as d, greatest(ID, age) as g from tb('s::DB.T')"));
     }
 
@@ -270,6 +280,85 @@ class SqlToPureTest {
                 refusal("select dept::integer from tb('s::DB.T')").getMessage());
         assertEquals("value \"3000000000\" is out of range for type integer",
                 refusal("select '3000000000'::int from tb('s::DB.T')").getMessage());
+        // a smallint holds what is in its range, else Postgres's error: an empty value read as one raises
+        assertEquals("#>{s::DB.T}#->extend(~[s:r|if(($r.ID < -32768) || ($r.ID > 32767), |[]->cast(@Integer)"
+                        + "->toOne(), |$r.ID), v:r|if($r.firstName->isEmpty(), |[], |$r.firstName->toOne()->left(2))])"
+                        + "->select(~[s, v])",
+                pure("select ID::smallint as s, firstName::varchar(2) as v from tb('s::DB.T')"));
+        assertEquals("integer out of range", refusal("select 3000000000::int4 from tb('s::DB.T')").getMessage());
+    }
+
+    @Test
+    void booleanPercentileAndPairAggregatesAreAGroupsReduce() {
+        assertEquals("#>{s::DB.T}#->groupBy(~[dept], ~[a:r|if($r.age->isNotEmpty() && ($r.age->toOne() > 30), |true,"
+                        + " |if($r.age->isNotEmpty() && !($r.age->toOne() > 30), |false, |[])):y|$y->and(),"
+                        + " m:r|$r.age:y|$y->percentile(0.5, false, false)->cast(@Integer),"
+                        // corr: NULL where a value's variance over the pairs is 0 (DuckDB's quotient is NaN there)
+                        + " _sql_1:r|$r.age->rowMapper($r.ID):y|$y->corr(),"
+                        + " _sql_2:r|$r.age->rowMapper(if($r.ID->isEmpty(), |[], |$r.age)):y|$y->covarPopulation(),"
+                        + " _sql_3:r|$r.ID->rowMapper(if($r.age->isEmpty(), |[], |$r.ID)):y|$y->covarPopulation()])"
+                        + "->extend(~[c:r|if(($r._sql_2->isNotEmpty() && ($r._sql_2->toOne() == 0))"
+                        + " || ($r._sql_3->isNotEmpty() && ($r._sql_3->toOne() == 0)), |[], |$r._sql_1)])"
+                        + "->select(~[dept, a, m, c])",
+                pure("select dept, bool_and(age > 30) as a, percentile_disc(0.5) within group (order by age desc) as m,"
+                        + " corr(age, ID) as c from tb('s::DB.T') group by dept"));
+        assertEquals("function bool_and(integer) does not exist",
+                refusal("select bool_and(age) from tb('s::DB.T')").getMessage());
+        assertEquals("percentile value 1.5 is not between 0 and 1",
+                refusal("select percentile_cont(1.5) within group (order by age) from tb('s::DB.T')").getMessage());
+        // DuckDB's mode breaks a tie otherwise than Postgres (which takes the first in the order)
+        assertEquals("WITHIN GROUP is not supported yet",
+                refusal("select mode() within group (order by age) from tb('s::DB.T')").getMessage());
+    }
+
+    @Test
+    void lagWithADefaultTellsAMissingRowFromANullValue() {
+        // the default where there is no previous row; a previous row's NULL stays NULL (the constant 1 tells which)
+        assertEquals("#>{s::DB.T}#->extend(~[_sql_1:r|0, _sql_2:r|1])->extend(over([~ID->ascending("
+                        + "meta::pure::functions::relation::NullOrder.LAST)]), ~l:{p, w, r|if($p->lag($r)._sql_2"
+                        + "->isEmpty(), |$r._sql_1, |$p->lag($r).age)})->select(~[ID, l])",
+                pure("select ID, lag(age, 1, 0) over (order by ID) as l from tb('s::DB.T')"));
+    }
+
+    @Test
+    void dateArithmeticIsPostgresDaysIntervalsAndTruncation() {
+        List<Col> dated = List.of(new Col("d", "StrictDate", false), new Col("ts", "DateTime", false));
+        // months, then days, then seconds, as Postgres adds an interval; a date is a timestamp at midnight first
+        String unit = "meta::pure::functions::date::DurationUnit.";
+        assertEquals("#>{s::DB.T}#->extend(~[a:r|$r.d->adjust(1, " + unit + "DAYS), b:r|%2000-01-01->dateDiff($r.d, "
+                + unit + "DAYS), c:r|$r.ts->adjust(1, " + unit + "MONTHS)->adjust(2, " + unit + "DAYS), e:r|$r.d"
+                + "->adjust(0, " + unit + "HOURS)->adjust(-10800, " + unit + "SECONDS), f:r|$r.ts->firstDayOfMonth()"
+                + "->adjust(0, " + unit + "HOURS)])->select(~[a, b, c, e, f])",
+                pure("select d + 1 as a, d - date '2000-01-01' as b, ts + interval '1 month 2 days' as c,"
+                + " d - interval '3' hour as e, date_trunc('month', ts) as f from tb('s::DB.T')", dated));
+        assertEquals("the interval '1.5 days' is not supported yet: whole years, months, weeks, days, hours, minutes"
+                + " and seconds are", refusal("select ts + interval '1.5 days' from tb('s::DB.T')", dated)
+                .getMessage());
+    }
+
+    @Test
+    void aQuotientOfNumericsIsInexactSoNothingRoundsOrSpellsIt() {
+        // Postgres's numeric quotient is exact, Pure's divide a Float: floor(0.3 / 0.1) is 3 there, 2 here
+        assertEquals("floor of a quotient, average or root of numerics (exact in Postgres, a double here) is not"
+                + " supported yet", refusal("select floor(0.3 / 0.1) as f from tb('s::DB.T')").getMessage());
+        assertEquals("a cast to integer of a quotient, average or root of numerics (exact in Postgres, a double"
+                + " here) is not supported yet", refusal("select (ID / 2.0)::integer as i from tb('s::DB.T')")
+                .getMessage());
+        assertEquals("round(x) of a quotient, average or root of numerics (exact in Postgres, a double here) is not"
+                + " supported yet", refusal("select round(avg(age)) as a from tb('s::DB.T')").getMessage());
+        assertEquals("|| of a quotient, average or root of numerics (exact in Postgres, a double here) is not"
+                + " supported yet", refusal("select dept || ID / 3.0 as t from tb('s::DB.T')").getMessage());
+        // a double with an inexact numeric in it is still inexact: Postgres's double of the exact value is not this one
+        assertEquals("floor of a quotient, average or root of numerics (exact in Postgres, a double here) is not"
+                + " supported yet", refusal("select floor(ID / 3.0 * 1::float8) as f from tb('s::DB.T')").getMessage());
+        // a sum of integers is a bigint or a numeric in Postgres by the column's width: its division is refused
+        assertEquals("dividing a sum of integers by an integer is not supported yet: Postgres's sum of an integer"
+                + " column is a bigint or a numeric by the column's width, which divide differently (cast it:"
+                + " sum(x)::bigint / n or sum(x)::numeric / n)",
+                refusal("select sum(age) / 2 as s from tb('s::DB.T')").getMessage());
+        // a double's quotient is a double in Postgres too: round is rint, half to even, as Pure's round of a Float
+        assertEquals("#>{s::DB.T}#->extend(~[r:r|round($r.ID / toFloat(2.0D))->toFloat()])->select(~[r])",
+                pure("select round(ID / 2.0::float8) as r from tb('s::DB.T')"));
     }
 
     // ------------------------------------------------------------------ Postgres's NULL rules
@@ -314,10 +403,106 @@ class SqlToPureTest {
         SqlTranslationException regex = refusal("select ID from tb('s::DB.T') where dept ~ 'e'");
         assertEquals(SqlTranslationException.Kind.UNSUPPORTED, regex.kind());
         assertEquals("regular expression operators (~, ~*, !~, !~*) are not supported yet", regex.getMessage());
-        assertEquals("the operator ->> is not supported yet",
-                refusal("select dept ->> 'k' from tb('s::DB.T')").getMessage());
+        assertEquals("the operator @> is not supported yet",
+                refusal("select dept @> 'k' from tb('s::DB.T')").getMessage());
         assertEquals("a select list with no columns is not supported yet",
                 refusal("select from tb('s::DB.T')").getMessage());
+    }
+
+    // ------------------------------------------------------------------ jsonb
+
+    /** A Variant column: Postgres's jsonb (register S48). */
+    private static final List<Col> JSON_COLUMNS = List.of(new Col("ID", "Integer", false),
+            new Col("j", "meta::pure::metamodel::variant::Variant", true));
+
+    @Test
+    void jsonbNavigationIsVariantGetAndItsTextIsTo() {
+        assertEquals("#>{s::DB.T}#->extend(~[a:r|$r.j->get('a'), z:r|$r.j->get(0), b:r|$r.j->get('b')->to(@String)])"
+                + "->select(~[a, z, b])", pure("select j -> 'a' as a, j -> 0 as z, j ->> 'b' as b from tb('s::DB.T')", JSON_COLUMNS));
+        assertEquals("#>{s::DB.T}#->extend(~[p:r|$r.j->get('a')->get('b c'), t:r|$r.j->get('a')->to(@String),"
+                + " k:r|$r.j->get('k')])->select(~[p, t, k])", pure("select j #> '{a,\"b c\"}' as p, j #>> '{a}' as t, j['k'] as k from tb('s::DB.T')",
+                JSON_COLUMNS));
+        assertEquals("#>{s::DB.T}#->extend(~[v:r|fromJson('{\"a\":1}')->get('a')"
+                + "->to(@String), s:r|fromJson('\"x\"')])->select(~[v, s])", pure("select '{\"a\":1}'::jsonb ->> 'a' as v, to_jsonb('x'::text) as s from tb('s::DB.T')",
+                JSON_COLUMNS));
+    }
+
+    @Test
+    void subscriptsAndPathsReadAnElementOrAMemberByJsonbsPathRule() {
+        assertEquals("#>{s::DB.T}#->extend(~[e:r|$r.j->get('0')->coalesce($r.j->get(0)), f:r|$r.j->get('1')"
+                + "->coalesce($r.j->get(1)), k:r|$r.j->get('k'), p:r|$r.j->get('a')->get(' 2')->coalesce($r.j->get('a')"
+                + "->get(2)), x:r|$r.j->get('-1')->coalesce($r.j->get(-1))])->select(~[e, f, k, p, x])",
+                pure("select j[0] as e, j['1'] as f, j['k'] as k, j #> '{a,\" 2\"}' as p,"
+                + " jsonb_extract_path(j, '-1') as x from tb('s::DB.T')", JSON_COLUMNS));
+    }
+
+    @Test
+    void caseAndCoalesceResolveOneTypeAsPostgresDoes() {
+        assertEquals("#>{s::DB.T}#->extend(~[c:r|$r.ID, d:r|if($r.ID > 1, |1, |2.5D),"
+                + " e:r|$r.j->coalesce(fromJson('[]'))])->select(~[c, d, e])", pure("select coalesce(ID, '5') as c, case when ID > 1 then 1 else 2.5 end as d,"
+                + " coalesce(j, '[]') as e from tb('s::DB.T')", JSON_COLUMNS));
+        assertEquals("the string 'x' read as integer is not supported yet", refusal("select coalesce(ID, 'x') from"
+                + " tb('s::DB.T')", JSON_COLUMNS).getMessage());
+        assertEquals("CASE types integer and text cannot be matched", refusal("select case when ID > 1 then ID else"
+                + " 'a'::text end from tb('s::DB.T')", JSON_COLUMNS).getMessage());
+    }
+
+    @Test
+    void jsonbFormsWithoutAFaithfulPureSpellingAreRefusedByName() {
+        assertEquals("ORDER BY of a jsonb value is not supported yet (jsonb orders and compares by its own rules)",
+                refusal("select ID from tb('s::DB.T') order by j", JSON_COLUMNS).getMessage());
+        assertEquals("a jsonb constant with a duplicate key is not supported yet",
+                refusal("select '{\"a\":1,\"a\":2}'::jsonb ->> 'a' from tb('s::DB.T')", JSON_COLUMNS).getMessage());
+        assertEquals("ORDER BY of a jsonb value is not supported yet (jsonb orders and compares by its own rules)",
+                refusal("select j from tb('s::DB.T') union all select j from tb('s::DB.T') order by 1", JSON_COLUMNS)
+                        .getMessage());
+        assertEquals("JOIN/USING of a jsonb value is not supported yet (jsonb orders and compares by its own rules)",
+                refusal("select ID from tb('s::DB.T') a join tb('s::DB.T') b using (j)", JSON_COLUMNS).getMessage());
+        assertEquals("operator does not exist: jsonb -> bigint",
+                refusal("select j -> 3000000000 from tb('s::DB.T')", JSON_COLUMNS).getMessage());
+        assertEquals("subscript type numeric is not supported",
+                refusal("select j[1.5] from tb('s::DB.T')", JSON_COLUMNS).getMessage());
+        assertEquals("COALESCE types jsonb and text cannot be matched",
+                refusal("select coalesce(j, 'x'::text) from tb('s::DB.T')", JSON_COLUMNS).getMessage());
+        assertEquals("could not determine polymorphic type because input has type unknown",
+                refusal("select to_jsonb('x') from tb('s::DB.T')", JSON_COLUMNS).getMessage());
+        assertEquals("reading a jsonb value out of a jsonb constant is not supported yet (its text, with ->> or #>>,"
+                + " is)", refusal("select '{\"a\":1}'::jsonb -> 'a' from tb('s::DB.T')", JSON_COLUMNS).getMessage());
+        assertEquals("jsonb_array_length(...) is not supported yet",
+                refusal("select jsonb_array_length(j) from tb('s::DB.T')", JSON_COLUMNS).getMessage());
+        assertEquals(SqlTranslationException.Kind.INVALID,
+                refusal("select ID -> 'a' from tb('s::DB.T')").kind());
+    }
+
+    // ------------------------------------------------------------------ LATERAL, set-returning functions, no FROM
+
+    @Test
+    void aFunctionInFromIsAFlattenAndReadsTheItemsBeforeItThroughLateral() {
+        assertEquals("1->range(3 + 1, 2)->flatten(~g)->select(~[g])",
+                pure("select g from generate_series(1, 3, 2) as g"));
+        assertEquals("#>{s::DB.T}#->lateral(r|[$r.ID, 2]->flatten(~u)->rename(~u, ~x))->select(~[ID, x])",
+                pure("select ID, u.x from tb('s::DB.T') t, unnest(array[ID, 2]) as u(x)"));
+        assertEquals("#>{s::DB.T}#->lateral(r|#>{s::DB.T}#->filter(r1|$r1.ID < $r.ID)->aggregate(~[n:r1|1:y1|$y1->count()])->select(~[n]))->select(~[ID, n])",
+                pure("select ID, s.n from tb('s::DB.T') t cross join lateral (select count(*) as n"
+                + " from tb('s::DB.T') q where q.ID < t.ID) s"));
+        assertEquals("#TDS{\n_sql_row\n1\n}#->extend(~[three:r|1 + 2])->select(~[three])",
+                pure("select 1 + 2 as three"));
+    }
+
+    @Test
+    void jsonbSetReturningFunctionsAreToManyAndKeysAndTheSelectListFormIsALateral() {
+        assertEquals("#>{s::DB.T}#->lateral(r|if($r.j->isNotEmpty() && $r.j->to(@String)->isEmpty(), |fromJson('0'),"
+                + " |$r.j)->toMany(@meta::pure::metamodel::variant::Variant)->flatten(~value))->extend(~[x:r|$r.value"
+                + "->get('x')->to(@String)])->select(~[ID, x])",
+                pure("select ID, e ->> 'x' as x from tb('s::DB.T') t, jsonb_array_elements(t.j) e",
+                JSON_COLUMNS));
+        assertEquals("#>{s::DB.T}#->lateral(r|if($r.j->isEmpty(), |[], |if($r.j->isNotEmpty() && $r.j->to(@String)"
+                + "->isEmpty(), |fromJson('0'), |$r.j)->to(@meta::pure::functions::collection::Map<String,"
+                + " meta::pure::metamodel::variant::Variant>)->toOne()->keys())->flatten(~_sql_set)->rename(~_sql_set,"
+                + " ~_sql_value))->extend(~[k:r|$r._sql_value])->select(~[ID, k])",
+                pure("select ID, jsonb_object_keys(j) as k from tb('s::DB.T')", JSON_COLUMNS));
+        assertEquals("a set-returning function inside an expression is not supported yet",
+                refusal("select jsonb_array_elements(j) ->> 'x' from tb('s::DB.T')", JSON_COLUMNS).getMessage());
     }
 
     @Test
@@ -386,6 +571,23 @@ class SqlToPureTest {
     // ------------------------------------------------------------------ refusals
 
     @Test
+    void aggregateFilterDistinctAndIntegerDivision() {
+        assertEquals("#>{s::DB.T}#->groupBy(~[dept], ~[n:r|if($r.age->isNotEmpty() && ($r.age->toOne() > 30), |1, |[])"
+                + ":y|$y->count(), s:r|$r.age:y|$y->distinct()->sum()])->select(~[dept, n, s])", pure("select dept, count(*) filter (where age > 30) as n, sum(distinct age) as s"
+                + " from tb('s::DB.T') group by dept"));
+        assertEquals("#>{s::DB.T}#->extend(~[q:r|if($r.age->isEmpty(), |[], |if((($r.age->toOne() - $r.age->toOne()->rem(7"
+                + ")) / 7) * 0.9999999999999991 >= 0, |floor((($r.age->toOne() - $r.age->toOne()->rem(7)) / 7) * 0.9999"
+                + "999999999991), |ceiling((($r.age->toOne() - $r.age->toOne()->rem(7)) / 7) * 0.9999999999999991)) + r"
+                + "ound((($r.age->toOne() - $r.age->toOne()->rem(7)) - (if((($r.age->toOne() - $r.age->toOne()->rem(7))"
+                + " / 7) * 0.9999999999999991 >= 0, |floor((($r.age->toOne() - $r.age->toOne()->rem(7)) / 7) * 0.999999"
+                + "9999999991), |ceiling((($r.age->toOne() - $r.age->toOne()->rem(7)) / 7) * 0.9999999999999991)) * 7))"
+                + " / 7))])->select(~[q])",
+                pure("select age / 7 as q from tb('s::DB.T')"));
+        assertEquals("FILTER specified, but upper is not an aggregate function",
+                refusal("select upper(name) filter (where age > 1) from tb('s::DB.T')").getMessage());
+    }
+
+    @Test
     void refusalsSayTheirKindAndWhere() {
         SqlTranslationException syntax = refusal("select ID from tb('s::DB.T') where");
         assertEquals(SqlTranslationException.Kind.SYNTAX, syntax.kind());
@@ -393,7 +595,8 @@ class SqlToPureTest {
         assertEquals(35, syntax.column());
         assertEquals(SqlTranslationException.Kind.UNSUPPORTED,
                 refusal("select ID from tb('s::DB.T') a, lateral (select 1) b").kind());
-        assertEquals(SqlTranslationException.Kind.UNSUPPORTED, refusal("select age / 2 from tb('s::DB.T')").kind());
+        assertEquals(SqlTranslationException.Kind.UNSUPPORTED,
+                refusal("select mode() within group (order by age) from tb('s::DB.T')").kind());
         SqlTranslationException grouped = refusal("select dept, age from tb('s::DB.T') group by dept");
         assertEquals(SqlTranslationException.Kind.INVALID, grouped.kind());
         assertEquals("column \"age\" must appear in the GROUP BY clause or be used in an aggregate function",
@@ -401,7 +604,7 @@ class SqlToPureTest {
         assertEquals("aggregate functions are not allowed in WHERE",
                 refusal("select ID from tb('s::DB.T') where count(*) > 1").getMessage());
         assertEquals("column \"nope\" does not exist", refusal("select nope from tb('s::DB.T')").getMessage());
-        assertEquals(SqlTranslationException.Kind.UNSUPPORTED,
-                refusal("select ID from tb('s::DB.T') where age = null").kind());
+        // a comparison with NULL is NULL, never TRUE: the filter keeps no row (Postgres's answer)
+        assertEquals("#>{s::DB.T}#->filter(r|false)->select(~[ID])", pure("select ID from tb('s::DB.T') where age = null"));
     }
 }

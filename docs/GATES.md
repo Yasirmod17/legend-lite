@@ -8921,3 +8921,123 @@ Announced in `docs/IN_FLIGHT.md` the same day (2aa74a8). Branch `claude/loving-e
    - `strpos`: Pure's `indexOf` is lowered one too high; PCT pins it.
    - `parseDecimal` lowers to a fixed `DECIMAL(5, 2)`.
    - LATERAL, intervals, arrays, JSON operators, regular expressions.
+
+## 2026-10-12 — `#SQL{...}#`: the semi-structured step — jsonb over Variant, LATERAL, set-returning functions
+
+Announced in `docs/IN_FLIGHT.md` the same day (d9adc5a). Branch `claude/loving-euler-gjta59`; the study,
+`docs/LEGEND_SQL_STUDY_2026_10_11.md` §9.2 (what reads, what is refused, the findings, the numbers below).
+
+1. **What lands.** A Variant column is Postgres's `jsonb` in the SQL front end (register S49).
+   - **Navigation:** `->` and subscripts are `get`. `->>` is its text (`to(@String)`). `#>` and `#>>` walk a constant
+     `text[]` path, as do `json(b)_extract_path(_text)`.
+   - **Constants and casts:** `'...'::jsonb`, `jsonb '...'` and `text::jsonb` are `fromJson`. `to_jsonb` is `toVariant`.
+   - **Set-returning functions,** in FROM, after a LATERAL, or as a whole select-list item:
+     - `json(b)_array_elements(_text)` and `json(b)_object_keys`;
+     - `generate_series` of integers (`range`);
+     - `unnest(ARRAY[...])` and `unnest(string_to_array(...))` (`flatten`).
+   - **LATERAL subqueries:** by comma, `CROSS JOIN` and `[INNER] JOIN ... ON`, each Pure's `lateral`.
+   - **A query without FROM:** one row.
+   - **Refused by name:** what lite would answer otherwise than Postgres (the study's list), e.g. `jsonb`'s order and
+     equality as keys, `json(b)_array_length`, `LEFT JOIN LATERAL`, `WITH ORDINALITY`.
+2. **Two fixes in `sql/dialect/`,** found by the cases, both in plain Pure:
+   - **`DuckDb.java`:** `toMany(@Variant)` cast to `JSON[]`, which turns jsonb's null elements into SQL's NULL: a
+     list read them as missing. It now reads an array's elements with `json_extract(x, '$[*]')`.
+     `LowerRelationTest`'s two pins of that SQL changed with it. PCT's `testToManyFromNonArray` still holds.
+   - **`Postgres.java`:** `toMany(@Variant)` and `to(@Map)` read a value of the wrong shape as an empty list or no
+     map, where Postgres, Pure and DuckDB raise an error. They now raise Postgres's own.
+3. **The parity corpus,** identical in both lanes (`//core:sql_parity_test`, `//core:sql_parity_postgres_test`):
+
+   | | upstream's 1,703 | own 244 (177 before) |
+   |---|---|---|
+   | PASS | 1,016 (951 before) | 192 (144 before) |
+   | FAIL, BUG, ERROR | 0 | 0 |
+   | REFUSED by name | 558 | 30 |
+   | BOTH_ERROR | 61 | 22 |
+   | SKIP | 68 | 0 |
+
+   The own cases are `lite/json.yaml` (41) and `lite/lateral.yaml` (26), new. The judge reads a `json` or `jsonb`
+   cell as its JSON value, and the text of an object or array as JSON (S49).
+4. **Judges,** on the branch rebased onto main c03ac6b (main's d9adc5a since, documentation only, merged in):
+   - **core, checks, the PCT lanes:** `//core:core_tests`, `//gates:checks`, `//pct:pct_duckdb` and `//pct:pct_channel_b`: 169 of 169
+     pass. Their first run found two red: `//core:guardrails` (four rules: the bare-name switch arms, the regex
+     family, TeaVM's `isBlank`, SQL-shaped text) and `//core:update_generated_4_test` (the claim census named the
+     translator for `fromJson`'s FQN). Each is held now without moving a pin (51ef576): the set-returning functions
+     are a table, not name arms, and the translator calls `fromJson` by its simple name, as it does every native.
+   - **The Postgres targets** (`//pct:pct_postgres`, `//core:sql_parity_postgres_test`,
+     `//core:sql_island_postgres_test`, `//core:postgres_arm_test`), through the unprivileged wrapper: 8 of 8 pass.
+   - **The six corpus passes,** against a baseline built from main d9adc5a: 0 result files differing
+     (`compare_judges.py`). The branch changes core, which every pass reads, so with the disk cache off both builds
+     executed all six.
+   - **The full CI run:** the pull request's, neema2/legend-lite#33: run 38316829892 on fee1fd8 green on every job
+     (Linux, macOS, Windows, linux-arm; "gates green"), as was the run on d774f93; merged as e647bf3.
+5. **Not done, recorded in the study** (§9.2's open findings and its "Next steps"):
+   - the literal-Variant fold in `CarrierStrategies` on Postgres, H2 and the engine text;
+   - DuckDB's arrow reading a key that starts with `$` or `/` as a path;
+   - Postgres's `toOne` of a `jsonb` value, and `toVariant` of a string constant there;
+   - a lateral over a correlated one-row relation.
+
+## 2026-10-12 — `#SQL{...}#`: the basics — filters, aggregates, functions, casts, dates, judged and fuzzed against Postgres
+
+Announced in `docs/IN_FLIGHT.md` as the semi-structured step's widenings (5cb0ac1, aa0c469). Same branch
+`claude/loving-euler-gjta59`; it lands in one pull request with the semi-structured step above. The study,
+`docs/LEGEND_SQL_STUDY_2026_10_11.md` §9.3, says what reads, what is refused and why, and the numbers below.
+
+1. **What lands.** The user's order: the basics first (filters, aggregations, joins, select lists, functions).
+   - **Aggregates:** `FILTER (WHERE ...)`, `DISTINCT` in each, `string_agg(... ORDER BY ...)`, `bool_and`/`bool_or`/
+     `every`, `percentile_cont`/`percentile_disc ... WITHIN GROUP`, `corr`/`covar_pop`/`covar_samp`; the boolean
+     ones and the covariances also over a window.
+   - **Windows:** `lag`/`lead` with a default (where the other row is outside the partition, never where its value
+     is NULL).
+   - **NULL and typing:** NULL constants typed as Postgres types them; comparisons with NULL, IN lists and BETWEEN in
+     three-valued logic; CASE, COALESCE, GREATEST and LEAST resolved to one type; ceil, floor, sign, round, extract
+     and date_part in Postgres's types.
+   - **Functions:** exact integer division; `round(x, n)`/`trunc(x, n)` of a numeric exact; `substring`, `strpos`,
+     `left`/`right` with negative counts, `power`; `concat` and `||` spellings.
+   - **Casts:** integer and smallint ranges, a numeric rounded half away from zero, a double half to even,
+     `varchar(n)`. Text values cast to numbers are refused (DuckDB reads `'1.5'`, `'1e3'`, `'1_000'`).
+   - **Inexact numerics:** a quotient, average or root of numerics is a Float here and exact in Postgres; what
+     rounds or spells one is refused (`floor(0.3 / 0.1)` is 3 there, 2 from the double), a double in it or not.
+   - **A sum of integers** is a bigint or a numeric in Postgres by the column's width, which the translator does not
+     know: dividing it by an integer is refused (`sum(x)::bigint / n` and `sum(x)::numeric / n` translate).
+   - **Dates:** a date plus or minus days, the days between dates, interval constants (months, then days, then
+     time), `make_date`, `make_timestamp`, `date_trunc` of a timestamp.
+2. **Two fixes in `sql/dialect/`,** each announced in IN_FLIGHT, each with a test that fails without it:
+   - **`RootNumericTypes.java`:** under DISTINCT, an ORDER BY key that is a projection cast to its numeric type is
+     ordered by the cast expression (Postgres: "for SELECT DISTINCT, ORDER BY expressions must appear in select
+     list").
+   - **`QuantileOrder.java`:** DuckDB's descending discrete percentile at `p = 0` read element 0 of a 1-based list
+     (NULL); it is the first value, as Pure's percentile and Postgres's `percentile_disc` say.
+     `TypeInferenceIntegrationTest.testPercentile_GroupBy_Discrete_Descending_AtZero` pins it. Widened by the
+     review (6d5f0e1): both orders compute the element as Postgres does, `ceil(p * N)` in double precision.
+3. **The parity corpus,** identical in both lanes (`//core:sql_parity_test`, `//core:sql_parity_postgres_test`):
+
+   | | upstream's 1,703 | own 381 (244 at the step above) |
+   |---|---|---|
+   | PASS | 1,122 (1,016 at the step above) | 284 |
+   | FAIL, BUG, ERROR | 0 | 0 |
+   | REFUSED by name | 452 | 46 |
+   | BOTH_ERROR | 61 | 51 |
+   | SKIP | 68 | 0 |
+
+   New own cases: `lite/functions.yaml` (139 now), `lite/windows.yaml` (51), `lite/dates.yaml` (21, new).
+4. **The randomized check.** A scratch generator (never committed) wrote type-correct Postgres queries over the
+   parity schema and ran them through both lanes against Postgres: 13 seeds, about 6,300 queries, growing with each
+   feature. Each wrong answer it found is fixed and pinned by a case (the study lists them); the last seeds found
+   none. One error remains by design: a product beyond the 38-digit decimal overflows where Postgres's numeric
+   answers.
+5. **Judges,** on the branch with main cbd8f01 merged in (main's changes since the step above are IN_FLIGHT only):
+   - **core, checks, the PCT lanes:** `//core:core_tests`, `//gates:checks`, `//pct:pct_duckdb`,
+     `//pct:pct_channel_b`: 169 of 169 pass on every commit of the step. Guard findings on the way were held without
+     moving a pin: name arms became set lookups, `rowMapper` is called by its simple name (the claim census), a
+     regex split became a scan, a `HashMap` an unmodifiable `LinkedHashMap`.
+   - **The Postgres targets** (`//pct:pct_postgres`, `//core:sql_parity_postgres_test`,
+     `//core:sql_island_postgres_test`, `//core:postgres_arm_test`), through the unprivileged wrapper: 8 of 8 pass.
+   - **The six corpus passes,** against a baseline built from main cbd8f01: 0 result files differing (`compare_judges.py`); with the disk cache off both builds executed all six.
+   - **The full CI run:** the pull request's, neema2/legend-lite#33: run 38316829892 on fee1fd8 green on every job
+     (Linux, macOS, Windows, linux-arm; "gates green"), as was the run on d774f93; merged as e647bf3.
+   - **The independent review** (an agent that wrote none of it): eight wrong answers traced, each measured, fixed and
+     pinned (the study's §9.3 lists them); three recorded (a constant column's `corr` noise in Postgres, inexact
+     comparisons at the exact boundary, `make_date` of year 0).
+6. **Not done, recorded in the study:** regular expressions (`~`, `regexp_*`); `mode()` (DuckDB breaks ties
+   otherwise); `corr` over a window; text cast to a number; intervals as values and timestamp differences; the
+   semi-structured step's open findings (DuckDB's JSON numbers as doubles among them, for the user to decide).

@@ -57,6 +57,15 @@ class SqlParityTest {
     }
 
     @Test
+    void aTextCellComparesAsJsonOnlyWherePostgresWroteItAsJsonb() {
+        // the independent review of PR neema2/legend-lite#32: jsonb's spelling (", ", ": ", keys shorter first) proves
+        // the text is a jsonb value's; any other text is compared as text
+        assertTrue(SqlParity.cellEquals("{\"b\": [1, 2], \"aa\": true}", "{\"aa\":true,\"b\":[1,2]}"));
+        assertFalse(SqlParity.cellEquals("[1,2]", "[1, 2]"));
+        assertFalse(SqlParity.cellEquals("{\"aa\": true, \"b\": 1}", "{\"aa\":true,\"b\":1}"));
+    }
+
+    @Test
     void aSnappedAnswerAgreesWithPostgresOnAnotherPlatformInItsLastDigitsOnly() {
         // cbrt(-0.1) from Postgres on Linux and on Windows: their C libraries differ in the last place
         // (2026-10-12, PR neema2/legend-lite#28's CI)
