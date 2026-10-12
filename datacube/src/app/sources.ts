@@ -518,6 +518,9 @@ export function pageSources(d: SourcesOf): PageSources {
       readonly table?: string;
     } = {},
   ): Promise<Opened> {
+    /** The name taken for it while it is read, and -- read -- its table: let go again when no grid comes of it. */
+    let reserved: string | undefined;
+    let read: string | undefined;
     try {
       const { ingestFile, forgetFile } = database;
       if (!ingestFile || !forgetFile) throw new Error('this page takes no file');
@@ -525,10 +528,13 @@ export function pageSources(d: SourcesOf): PageSources {
       const kept = how.table !== undefined && !taken.has(how.table) ? how.table : undefined;
       if (kept !== undefined) taken.add(kept);
       const asked = kept ?? freshTable(tableNameOf(file.name));
+      reserved = asked;
       const opened = await ingestFile(file, { table: asked });
+      reserved = undefined;
       // the table it was read into: the one asked for, or -- the host's database holding that name already (another
       // page on the same Python) -- the free one the host chose instead
       const table = opened.table;
+      read = table;
       if (table !== asked) {
         taken.delete(asked);
         taken.add(table);
@@ -572,6 +578,13 @@ export function pageSources(d: SourcesOf): PageSources {
         }),
       };
     } catch (e) {
+      if (reserved !== undefined) taken.delete(reserved);
+      // read, then refused further on (its columns not typed, say): its table goes, and its name is free again
+      if (read !== undefined) {
+        const gone = read;
+        await database.forgetFile?.(file.name, gone).catch(() => {});
+        taken.delete(gone);
+      }
       // Say what failed and about which file -- the one input the user can actually fix. Shown where the open was
       // asked: the source picker's window, or the saved pages'.
       throw new Error(`could not open ${file.name}: ${e instanceof Error ? e.message : String(e)}`, { cause: e });

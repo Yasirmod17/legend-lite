@@ -105,7 +105,13 @@ export async function ingestFile(
   // the file's own bytes, whatever its format: DuckDB reads them as they are, here and where another host's DuckDB
   // reads a file (Python's: headless/data-in.ts), so both read a CSV's bytes the same way -- never text decoded here
   await db.registerFileBuffer(virtualName, new Uint8Array(await file.arrayBuffer()));
-  return readFileInto(engine, { at: virtualName, fileName: file.name, table }, models);
+  try {
+    return await readFileInto(engine, { at: virtualName, fileName: file.name, table }, models);
+  } catch (e) {
+    // not read: its bytes let go of, as an upload overtaken is (forgetUpload)
+    await db.dropFile?.(virtualName);
+    throw e;
+  }
 }
 
 /** Where a file read into `table` is registered: one name per table, its format's extension. */

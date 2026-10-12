@@ -375,6 +375,8 @@ copy_to_directory(
 
 # DUCKDB'S HTTPFS EXTENSION for Python's DuckDB (docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md, step 2b): a page on Python
 # reads a remote file through it, and nothing downloads it where the wheel runs -- MODULE.bazel pins it per platform.
+# The only extension carried: iceberg would need a rule first that an Iceberg table's data files are remote too (its
+# metadata names them by path; R4, engine.py _REMOTE_SCHEMES).
 # Gunzipped by the Java action the warehouse's postgres extension uses (//warehouse:postgres_extension: Bazel 9.2's own
 # .gz unpacking fails on Windows), each into DuckDB's own extension folder layout (v1.5.5/<DuckDB's platform>/), which
 # Python points its DuckDB at (engine.py): DataCube's INSTALL httpfs then finds it installed, and LOAD loads it.

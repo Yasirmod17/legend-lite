@@ -540,7 +540,10 @@ Python's in-process services.
      page's other queries while it answers, as every query over a remote view does: one connection, its queries one at a
      time. A file of this machine comes from the page
      through Files (its bytes), or from Python code. An `http://` URL may still name this machine's or its network's own
-     servers, which Python fetches without the browser's CORS rules; only the engine's own page, with its token, can ask.
+     servers -- a cloud machine's metadata address too -- which Python fetches without the browser's CORS rules: R4
+     forbids this machine's files, not its network. Only the engine's own page, with its token, can ask.
+   - **Each remote file's keys are its own**: one S3 secret per source, named by its view and scoped to its own path
+     (`remote.ts`), so where one DuckDB serves several pages (Python's) one page's keys never replace another's.
    - **One implementation**: the tab's mount (a view over the file, its model from the catalog) is `upload.ts`'s
      `mountRemoteView`, which the tab and Python (`remote.json`, `data-in.ts`'s `mount`) both call. Python keeps the
      view and its model beside the frames' (`reading_file(view=True)`), under a name it chooses as for a file. The

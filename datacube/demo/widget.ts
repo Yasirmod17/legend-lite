@@ -45,6 +45,7 @@ export function render(model: WidgetModel, el: HTMLElement, fetch: typeof global
   el.style.height = px(model);
   // the page fills `host` (it replaces what is in it); the app's windows float beside it, over it, in the widget's own
   // element (Generated Pure & SQL: src/app/datacube-app.ts appWindows)
+  const position = el.style.position;
   if (getComputedStyle(el).position === 'static') el.style.position = 'relative';
   el.replaceChildren(host);
   // a key pressed in DataCube is DataCube's: not the notebook's shortcuts (an arrow moves in the grid, not between
@@ -90,5 +91,8 @@ export function render(model: WidgetModel, el: HTMLElement, fetch: typeof global
     el.removeEventListener('keydown', keep);
     model.off('change:height', resized);
     app?.dispose();
+    // the element as the notebook gave it: it may be used again
+    el.style.position = position;
+    delete el.dataset['lmSuppressShortcuts'];
   };
 }

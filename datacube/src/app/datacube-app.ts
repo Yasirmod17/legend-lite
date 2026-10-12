@@ -1189,20 +1189,27 @@ export async function openDataCube(o: OpenDataCube): Promise<DataCubeApp> {
       const followed = async (now: Versions): Promise<string | undefined> => {
         // a start that did not open (a page not read, a frame not there yet) is tried again
         if (live.page && liveShown === undefined) return openLive();
+        // each step below waits: the app taken down meanwhile (a notebook's cell run again) goes no further
         if (start.kind === 'frame' && sources.frameVersion(start.name) === undefined) {
           await openFrame(start.name, true);
           return undefined;
         }
         if (now.version !== undefined && liveShown !== undefined && now.version !== liveShown) return openLive();
         for (const [frame, version] of Object.entries(now.frames)) {
+          if (disposed) return undefined;
           const read = sources.frameVersion(frame);
           if (read === undefined || read === version) continue;
-          if (await sources.frameAgain(frame) === 'changed') {
+          const again = await sources.frameAgain(frame);
+          if (disposed) return undefined;
+          if (again === 'changed') {
             if (live.page) return openLive();
             await openFrame(frame, true);
             continue;
           }
-          for (const id of page.cubes) if (sources.frameOf(id) === frame) await madeCubes.get(id)?.state.refresh();
+          for (const id of page.cubes) {
+            if (disposed) return undefined;
+            if (sources.frameOf(id) === frame) await madeCubes.get(id)?.state.refresh();
+          }
         }
         return undefined;
       };

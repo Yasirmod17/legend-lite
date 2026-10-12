@@ -59,7 +59,8 @@ _API = '/api/pure/v1/'
 _EXECUTE = _API + 'execution/execute'
 # a request body larger than this is refused: a query and its model are kilobytes
 _MAX_BODY = 16 * 1024 * 1024
-# a page's file, its bytes as base64 in its call (file.json): a file of up to about 192 MB. Measured 2026-10-12 (Apple
+# a page's file, its bytes as base64 in its call (file.json): a file a little under 192 MiB (base64 makes it a third
+# larger, and the call wraps it in JSON). Measured 2026-10-12 (Apple
 # M-series, the session's engine; Python writes the bytes and only their path reaches DataCube's code): a 192 MB CSV,
 # 256 MB as base64, read in 0.8 s, the process peaking at 1.8 GB (a 64 MB one 0.4 s and 0.75 GB), the measuring
 # script's own copies included; the frames are held still meanwhile. A larger file is read in Python itself
@@ -72,7 +73,9 @@ _FILE_IN, _FILE_OUT, _REMOTE, _SERVICES = '/file.json', '/forget.json', '/remote
 _SAVED = '/saved-pages.json'
 # the only places a page's remote file may be read from (remote.json), each as DuckDB's httpfs names it: never this
 # machine's own files, which Python's DuckDB can read and a page must not make it (R4's reason). Azure's schemes are not
-# here: the wheel carries no azure extension
+# here: the wheel carries no azure extension. Nor does it carry iceberg: an Iceberg table's metadata names its data
+# files by path, so carrying it must come with a rule that those paths are remote too, or a remote file could make
+# DuckDB read this machine's (R4)
 _REMOTE_SCHEMES = ('http', 'https', 's3', 's3a', 's3n', 'gs', 'gcs', 'r2', 'hf')
 # a connection that sends nothing, or stops sending, is closed after this long (seconds)
 _IDLE = 30
@@ -481,7 +484,10 @@ class Engine:
                     path.write_bytes(data)
                     said = headless.call('ingest', json.dumps({'path': str(path), 'name': asked['name'], 'table': table}))
                 finally:
-                    path.unlink(missing_ok=True)
+                    # the table is a copy: the file is not needed. One Windows still holds open is left for the headless
+                    # engine's folder, which goes with it -- never a read that worked turned into a refusal
+                    with contextlib.suppress(OSError):
+                        path.unlink(missing_ok=True)
                 read = json.loads(said)
                 self.frames.keep_file(table, read['model'])
         except ValueError as refused:
