@@ -419,6 +419,8 @@ Python's in-process services.
      page of one grid. Python's pages gain every app feature that needs no new service: the Pure & SQL window,
      settings, renaming, "changed".
    - **2b.** Data in: upload, examples, remote files and Snap into Python's DuckDB, answered by DataCube's code headless.
+   - **2c.** The planes on Python: the headless `fetch`; the remote planners called by Python.
+   - **2d.** The page store on Python: Open… and Save into a folder.
 
    **2a as built (2026-10-12, branch `datacube/one-app-2a`):**
    - **The engine service is §4.5's contract.** `rows(model, runtime, how?)` gives a grid's rows in the host's shape:
@@ -473,8 +475,61 @@ Python's in-process services.
      (covered for a frame shown alone), and the live logic in jsdom.
    - **Build** (Compiler Rewrite's review): the Depot client is declared once, on `:src_base` beside the SDLC client,
      since only `src/` files import it; the bundles get it through `:src`.
-   - **2c.** The planes on Python: the headless `fetch`; the remote planners called by Python.
-   - **2d.** The page store on Python: Open… and Save into a folder.
+
+   **2b, first part, as built (2026-10-12, branch `datacube/one-app-2b`): a page's file and the examples.**
+   - **The page's side**: Python's database service gives `ingestFile` and `forgetFile` where Python says it takes files
+     (`services.json`, asked once as the page starts: the `datacube` extra installed, its bundle where it is read). The
+     bytes go as base64 in JSON (`file.json`), the same call over HTTP and over the widget's channel, which carries
+     text. The app is unchanged: its Files and Examples sections appear because the service is there (§3.4), and the
+     grid's rows come from `rows()` as a frame's do.
+   - **Python's side**: Python writes the file's bytes, once, in the headless engine's folder under a name of its own,
+     and hands DataCube's own code only that path (`src/headless/data-in.ts`). `upload.ts`'s `readFileInto` -- the one
+     implementation of reading a file, which the tab's `ingestFile` calls too -- reads it into a table of its own on
+     the frames' DuckDB and writes its model with legend-lite's writer. The bytes never enter V8; the table is a copy,
+     so the file goes at once. The SQL names the file by its absolute path, never a bare name DuckDB would look for in
+     the process's working directory first. `Frames` keeps each such table and its model beside the frames'
+     (`reading_file`, `keep_file`, `file_table`, `forget_file`): the models `serving()` gives are still the only ones a
+     query may be over (R4).
+   - **The same bytes on both hosts**: the tab now registers a file's own bytes with DuckDB-WASM whatever its format,
+     where it used to register a CSV or JSON file as text decoded in the page (a byte-order mark taken off, a byte that
+     is not UTF-8 replaced). Both DuckDBs read exactly the file's bytes. `verify_smoke_test`, which opens every example
+     (a byte-order mark with CRLF, hostile values, awkward headers among them), and `verify_upload_test` pass on it.
+   - **Whose name**: Python chooses the table. It takes the name the page asked for when it is free, else the next free
+     one (`<name>_2`, ...), and the answer says which; the page adopts it. Free means no frame's, no other file's (two
+     tabs or widgets on one Python each get a table of their own), no table or view in any schema of the database, and
+     never `__legend_lite_`, Frames' own. A frame cannot take a file's name either, nor does `show()` choose one. A
+     page drops only a table one of its files was read into, by the name Frames gave it. The drop comes before the model
+     stops being served, so a drop that fails leaves the table served, for the page to let go of again; a file DuckDB
+     cannot read leaves nothing under its name.
+   - **How large**: measured 2026-10-12, a 192 MB CSV (256 MB as base64) is read in 0.8 s, the process peaking at 1.8 GB,
+     the measuring script's own copies included (64 MB: 0.4 s, 0.75 GB). When the bytes went through V8, 64 MB took
+     4.2 s and 3.5 GB. So `file.json` takes a body of up to 256 MB; a larger file is read in Python itself. The frames
+     are held still while a file is read. Over a notebook's channel, a file is also bounded by the notebook's own
+     message size, which is not tested here.
+   - **Where this goes next (proposed to the dialect program, its D5)**: `readFileInto`'s statements -- read a file into
+     a table, the conversions' rewrite -- are SQL a TypeScript app writes for a database that is not only the tab's.
+     They belong in the dialect, as IR it renders (a create-table-as-select, a file-reading source), beside the
+     catalog question that program already moves there; `upload.ts` would then run what the planner wrote, and Python
+     would call the native library directly, with no V8 for a file at all.
+   - **A limit found, not this step's**: a file whose rows hold nested values (a Variant column: the JSON example) is
+     read in Python, but its queries are refused by Python's execute, which plans in the compatibility mode, where
+     Variant's relational spelling is still unprobed ("probe legend-engine, do not guess"). The tab's own planner plans
+     it. That is the plan's to settle (Plan Gen).
+   - **Not in it, the second part**: a remote file on Python. Python's DuckDB reads one through its httpfs extension,
+     which it downloads from the internet the first time, and a URL from the page must never name a file on this
+     machine, so only remote schemes may reach it. Both need settling before it is built. Snap reaches Python with a
+     warehouse it can read ("the shared warehouse from Python", IN_FLIGHT).
+   - **Proven**: `python_engine_test`, on Python's page, chooses a CSV in the app's own picker and reads its rows (the
+     SQL Python ran reading the file's table), then opens an example the same way, the CSV's table let go of as its grid
+     goes. `headless_test` (Files) covers a file read, served and let go of; two pages asking one name; names held by a
+     frame, another table or a temporary table; names refused; a frame not taking a file's name; a header with quotes,
+     a brace and a line break compiled into its model; a drop that fails; an unreadable file; an engine whose bundle is
+     missing. `engine_test` covers an engine with no headless, which offers no files. Not covered by a test: a file
+     over the widget's channel, `close()` dropping file tables, a body over the limit.
+   - **Build**: the Python test's fixture takes `//python:headless`, and the test carries `:headless_bundle`
+     (`LEGEND_LITE_DATACUBE`), as `//python:headless_test` does. `node_test` takes `platform_env`, a select merged last
+     (Compiler Rewrite's review), which gives the test Windows' `PROCESSOR_ARCHITECTURE` as `//python`'s tests have it.
+
 3. **Python's model home.**
    - The SDLC, Depot and query store in the native library over Python's per-user folders (§6), served by Python.
    - Nothing is built for Create a Class… itself: the app's model actions are already on Python's pages from step 2,

@@ -110,6 +110,12 @@ class Headless:
             self.close()
             raise
 
+    @property
+    def folder(self) -> Path:
+        """The engine's own folder: where the files DataCube registers are written, and where its host writes a file
+        for DataCube's code to read (a page's file: the engine's file.json)."""
+        return self._folder
+
     # ---- the calls out of V8, each on the engine's loop
 
     async def _planner(self, request: str) -> str:
@@ -240,6 +246,16 @@ class Headless:
 
 # the product's bundle: beside this module in the wheel (the `datacube` extra, step 4), or where LEGEND_LITE_DATACUBE says
 _BUNDLE = Path(__file__).with_name('_datacube') / 'legend-lite-headless.js'
+
+
+def available() -> bool:
+    """Whether DataCube's own code can run headless here: mini-racer's V8 installed and DataCube's bundle where
+    ``bundle()`` reads it (the datacube extra, or LEGEND_LITE_DATACUBE)."""
+    import importlib.util
+    import os
+
+    bundled = Path(os.environ.get('LEGEND_LITE_DATACUBE') or _BUNDLE)
+    return importlib.util.find_spec('py_mini_racer') is not None and bundled.is_file()
 
 
 def bundle() -> str:

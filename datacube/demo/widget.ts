@@ -11,7 +11,7 @@
 import { openDataCube, type DataCubeApp } from '../src/app/datacube-app.ts';
 import type { Versions } from '../src/app/services.ts';
 import { browserBasics } from '../src/services/browser-basics.ts';
-import { pythonServices, type PythonShows } from '../src/services/python-host.ts';
+import { askedOffers, pythonServices, type PythonLink, type PythonShows } from '../src/services/python-host.ts';
 import { BASE, type WidgetModel } from './widget-loader.ts';
 
 const px = (model: WidgetModel): string => `${Number(model.get('height')) || 480}px`;
@@ -60,16 +60,18 @@ export function render(model: WidgetModel, el: HTMLElement, fetch: typeof global
   const status = document.createElement('span');
   status.textContent = 'Python';
   const settled = { show: (_reason: string): void => {} };
-  openDataCube({
+  const link: PythonLink = { baseUrl: BASE, fetch };
+  // what Python's host offers beside its frames, asked once (services.json), then the app over its services
+  askedOffers(link).then((offers) => openDataCube({
     // a notebook's cell is no tab of its own: no title to set, and no address another person could open
-    services: pythonServices({ link: { baseUrl: BASE, fetch }, shows, watch: watched(model, shows), browser: browserBasics }),
+    services: pythonServices({ link, shows, offers, watch: watched(model, shows), browser: browserBasics }),
     host,
     status,
     windows: el,
     start: 'page' in shows ? { kind: 'live' } : { kind: 'frame', name: shows.frame },
     taken: [],
     settled,
-  }).then((opened) => {
+  })).then((opened) => {
     // a view taken down while it opened
     if (gone) opened.dispose();
     else app = opened;

@@ -905,6 +905,8 @@ py_binary(
     # skipped as incompatible, never analysed against a wheel there is none of (CI's A25 analysis, the product step)
     target_compatible_with = compatible_with(COMPILER_LIBRARY_PLATFORMS),
     deps = [
+        # DataCube's own code headless (the datacube extra): what reads a page's file into Python's DuckDB (step 2b)
+        "//python:headless",
         "//python:legend_lite",
         "//python:notebook",
     ],
@@ -927,6 +929,7 @@ browser_test(
         ":node_modules/playwright",
         ":python_engine_page",
         ":engine_fixture",
+        ":headless_bundle",
         ":upstream_arrow_answer",
         "//native:compiler",
     ],
@@ -934,10 +937,19 @@ browser_test(
     env = {
         "DATACUBE_SITE": "$(rlocationpath :dist)",
         "ENGINE_FIXTURE": "$(rlocationpath :engine_fixture)",
+        # DataCube's headless bundle, as //python:headless_test is given it: a page's file is read into Python's DuckDB
+        # by it (docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md, step 2b)
+        "LEGEND_LITE_DATACUBE": "$(rlocationpath :headless_bundle)",
         "LEGEND_LITE_LIBRARY": "$(rlocationpath //native:compiler)",
         "PYTHON_ENGINE_PAGE": "$(rlocationpath :python_engine_page)",
         "UPSTREAM_ARROW_ANSWER": "$(rlocationpath :upstream_arrow_answer)",
     },
+    # as //python:headless_test sets it: Python reads the architecture from it where it cannot ask WMI, and mini-racer's
+    # V8 (a page's file read in Python) needs it; a test's environment on Windows does not carry it
+    platform_env = select({
+        "//tools/platforms:windows_x86_64": {"PROCESSOR_ARCHITECTURE": "AMD64"},
+        "//conditions:default": {},
+    }),
 )
 
 # A NOTEBOOK'S CUBE IN REAL NOTEBOOKS (docs/DATACUBE_PYTHON_SHOW_DESIGN_2026_10_08.md, "In a notebook" and "In a marimo

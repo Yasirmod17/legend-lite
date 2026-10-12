@@ -11,15 +11,21 @@
 //   follows their versions (`version.json`, or the widget's), and it says what it is now, for `page.read()`
 //   (`page.json`, with the version it opened: what it says of a page Python has replaced is refused).
 //
+// - A PAGE'S FILE (an upload, an example) goes into Python's DuckDB (step 2b): its bytes to Python (`file.json`), read
+//   there by DataCube's own code (upload.ts, run headless), which writes its model; the grid's rows are then Python's
+//   over that model, as a frame's are. Offered where Python says it takes files (`services.json`: the datacube extra).
+//
 // What Python does not answer yet is a service it does not give, and the app does not offer what reads it (§3.4): its
-// page store (Save, Open…: step 2d), data in from a file or a URL (2b), the other planes (2c), its model home and
-// saved queries (step 3). A share link needs an address others can open; Python's is this machine's loopback.
+// page store (Save, Open…: step 2d), a remote file (2b's second part), the other planes (2c), its model home and saved
+// queries (step 3). A share link needs an address others can open; Python's is this machine's loopback.
 
 import { LegendEngineExecutor } from '../../../engine-client/src/engine-remote.ts';
 import { ExactNumber, fromJson, type ValueSpecification } from '../../../pure-protocol/src/index.ts';
+import { base64 } from '../headless/web.ts';
 import { pageToJson, readPage, type PageDocument } from '../page-document.ts';
 import { RemoteRun } from '../runner.ts';
-import type { BrowserService, FrameModel, LivePage, PlaneService, Services, Versions } from '../app/services.ts';
+import type { UploadResult } from '../upload.ts';
+import type { BrowserService, DatabaseService, FrameModel, LivePage, PlaneService, Services, Versions } from '../app/services.ts';
 
 /** How the page reaches Python's engine. */
 export interface PythonLink {
@@ -34,9 +40,16 @@ export interface PythonLink {
 /** What Python shows: a page of its own (`ll.Page`, by its key), or one frame (`ll.show(df)`: a page of one grid). */
 export type PythonShows = { readonly page: string } | { readonly frame: string };
 
+/** What Python's host offers beside its frames (`services.json`): whether it reads a page's file. */
+export interface PythonOffers {
+  readonly files: boolean;
+}
+
 export interface PythonServicesOptions {
   readonly link: PythonLink;
   readonly shows: PythonShows;
+  /** What Python said it offers (`askedOffers`), asked once as the page starts. */
+  readonly offers: PythonOffers;
   /**
    * How the page is told that Python moved what it shows: at once of the versions now, then as they move, or why
    * Python no longer says (a string). A tab asks (`askedVersions`, about once a second); a notebook's widget is told
@@ -67,6 +80,41 @@ async function frameOf(link: PythonLink, name: string): Promise<FrameModel> {
     model: string; runtime: string; source: ValueSpecification; version: number;
   };
   return { model: said.model, runtime: said.runtime, source: said.source, version: said.version };
+}
+
+/** What Python's host offers the page (`services.json`), or why it did not say. */
+export async function askedOffers(link: PythonLink): Promise<PythonOffers> {
+  const said = JSON.parse(await asked(link, 'services.json')) as { files?: unknown };
+  if (typeof said.files !== 'boolean') throw new Error(`the engine did not say whether it reads a page's file: ${JSON.stringify(said)}`);
+  return { files: said.files };
+}
+
+/** A call carrying JSON to Python: its answer's text, or -- refused -- Python's reason. */
+async function posted(link: PythonLink, path: string, body: unknown): Promise<string> {
+  const answer = await link.fetch(`${link.baseUrl}/${path}`, {
+    method: 'POST',
+    headers: { ...headers(link), 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }).catch((e: unknown) => { throw new Error(`the engine did not answer: ${String(e)}`); });
+  const text = await answer.text();
+  if (!answer.ok) throw new Error(text || `the engine answered ${answer.status}`);
+  return text;
+}
+
+/**
+ * Python's DuckDB as the page's database: its frames, and -- where Python takes them -- a page's file, read there by
+ * DataCube's own code into the table the page named (the page's table names are its own: no grid's is replaced).
+ */
+function pythonDatabase(link: PythonLink, offers: PythonOffers): DatabaseService {
+  return {
+    frame: (name) => frameOf(link, name),
+    ...(offers.files ? {
+      ingestFile: async (file: File, options: { readonly table: string }) => JSON.parse(await posted(link, 'file.json', {
+        name: file.name, bytes: base64(new Uint8Array(await file.arrayBuffer())), table: options.table,
+      })) as UploadResult,
+      forgetFile: async (fileName: string, table: string) => { await posted(link, 'forget.json', { name: fileName, table }); },
+    } : {}),
+  };
 }
 
 /** The page Python serves (`page.json`), as the protocol's exact JSON reads it: a calculated column's `12.30` stays. */
@@ -119,17 +167,17 @@ export function pythonServices(o: PythonServicesOptions): Services {
           throw new Error('Python plans a source over the model it wrote: it takes no mapping or enumerations from the page');
         }
         return {
-        runner: new RemoteRun(new LegendEngineExecutor({
-          baseUrl: link.baseUrl,
-          model,
-          runtime,
-          serializationFormat: 'ARROW_IPC',
-          ...(link.authorization === undefined ? {} : { authorization: link.authorization }),
-          fetch: link.fetch,
-        })),
+          runner: new RemoteRun(new LegendEngineExecutor({
+            baseUrl: link.baseUrl,
+            model,
+            runtime,
+            serializationFormat: 'ARROW_IPC',
+            ...(link.authorization === undefined ? {} : { authorization: link.authorization }),
+            fetch: link.fetch,
+          })),
         };
       },
-      database: { frame: (name) => frameOf(link, name) },
+      database: pythonDatabase(link, o.offers),
     },
     live: {
       watch: o.watch,

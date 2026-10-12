@@ -37,6 +37,8 @@ SNAPPED = 'snapped'
 _NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]*\Z')
 # the plain identifiers Pure reads as literals, so no package can be named by them
 _LITERALS = ('true', 'false')
+# the names Frames gives what it registers for a Live frame (its Arrow source): never a page's file's table's
+_OWN = '__legend_lite_'
 
 # the catalog question's columns, in its order, as the model writer names them (compiler.catalog_columns_sql)
 _CATALOG_FIELDS = ('name', 'dataType', 'logicalType', 'precision', 'scale', 'notNull')
@@ -70,7 +72,7 @@ class Table:
         self._read = read
         # the frame (or function) it was registered with, as given: what a page's grid asks for by name is it
         self.given = given
-        self._registered = f'__legend_lite_{name}'
+        self._registered = f'{_OWN}{name}'
         self._target = 'main.' + _quoted(name)
         self._schema: pa.Schema | None = None
         self._closed = False
@@ -188,6 +190,9 @@ class Frames:
         self._lock = threading.RLock()
         # DuckDB matches names without regard to case, quoted or not: so does this
         self._tables: dict[str, Table] = {}
+        # the tables a page's files were read into on this connection by DataCube's own code (the engine's file.json;
+        # docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md §4.3), each by its name: its name as written and its model
+        self._files: dict[str, tuple[str, str]] = {}
 
     def register(self, name: str, frame: Any, mode: str = LIVE) -> Table:
         """Registers a frame (or a function returning one) as the table ``name``, Live or Snapped, and
@@ -208,6 +213,9 @@ class Frames:
             # the old table stays under its name until the new one takes its place: a reader asking for the name
             # meanwhile (a tab asking its version, which takes no lock) finds it all along, never a frame gone
             old = self._tables.get(key)
+            if key in self._files:
+                raise ValueError(f'a page\'s file was read into a table named {self._files[key][0]!r}: '
+                                 'a frame takes another name')
             if old is not None:
                 old._drop()
             elif self._exists(name):
@@ -233,7 +241,74 @@ class Frames:
             for table in self._tables.values():
                 if table.mode == LIVE:
                     table._ready()
-            yield {table.name: table.model for table in self._tables.values()}
+            yield {**{table.name: table.model for table in self._tables.values()},
+                   **{name: model for name, model in self._files.values()}}
+
+    @contextlib.contextmanager
+    def reading_file(self, asked: str) -> Iterator[str]:
+        """The frames held still while DataCube's own code reads a page's file into a table of its own on this
+        connection (the engine's file.json). Yields the table's name: the one the page asked for when it is free, else
+        the next free one (``<name>_2``, ...) -- free meaning no frame's, no other file's (another page's, say), no
+        table or view Frames did not make in any schema, and never Frames' own ``__legend_lite_`` names -- so no page
+        reads into, or later drops, a table it did not make. Inside, the table's model is kept with ``keep_file``; a
+        read that fails leaves nothing under the name."""
+        if not _NAME.match(asked) or asked.lower() in _LITERALS:
+            raise ValueError(f"a file's table is named by a plain identifier (letters, digits, '_'), not {asked!r}")
+        if asked.lower().startswith(_OWN):
+            raise ValueError(f'a name beginning {_OWN} is legend-lite\'s own, not a file\'s: {asked!r}')
+        with self._lock:
+            name, n = asked, 2
+            while self._taken(name):
+                name, n = f'{asked}_{n}', n + 1
+            try:
+                yield name
+            except BaseException:
+                # what the read made of the name taken out again: the name was free, so nothing else is under it
+                self._files.pop(name.lower(), None)
+                self.connection.execute(f'DROP TABLE IF EXISTS main."{name}"')
+                raise
+
+    def keep_file(self, name: str, model: str) -> None:
+        """The table a page's file was read into (``reading_file``'s name), and the model DataCube's code wrote for it:
+        served beside the frames' from now on."""
+        with self._lock:
+            self._files[name.lower()] = (name, model)
+
+    def file_table(self, name: str) -> str | None:
+        """The table a page's file was read into, by the name a page gives it, as Frames named it -- or None when no
+        file's table has that name (a page drops no other)."""
+        if not _NAME.match(name):
+            return None
+        with self._lock:
+            kept = self._files.get(name.lower())
+            return None if kept is None else kept[0]
+
+    def forget_file(self, name: str) -> None:
+        """A page's file let go of, its table dropped (by DataCube's code, inside ``holding``): its model served no more."""
+        with self._lock:
+            self._files.pop(name.lower(), None)
+
+    @contextlib.contextmanager
+    def holding(self) -> Iterator[None]:
+        """The frames held still while another thread's code uses the connection (DataCube's, dropping a file's table)."""
+        with self._lock:
+            yield
+
+    def _taken(self, name: str) -> bool:
+        """Whether a file's table may not take ``name``: a frame's, a file's, or any table or view in the database."""
+        key = name.lower()
+        if key in self._tables or key in self._files:
+            return True
+        found = self.connection.execute(
+            "SELECT count(*) FROM duckdb_tables() WHERE lower(table_name) = lower(?)", [name]).fetchone()[0]
+        found += self.connection.execute(
+            "SELECT count(*) FROM duckdb_views() WHERE NOT internal AND lower(view_name) = lower(?)", [name]).fetchone()[0]
+        return found > 0
+
+    def taken(self, name: str) -> bool:
+        """Whether ``name`` is a frame's or a page's file's table: a frame of that name cannot be registered."""
+        with self._lock:
+            return name.lower() in self._tables or name.lower() in self._files
 
     def _exists(self, name: str) -> bool:
         found = self.connection.execute(
@@ -250,11 +325,14 @@ class Frames:
             self._tables.pop(name.lower())._drop()
 
     def close(self) -> None:
-        """Takes every frame's table out of the database (the connection itself stays open)."""
+        """Takes every frame's table, and every page's file's, out of the database (the connection itself stays open)."""
         with self._lock:
             for table in self._tables.values():
                 table._drop()
             self._tables.clear()
+            for name, _model in self._files.values():
+                self.connection.execute(f'DROP TABLE IF EXISTS main."{name}"')
+            self._files.clear()
 
     def __getitem__(self, name: str) -> Table:
         return self._tables[name.lower()]

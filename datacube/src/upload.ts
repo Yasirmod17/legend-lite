@@ -8,6 +8,7 @@ import type { RawTable } from '../../engine-client/src/engine.ts';
 import type { DuckDbEngine } from '../../engine-client/src/duckdb.ts';
 import type { Scalar } from '../../engine-client/src/result.ts';
 import type { CatalogColumn, InferredModel, TableModels } from './infer.ts';
+import { sqlLiteral } from './remote.ts';
 
 /**
  * The duckdb-wasm surface used here.
@@ -64,9 +65,9 @@ export function tableNameOf(fileName: string): string {
 /**
  * Read a picked file into DuckDB and describe what arrived.
  *
- * CSV goes in as text with `read_csv(..., AUTO_DETECT)` so DuckDB
- * sniffs the header and types; Parquet goes in as bytes and carries
- * its own schema. Either way the result is a real table, and from
+ * The file goes in as its bytes, whatever its format: a CSV is read with
+ * `read_csv(..., AUTO_DETECT)` so DuckDB sniffs the header and types; Parquet
+ * carries its own schema. Either way the result is a real table, and from
  * there DuckDB's catalog is the only thing that says what the columns are
  * -- guessing from the file would be a second, worse sniffer.
  */
@@ -78,16 +79,15 @@ export function tableNameOf(fileName: string): string {
 export async function forgetUpload(engine: QueryEngine, db: DuckDbFiles, fileName: string,
   // the table it was read into, when not the file's own name (`ingestFile`'s `table`)
   table = tableNameOf(fileName)): Promise<void> {
-  await engine.run(`DROP TABLE IF EXISTS ${dq(table)}`, 0);
-  await db.dropFile?.(`upload_${table}.${formatOf(fileName)}`);
+  await dropFileTable(engine, table);
+  await db.dropFile?.(uploadFileName(table, fileName));
 }
 
 export async function ingestFile(
   // the tab's own DuckDB: what it reads the file into, and the database type its model declares
   engine: DuckDbEngine,
   db: DuckDbFiles,
-  file: { name: string; text(): Promise<string>;
-    arrayBuffer(): Promise<ArrayBuffer> },
+  file: { name: string; arrayBuffer(): Promise<ArrayBuffer> },
   // legend-lite's model writer (infer.ts): it reads the catalog and writes the model
   models: TableModels,
   options: {
@@ -98,30 +98,51 @@ export async function ingestFile(
     readonly table?: string;
   } = {},
 ): Promise<UploadResult> {
-  const format = formatOf(file.name);
   const table = options.table ?? tableNameOf(file.name);
   // A fixed virtual filename per table: re-picking a file replaces
   // the registration rather than accumulating them.
-  const virtualName = `upload_${table}.${format}`;
+  const virtualName = uploadFileName(table, file.name);
+  // the file's own bytes, whatever its format: DuckDB reads them as they are, here and where another host's DuckDB
+  // reads a file (Python's: headless/data-in.ts), so both read a CSV's bytes the same way -- never text decoded here
+  await db.registerFileBuffer(virtualName, new Uint8Array(await file.arrayBuffer()));
+  return readFileInto(engine, { at: virtualName, fileName: file.name, table }, models);
+}
 
-  if (format === 'parquet') {
-    await db.registerFileBuffer(virtualName,
-      new Uint8Array(await file.arrayBuffer()));
-  } else {
-    await db.registerFileText(virtualName, await file.text());
-  }
+/** Where a file read into `table` is registered: one name per table, its format's extension. */
+export function uploadFileName(table: string, fileName: string): string {
+  return `upload_${table}.${formatOf(fileName)}`;
+}
 
+/**
+ * A FILE THE DATABASE CAN READ, READ INTO A TABLE OF ITS OWN -- the one implementation of what reading a picked file
+ * is, on every host: the tab's DuckDB-WASM reads it by the name it was registered under, a host's DuckDB at its path
+ * (headless/data-in.ts). Its format is its name's (`fileName`); the table is a copy, so the file is not needed after.
+ */
+export async function readFileInto(
+  engine: DuckDbEngine,
+  file: {
+    /** What the database reads it by: a registered name, or a path (named in the SQL as a string literal). */
+    readonly at: string;
+    /** The file's own name, as the person picked it: its format, and what the answer says arrived. */
+    readonly fileName: string;
+    readonly table: string;
+  },
+  models: TableModels,
+): Promise<UploadResult> {
+  const { table } = file;
+  const format = formatOf(file.fileName);
+  const at = sqlLiteral(file.at);
   const reader = format === 'parquet'
-    ? `read_parquet('${virtualName}')`
+    ? `read_parquet(${at})`
     : format === 'json'
       // Each record's top-level keys become columns; anything nested
       // below them arrives as a STRUCT or a LIST, kept as it is (a Variant).
-      ? `read_json('${virtualName}', auto_detect=true)`
+      ? `read_json(${at}, auto_detect=true)`
       // AUTO_DETECT sniffs delimiter, quoting and types. Upstream's
       // DataCube requires a header row and comma delimiters; DuckDB's
       // sniffer handles more than that, so there is no reason to
       // impose the narrower rule.
-      : `read_csv('${virtualName}', AUTO_DETECT=TRUE, HEADER=TRUE)`;
+      : `read_csv(${at}, AUTO_DETECT=TRUE, HEADER=TRUE)`;
 
   // The user's own column names, unchanged. An earlier version
   // renamed anything that was not a plain identifier, because a
@@ -160,8 +181,13 @@ export async function ingestFile(
     ...inferred,
     table,
     rowCount,
-    fileName: file.name,
+    fileName: file.fileName,
   };
+}
+
+/** A file's table dropped: its name is free again (the caller lets go of the file itself, where it keeps one). */
+export async function dropFileTable(engine: QueryEngine, table: string): Promise<void> {
+  await engine.run(`DROP TABLE IF EXISTS ${dq(table)}`, 0);
 }
 
 /**

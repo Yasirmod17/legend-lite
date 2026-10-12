@@ -130,7 +130,6 @@ describe('ingestFile with JSON', () => {
     const bytes = await copyOut('zoned.parquet');
     const r = await ingestFile(engine, files, {
       name: 'zoned.parquet',
-      text: async () => '',
       arrayBuffer: async () => bytes.slice().buffer,
     }, writer);
     for (const [column, sql] of [['stamp', 'TIMESTAMP'], ['big', 'DECIMAL\\(20,0\\)'],

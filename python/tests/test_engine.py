@@ -193,6 +193,17 @@ class Refusals(Served):
         self.assertEqual((status, body['message']), (404, 'no such legend-engine API in legend-lite: /api/pure/v1/nope'))
 
 
+class NoFiles(Served):
+    """An engine given no DataCube code to read a page's file with (no headless): it says so, and takes none."""
+
+    def test_it_says_it_takes_no_file_and_refuses_one(self):
+        answer = self.server.engine.answer('GET', '/services.json', '', None)
+        self.assertEqual(json.loads(answer.body), {'files': False})
+        status, _, body = self.post('/file.json', json.dumps({'name': 'a.csv', 'bytes': 'YQoxCg==', 'table': 'a'}))
+        self.assertEqual(status, 404)
+        self.assertIn(b'datacube extra', body)
+
+
 class OnlyItsOwnPage(Served):
     def raw(self, method, path, headers, body=b''):
         port = int(self.server.url.rsplit(':', 1)[1])

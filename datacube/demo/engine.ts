@@ -9,12 +9,13 @@
 //     warehouse's launch key is given; every call carries it;
 //   - what to show: a page (`?page=<key>`, Python's `ll.Page`) or one frame (`?table=<name>`, `ll.show(df)`: a page of
 //     one grid);
+//   - what Python's host offers beside its frames (`services.json`: whether it reads a page's file), asked once;
 //   - that Python changed it: its versions (`version.json`), asked about once a second while the tab is shown.
 
 import { openDataCube } from '../src/app/datacube-app.ts';
 import type { Versions } from '../src/app/services.ts';
 import { browserBasics, tabTitle } from '../src/services/browser-basics.ts';
-import { askedVersions, pythonServices, type PythonLink, type PythonShows } from '../src/services/python-host.ts';
+import { askedOffers, askedVersions, pythonServices, type PythonLink, type PythonShows } from '../src/services/python-host.ts';
 
 /** How often the page asks whether Python changed what it shows: a brief call on this machine, nothing held open (ms). */
 const ASK_EVERY = 1000;
@@ -68,8 +69,9 @@ async function start(): Promise<void> {
   status.textContent = 'Python';
   const settled = { show: (_reason: string): void => {} };
   try {
+    const offers = await askedOffers(link);
     await openDataCube({
-      services: pythonServices({ link, shows, watch: polled(link, shows), browser: { ...browserBasics, title: tabTitle() } }),
+      services: pythonServices({ link, shows, offers, watch: polled(link, shows), browser: { ...browserBasics, title: tabTitle() } }),
       host,
       status,
       windows: document.body,

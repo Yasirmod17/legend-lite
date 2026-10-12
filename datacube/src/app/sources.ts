@@ -521,8 +521,15 @@ export function pageSources(d: SourcesOf): PageSources {
       // the name the page's model keeps for it, when no grid on screen holds that name; else a fresh one, and said
       const kept = how.table !== undefined && !taken.has(how.table) ? how.table : undefined;
       if (kept !== undefined) taken.add(kept);
-      const table = kept ?? freshTable(tableNameOf(file.name));
-      const opened = await ingestFile(file, { table });
+      const asked = kept ?? freshTable(tableNameOf(file.name));
+      const opened = await ingestFile(file, { table: asked });
+      // the table it was read into: the one asked for, or -- the host's database holding that name already (another
+      // page on the same Python) -- the free one the host chose instead
+      const table = opened.table;
+      if (table !== asked) {
+        taken.delete(asked);
+        taken.add(table);
+      }
       const loadedAt = new Date();
       const rows = services.engine.rows(opened.model, opened.runtime, { bitColumns: opened.bitColumns });
       const columns = await sourceColumns(typer(rows), opened.source);
@@ -534,9 +541,11 @@ export function pageSources(d: SourcesOf): PageSources {
           ...(saved.source._type !== 'file' || source.sha256 !== saved.source.sha256
             ? [`${file.name} is not the file this cube was saved over (its contents differ)`]
             : []),
-          ...(how.table !== undefined && kept === undefined
-            ? [`${file.name} is read as ${table} in this tab, not ${how.table} as the page's classes read it: a grid on `
-              + 'screen holds that name (open the page in a tab of its own to read its classes)']
+          ...(how.table !== undefined && table !== how.table
+            ? [`${file.name} is read as ${table} in this tab, not ${how.table} as the page's classes read it: `
+              + (kept === undefined
+                ? 'a grid on screen holds that name (open the page in a tab of its own to read its classes)'
+                : 'the database it is read into holds that name already (another page on it)')]
             : []),
           ...r.notes,
         ]

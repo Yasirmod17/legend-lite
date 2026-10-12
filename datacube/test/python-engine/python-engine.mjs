@@ -22,7 +22,8 @@ const upstream = readFileSync(runfileFromEnv('UPSTREAM_ARROW_ANSWER'));
 // the library by its runfiles path, as //python's tests are given it: a program a test starts gets no BUILD env
 const engine = spawn(fixture, ['--site', site], {
   stdio: ['pipe', 'pipe', 'pipe'],
-  env: { ...process.env, LEGEND_LITE_LIBRARY: runfileFromEnv('LEGEND_LITE_LIBRARY'), PYTHONUTF8: '1',
+  env: { ...process.env, LEGEND_LITE_LIBRARY: runfileFromEnv('LEGEND_LITE_LIBRARY'),
+    LEGEND_LITE_DATACUBE: runfileFromEnv('LEGEND_LITE_DATACUBE'), PYTHONUTF8: '1',
     PYTHONDONTWRITEBYTECODE: '1' },
 });
 // the engine's own account, in this test's log: a server-side reason is then never invisible
@@ -102,7 +103,11 @@ try {
   cube.on('console', (m) => console.log(`engine page console ${m.type()}: ${m.text()}`));
   // every file and call the page asks for is answered: a refusal (a missing file, a refused call) fails the test
   cube.on('response', (r) => {
-    if (r.status() >= 400) { console.log(`FAIL engine page answer ${r.status()}: ${r.url()}`); failed = true; }
+    if (r.status() >= 400) {
+      failed = true;
+      // with the engine's reason, as the page was told it
+      void r.text().then((t) => t, () => '').then((t) => console.log(`FAIL engine page answer ${r.status()}: ${r.url()} ${t.slice(0, 600)}`));
+    }
   });
   // the link show() returned (cube.url)
   await cube.goto(served.link);
@@ -144,6 +149,46 @@ try {
     () => /\b11 rows\b/.test(document.body.innerText));
   await after('columns', 'a frame with a new column opens the cube again over its new model',
     () => document.body.innerText.includes('trader'));
+
+  // A FILE INTO PYTHON'S DUCKDB (docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md, step 2b): the app's own picker on Python's
+  // page, a CSV chosen there; Python reads it into its DuckDB with DataCube's own code (upload.ts, headless), and the
+  // grid's rows are Python's over the model that code wrote -- the SQL Python ran, in the Pure & SQL window, reads the
+  // file's own table
+  await cube.click('.dc-titlebar-menu');
+  await cube.locator('.dc-menu .dc-menu-item', { has: cube.locator(':scope > .dc-menu-label:text-is("New")') }).hover();
+  await cube.locator('.dc-menu .dc-menu-item', { has: cube.locator(':scope > .dc-menu-label:text-is("Blank Page")') }).click();
+  await cube.locator('.dc-blank .dc-primary').click();
+  await cube.setInputFiles('.dc-picker-file', {
+    name: 'books.csv', mimeType: 'text/csv', buffer: Buffer.from('title,pages\nDune,412\nEmma,474\nUlysses,730\n'),
+  });
+  const fileRead = await cube.waitForFunction(() => document.querySelector('.dc-picker') === null
+    && /\b3 rows\b/.test(document.body.innerText) && document.body.innerText.includes('Ulysses')
+    && /"?books"?/.test(document.getElementById('sql')?.textContent ?? ''), undefined, { timeout: 60_000 }).then(() => true, () => false);
+  console.log(`${fileRead ? 'ok  ' : 'FAIL'} a file chosen on Python's page is read into Python's DuckDB, its rows Python's`);
+  if (!fileRead) {
+    console.log(`  the page showed: ${(await cube.evaluate(() => `${document.body.innerText.slice(0, 300)} | sql: ${document.getElementById('sql')?.textContent?.slice(0, 200)}`))}`);
+    failed = true;
+  }
+  // AN EXAMPLE goes the same way: generated in the page, read into Python's DuckDB as a file is (and the file before it
+  // let go of: its grid gone, its table dropped in Python -- forget.json, every answer here a success)
+  await cube.click('.dc-titlebar-menu');
+  await cube.locator('.dc-menu .dc-menu-item', { has: cube.locator(':scope > .dc-menu-label:text-is("New")') }).hover();
+  await cube.locator('.dc-menu .dc-menu-item', { has: cube.locator(':scope > .dc-menu-label:text-is("Blank Page")') }).click();
+  await cube.locator('.dc-blank .dc-primary').click();
+  await cube.locator('.dc-picker-tab[data-section="examples"]').click();
+  // the trades example, a CSV (an example whose rows hold nested values, a Variant, is read too; its queries wait on
+  // the compatibility plan's spelling of Variant, which Python's execute plans by)
+  await cube.click('.dc-picker-card[data-example="trades"]');
+  await cube.fill('.dc-picker-rows', '300');
+  await cube.click('.dc-picker-choice .dc-primary');
+  const exampleRead = await cube.waitForFunction(() => document.querySelector('.dc-picker') === null
+    && /\b300 rows\b/.test(document.body.innerText) && /\bSELECT\b/i.test(document.getElementById('sql')?.textContent ?? ''),
+  undefined, { timeout: 60_000 }).then(() => true, () => false);
+  console.log(`${exampleRead ? 'ok  ' : 'FAIL'} an example opened on Python's page is read into Python's DuckDB as a file is`);
+  if (!exampleRead) {
+    console.log(`  the page showed: ${(await cube.evaluate(() => document.body.innerText.slice(0, 300)))}`);
+    failed = true;
+  }
 
   // A FRAME CLOSED IN PYTHON: its open tab keeps what it shows, and says it no longer follows the frame -- in its status
   // line and its title (the app's live page, docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md §5)
