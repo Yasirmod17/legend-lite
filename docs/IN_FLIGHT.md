@@ -798,6 +798,10 @@ study's §9.2). It lands as a pull request, merged after its full CI run.
   at `p = 0` is element 0 of a 1-based list: NULL. Pure's percentile and Postgres's `percentile_disc` both take the
   first value there; the index becomes `greatest(ceil(p * N), 1)`. A test beside
   `TypeInferenceIntegrationTest.testPercentile_GroupBy_Discrete_Descending` pins it. Judged as above.
+  **Widened 2026-10-12 by the PR's independent review:** the same file's ascending discrete percentile too. DuckDB's
+  `quantile_disc` picks element `ceil(p * N)` in exact arithmetic; Postgres's `percentile_disc` multiplies in float8
+  (`ceil(0.28 * 25)` is 8 there, 7 in DuckDB). Both directions are now element `greatest(ceil(CAST(p AS DOUBLE) * N),
+  1)` of the sorted list. PR neema2/legend-lite#33.
 
 ## An eighth line, 2026-10-11: Databricks, Snowflake and BigQuery (the user's ask, rule 5)
 
