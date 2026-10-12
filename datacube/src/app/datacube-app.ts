@@ -174,7 +174,9 @@ export async function openDataCube(o: OpenDataCube): Promise<void> {
         },
         showColumnZone: true,
         dimensions: dims,
-        writeClipboard: (text) => services.browser.writeClipboard(text),
+        // the grid says it copied whatever the clipboard did, as it always has (src/app.ts #copy): a refusal is
+        // not left unhandled
+        writeClipboard: (text) => services.browser.writeClipboard(text).catch(() => {}),
         // Settings kept between visits, as upstream's hosts keep them
         // (settingsData.values / onSettingsChanged); the page keeps them for every grid.
         ...(kept ? { settings: kept } : {}),
@@ -415,8 +417,10 @@ export async function openDataCube(o: OpenDataCube): Promise<void> {
   {
     // THE PAGE'S SOURCES (src/app/sources.ts): each kind opened through the services, a grid's file and planners kept
     const sources = pageSources({
-      services, page, gridMaker, work, taken: ['trades'], ask: (content) => library?.ask(content),
+      services, page, gridMaker, taken: o.taken, ask: (content) => library?.ask(content),
     });
+    // WHAT LEAVING WOULD LOSE, asked in this order: the warehouse's session, unsaved changes, the files opened
+    work.add(() => sources.sessionHeld());
 
     // THE PAGE ON SCREEN, as a saved page sees it: the saved page it came from (a Save then saves over it), its name,
     // what a newer writer put in it (written back as it was), the definition it had when saved or first opened
@@ -479,6 +483,7 @@ export async function openDataCube(o: OpenDataCube): Promise<void> {
     };
     // Leaving the page with unsaved changes asks, the browser's way.
     work.add(() => (dirty() ? 'unsaved changes' : undefined));
+    work.add(() => sources.filesHeld());
     window.addEventListener('beforeunload', (event) => {
       if (leaving || work.what() === undefined) return;
       event.preventDefault();
@@ -530,7 +535,8 @@ export async function openDataCube(o: OpenDataCube): Promise<void> {
 
     // SAVED PAGES (the services' page store): in this browser, IndexedDB when the browser gives it, else memory (this
     // visit only, and said so); and their files' handles
-    const { store, handles, memoryOnly } = services.pages;
+    const pages = await services.pages;
+    const { store, handles, memoryOnly } = pages;
     let persistent = false;
 
     /**
@@ -647,7 +653,7 @@ export async function openDataCube(o: OpenDataCube): Promise<void> {
       current = { ...current, cubeId: id, name, savedName: name, baseline: form.definition, lost: [] };
       page.setTitle(name);
       onCubeView?.();
-      if (!persistent) persistent = await services.pages.persist();
+      if (!persistent) persistent = await pages.persist();
       library?.sync();
     }
 
@@ -704,7 +710,7 @@ export async function openDataCube(o: OpenDataCube): Promise<void> {
         body.append(windows.library);
         win.append(head, body);
         backdrop.append(win);
-        document.body.append(backdrop);
+        o.windows.append(backdrop);
         const onKey = (e: KeyboardEvent): void => {
           if (e.key === 'Escape') { e.preventDefault(); closeCubes?.(); }
         };
@@ -781,7 +787,7 @@ export async function openDataCube(o: OpenDataCube): Promise<void> {
           name: offered,
           ...(current.cubeId !== undefined
             ? { over: { name: current.name ?? offered, ...(savedAt !== undefined ? { savedAt } : {}) } } : {}),
-          where: services.pages.where,
+          where: pages.where,
           keeps,
           leaves,
           ...(current.lost?.length
@@ -828,7 +834,7 @@ export async function openDataCube(o: OpenDataCube): Promise<void> {
       const put = async (): Promise<void> => {
         field.select();
         try {
-          await navigator.clipboard.writeText(link.url);
+          await services.browser.writeClipboard(link.url);
         } catch {
           note.textContent = `The browser did not allow copying: select the link and copy it. ${about}`;
           note.className = 'sharenote bad';
@@ -883,7 +889,7 @@ export async function openDataCube(o: OpenDataCube): Promise<void> {
         model: current.model,
         client: home.client,
         studio: (project, workspace) => modelHome.studio(project, workspace),
-        persist: async () => (persistent ||= await services.pages.persist()),
+        persist: async () => (persistent ||= await pages.persist()),
       });
       if (!model) return;
       // the page's model, made with its first class or a grid's table kept: the page has changed
@@ -915,7 +921,7 @@ export async function openDataCube(o: OpenDataCube): Promise<void> {
           client: home.client,
           grids,
           studio: (project, workspace) => modelHome.studio(project, workspace),
-          persist: async () => (persistent ||= await services.pages.persist()),
+          persist: async () => (persistent ||= await pages.persist()),
           duplicate: duplicateLambda,
           call: (path) => fn(path),
         },

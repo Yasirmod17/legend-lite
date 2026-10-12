@@ -93,6 +93,16 @@ try {
     return `rows ${counts.join(' and ')}`;
   });
 
+  await check('a column dragged from one cube does not land on the other', async () => {
+    const before = await rowsOf(B);
+    // qtr: a dimension neither cube groups by yet (qty, a measure, could never land in its rows); first, while A's
+    // columns list still offers it
+    await dragToRows(A, 'qtr', B);
+    const after = await rowsOf(B);
+    if (JSON.stringify(after) !== JSON.stringify(before)) throw new Error(`B took A's column: ${after}`);
+    return `B still ${after.join(' > ')}`;
+  });
+
   await check('a column dragged within a cube groups that cube, not the other', async () => {
     const before = [await rowsOf(A), await rowsOf(B)];
     await dragToRows(A, 'qtr', A);
@@ -100,14 +110,6 @@ try {
     if (!after[0].includes('qtr')) throw new Error(`A did not group by qtr: ${after[0]}`);
     if (JSON.stringify(after[1]) !== JSON.stringify(before[1])) throw new Error(`B changed: ${after[1]}`);
     return `A ${after[0].join(' > ')}; B ${after[1].join(' > ')}`;
-  });
-
-  await check('a column dragged from one cube does not land on the other', async () => {
-    const before = await rowsOf(B);
-    await dragToRows(A, 'qty', B);
-    const after = await rowsOf(B);
-    if (JSON.stringify(after) !== JSON.stringify(before)) throw new Error(`B took A's column: ${after}`);
-    return `B still ${after.join(' > ')}`;
   });
 
   await check('Ctrl-Z undoes the cube it is pressed in, and only it', async () => {

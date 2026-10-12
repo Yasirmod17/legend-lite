@@ -68,11 +68,12 @@ function startup(bundle = join(DEMO, 'bundle.js')): string[] {
  *  windows, the actions, the names and the SDLC client are chunks fetched the first time one is asked for
  *  (src/model-actions.ts, src/model-names.ts: imported by nothing the page loads at startup). Measured 386,448, main
  *  before it 385,251 (+1,197).
- *  387,000 -> 388,000 (2026-10-11, DataCube one app, step 1a, docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md §12): the tab's
+ *  387,000 -> 389,000 (2026-10-11, DataCube one app, step 1, docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md §12): the tab's
  *  services (src/services/browser.ts: the planner, the database, the page store, the query store, the model home, the
- *  warehouse and the browser, built once), which demo/boot.ts now reads everything through; the dead branches of a
- *  planner that opens no file gone. Measured 387,056, main before it 386,536 (+520). */
-const BUDGET = 388_000;
+ *  warehouse and the browser, built once), which the app reads everything through (1a, +520); the app building its own
+ *  windows -- Open…'s list, Share, the Generated Pure & SQL -- whose markup was index.html's, not counted here (1c);
+ *  the dead branches of a planner that opens no file gone. Measured 388,056, main before it 386,536 (+1,520). */
+const BUDGET = 389_000;
 
 /** The engine page's (demo/engine.html: one cube on an engine that runs its queries, Python's) startup download,
  *  gzipped: the grid and the remote client, no DuckDB-WASM and no compiler. Set 2026-10-08 at its first measure

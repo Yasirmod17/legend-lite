@@ -26,8 +26,8 @@ import type { UploadResult } from '../upload.ts';
 export interface Services {
   /** Where queries are planned and run, and where data goes in (§4). */
   readonly engine: EngineService;
-  /** Where pages are saved (§5). */
-  readonly pages: PageService;
+  /** Where pages are saved (§5): opened as the app starts, and waited for only where a page is saved or opened. */
+  readonly pages: Promise<PageService>;
   /** Where saved queries are, and the projects they compile against. */
   readonly queries: QueryService;
   /** Where classes go: an SDLC and its Depot (§6). Absent: the page makes no class, and opens no project by name. */
@@ -165,7 +165,8 @@ export interface WarehouseService {
 /** The browser's own things: the same in a tab and under a notebook's cell. */
 export interface BrowserService {
   download(name: string, mime: string, content: string | Uint8Array): void;
-  writeClipboard(text: string): Promise<void> | void;
+  /** Text onto the clipboard; refused, in words, where the browser does not let the page copy. */
+  writeClipboard(text: string): Promise<void>;
   /** The grids' settings kept between visits (upstream's settingsData); undefined when none or not readable. */
   readSettings(): Record<string, unknown> | undefined;
   writeSettings(values: Record<string, unknown>): void;

@@ -30,7 +30,6 @@ import {
   type WarehouseSource,
 } from '../cube-document.ts';
 import { canKeepHandles, pickDataFile, readHandle, type FileHandle } from '../file-handles.ts';
-import type { TabWork } from '../host.ts';
 import type { InferredModel } from '../infer.ts';
 import type { GridMaker } from '../page/page-app.ts';
 import type { ModelOptions } from '../planner.ts';
@@ -138,8 +137,6 @@ export interface SourcesOf {
   /** How a grid is made over a source: the app's grid maker. */
   readonly gridMaker: (snapshot: CubeSnapshot, configuration: CubeConfiguration, dimensions: { name: string; columns: string[] }[],
     place: GridPlace) => GridMaker;
-  /** What the page holds that leaving would lose: the warehouse's session and the files opened join it. */
-  readonly work: TabWork;
   /** The tables the page's start holds already (the tab's sample: `trades`). */
   readonly taken: readonly string[];
   /** Ask the person in the saved pages' window (a file to choose, a click to allow); undefined: nothing to ask now. */
@@ -171,6 +168,10 @@ export interface PageSources {
   pick<T>(purpose: 'add' | 'open', act: (chosen: Chosen) => Promise<T | null>, start?: SectionId): Promise<T | undefined>;
   /** The single-user app's launch key: signed in at the warehouse that served the page, its tables listed. */
   signInWithKey(key: string): Promise<SignedIn>;
+  /** What leaving would lose, said: the warehouse's session, when signed in. */
+  sessionHeld(): string | undefined;
+  /** What leaving would lose, said: the files opened on the page (not an example's). */
+  filesHeld(): string | undefined;
 }
 
 type SavedQueryRecord = Pick<Query, 'name' | 'groupId' | 'artifactId' | 'versionId' | 'content' | 'executionContext' | 'defaultParameterValues'>;
@@ -241,7 +242,7 @@ const tooBig = (e: unknown, rows: number): string =>
 const mimeOf = (s: Sample): string => (s.format === 'jsonl' ? 'application/x-ndjson' : 'text/csv');
 
 /** An example's file, built: `rows` of it. */
-function sampleFile(id: string, rows: number): { file: File; sample: { id: string; rows: number } } {
+function sampleFile(id: string, rows: number): { file: File; text: string; sample: { id: string; rows: number } } {
   const s = sampleById(id);
   if (!s) throw new Error(`no example '${id}'`);
   let text: string;
@@ -250,7 +251,7 @@ function sampleFile(id: string, rows: number): { file: File; sample: { id: strin
   } catch (e) {
     throw new Error(tooBig(e, rows));
   }
-  return { file: new File([text], sampleFileName(s), { type: mimeOf(s) }), sample: { id: s.id, rows } };
+  return { file: new File([text], sampleFileName(s), { type: mimeOf(s) }), text, sample: { id: s.id, rows } };
 }
 
 /** The warehouse's sign-in, as the picker's Database section shows it. */
@@ -268,7 +269,7 @@ function asSession(s: SignedIn): DatabaseSession {
 
 /** The page's sources, over the host's services. */
 export function pageSources(d: SourcesOf): PageSources {
-  const { services, page, gridMaker, work } = d;
+  const { services, page, gridMaker } = d;
   const { planner, tables, seeds } = services.engine;
   const engine = services.engine.database.engine;
   const warehouse = services.warehouse;
@@ -299,10 +300,6 @@ export function pageSources(d: SourcesOf): PageSources {
   const gridPlanners = new Map<string, readonly Planner[]>();
   /** Each grid's place, by its id: what the page's model actions read of it (its planner, engine, label). */
   const gridPlaces = new Map<string, GridPlace>();
-  work.add(() => {
-    const opened = [...new Set(filesNow().filter((f) => !f.sample).map((f) => f.file.name))];
-    return opened.length > 0 ? `the file${opened.length === 1 ? '' : 's'} opened in this tab (${opened.join(', ')})` : undefined;
-  });
 
   const madeGrid = (id: string, place: GridPlace): void => {
     // its own planners (its source's, and a snapped copy's): let go with the last grid planning through them
@@ -349,7 +346,6 @@ export function pageSources(d: SourcesOf): PageSources {
   };
   /** The picker's warehouse sign-in, kept between openings of the window. */
   let signedIn: SignedIn | undefined;
-  work.add(() => (signedIn ? `the warehouse session (${signedIn.session.principal})` : undefined));
 
   /**
    * A warehouse table's model: its own runtime (the catalog's database type), and the runtime its Snap -- a copy into
@@ -550,7 +546,8 @@ export function pageSources(d: SourcesOf): PageSources {
     const open = [...files.values()].find((f) => f.sha256 === src.sha256);
     if (open) return { file: open.file, ...(open.handle ? { handle: open.handle } : {}) };
     let kept: FileHandle | undefined;
-    for (const key of keys) kept ??= await services.pages.handles?.get(key);
+    const { handles } = await services.pages;
+    for (const key of keys) kept ??= await handles?.get(key);
     if (kept) {
       const read = await readHandle(kept, false);
       if (read.state === 'file') return { file: read.file, handle: kept };
@@ -821,13 +818,8 @@ export function pageSources(d: SourcesOf): PageSources {
         open: (id, rows) => act({ kind: 'file', ...sampleFile(id, rows) }),
         // the generated file itself, for sharing or reopening
         download: (id, rows) => {
-          const { file } = sampleFile(id, rows);
-          const url = URL.createObjectURL(file);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = file.name;
-          a.click();
-          URL.revokeObjectURL(url);
+          const { file, text } = sampleFile(id, rows);
+          services.browser.download(file.name, file.type, text);
         },
       },
       saved: {
@@ -889,6 +881,11 @@ export function pageSources(d: SourcesOf): PageSources {
       if (!warehouse) throw new Error('this page reaches no warehouse');
       signedIn = await warehouse.signInWithKey(key);
       return signedIn;
+    },
+    sessionHeld: () => (signedIn ? `the warehouse session (${signedIn.session.principal})` : undefined),
+    filesHeld: () => {
+      const opened = [...new Set(filesNow().filter((f) => !f.sample).map((f) => f.file.name))];
+      return opened.length > 0 ? `the file${opened.length === 1 ? '' : 's'} opened in this tab (${opened.join(', ')})` : undefined;
     },
   };
 }

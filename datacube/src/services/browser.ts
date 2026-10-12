@@ -79,13 +79,18 @@ export async function browserServices(o: BrowserServicesOptions): Promise<Servic
       seeds: o.planner.seeds,
       database: tabDatabase(o.duckdb, o.planner.tables),
     },
-    pages: await browserPages(),
+    // opened now and waited for where a page is saved or opened: the start's first grid does not wait on IndexedDB
+    pages: browserPages(),
     queries: queryService(config),
     ...(modelHome ? { modelHome } : {}),
     warehouse: warehouseService(config),
     browser: {
       download,
-      writeClipboard: (text) => navigator.clipboard?.writeText(text),
+      writeClipboard: async (text) => {
+        const clipboard = navigator.clipboard;
+        if (!clipboard) throw new Error('this browser does not let the page copy (a page not served over https or from this machine)');
+        await clipboard.writeText(text);
+      },
       readSettings,
       writeSettings,
       address: () => o.location.href,
