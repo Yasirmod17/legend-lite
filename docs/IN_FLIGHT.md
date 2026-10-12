@@ -803,6 +803,16 @@ study's §9.2). It lands as a pull request, merged after its full CI run.
   (`ceil(0.28 * 25)` is 8 there, 7 in DuckDB). Both directions are now element `greatest(ceil(CAST(p AS DOUBLE) * N),
   1)` of the sorted list. PR neema2/legend-lite#33.
 
+**Landed 2026-10-12 (e647bf3, the merge of PR neema2/legend-lite#33 at fee1fd8 over main 6d5f0e1; gates run
+38316829892 green on every job -- Linux, macOS, Windows, linux-arm, "gates green" -- and on the previous head d774f93
+too; GATES "the semi-structured step" and "the basics").** It replaced neema2/legend-lite#32, closed so that the
+basics could land with it.
+- **Files beyond the announced list:** none. The `sql/dialect/` edits are the four announced ones (`DuckDb.java`,
+  `Postgres.java`, `RootNumericTypes.java`, `QuantileOrder.java`).
+- **The independent review** of the basics found eight wrong answers, each fixed and pinned before the merge (f81c6e7;
+  the study's §9.3), and three recorded.
+- **Next on the line:** regular expressions (`~`, `regexp_*`), then the HTTP route and the wire.
+
 ## An eighth line, 2026-10-11: Databricks, Snowflake and BigQuery (the user's ask, rule 5)
 
 The user: add Snowflake, Databricks and BigQuery as backends "very similar to how we just added Postgres", the PCT

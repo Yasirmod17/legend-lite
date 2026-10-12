@@ -8968,7 +8968,8 @@ Announced in `docs/IN_FLIGHT.md` the same day (d9adc5a). Branch `claude/loving-e
    - **The six corpus passes,** against a baseline built from main d9adc5a: 0 result files differing
      (`compare_judges.py`). The branch changes core, which every pass reads, so with the disk cache off both builds
      executed all six.
-   - **The full CI run:** the pull request's; recorded here when it has run.
+   - **The full CI run:** the pull request's, neema2/legend-lite#33: run 38316829892 on fee1fd8 green on every job
+     (Linux, macOS, Windows, linux-arm; "gates green"), as was the run on d774f93; merged as e647bf3.
 5. **Not done, recorded in the study** (§9.2's open findings and its "Next steps"):
    - the literal-Variant fold in `CarrierStrategies` on Postgres, H2 and the engine text;
    - DuckDB's arrow reading a key that starts with `$` or `/` as a path;
@@ -9032,7 +9033,8 @@ Announced in `docs/IN_FLIGHT.md` as the semi-structured step's widenings (5cb0ac
    - **The Postgres targets** (`//pct:pct_postgres`, `//core:sql_parity_postgres_test`,
      `//core:sql_island_postgres_test`, `//core:postgres_arm_test`), through the unprivileged wrapper: 8 of 8 pass.
    - **The six corpus passes,** against a baseline built from main cbd8f01: 0 result files differing (`compare_judges.py`); with the disk cache off both builds executed all six.
-   - **The full CI run:** the pull request's; recorded here when it has run.
+   - **The full CI run:** the pull request's, neema2/legend-lite#33: run 38316829892 on fee1fd8 green on every job
+     (Linux, macOS, Windows, linux-arm; "gates green"), as was the run on d774f93; merged as e647bf3.
    - **The independent review** (an agent that wrote none of it): eight wrong answers traced, each measured, fixed and
      pinned (the study's §9.3 lists them); three recorded (a constant column's `corr` noise in Postgres, inexact
      comparisons at the exact boundary, `make_date` of year 0).
