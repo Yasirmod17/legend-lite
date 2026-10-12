@@ -780,6 +780,12 @@ study's §9.2). It lands as a pull request, merged after its full CI run.
   gains `FILTER (WHERE ...)`, `DISTINCT` in every aggregate, integer division (exact for every bigint),
   `string_agg(... ORDER BY ...)`, and Postgres's typing of CASE, COALESCE, GREATEST, LEAST, ceil, floor, sign, round,
   extract and date_part. Judged as above.
+- **Widened again 2026-10-12:** casts, `bool_and`/`bool_or`/`every`, `percentile_cont`/`percentile_disc`,
+  `corr`/`covar_*`, `lag`/`lead` with a default (on the branch, d75e4b8). One more cross-area edit in `sql/dialect/`:
+  `QuantileOrder.java` -- DuckDB's descending discrete percentile reads element `ceil(p * N)` of the sorted list, which
+  at `p = 0` is element 0 of a 1-based list: NULL. Pure's percentile and Postgres's `percentile_disc` both take the
+  first value there; the index becomes `greatest(ceil(p * N), 1)`. A test beside
+  `TypeInferenceIntegrationTest.testPercentile_GroupBy_Discrete_Descending` pins it. Judged as above.
 
 ## An eighth line, 2026-10-11: Databricks, Snowflake and BigQuery (the user's ask, rule 5)
 
