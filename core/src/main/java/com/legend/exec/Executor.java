@@ -518,7 +518,7 @@ public final class Executor {
                                com.legend.sql.dialect.SqlDialect dialect, boolean anyRoot,
                                boolean variantRoot)
             throws SQLException {
-        Object fetched = fetch(rs, 1, sqlTypeOf(plan, 0));
+        Object fetched = fetch(rs, 1, sqlTypeOf(plan, 0), dialect);
         // presence is the RAW wire fact — read before unwrap (a JSON
         // null node is a present cell; unwrap/decode may host-null it)
         boolean present = fetched != null;
@@ -671,7 +671,7 @@ public final class Executor {
      * a BC value keeps its LocalDateTime.
      */
     private static @com.legend.base.Nullable Object fetch(ResultSet rs, int i,
-            com.legend.sql.@com.legend.base.Nullable SqlType type)
+            com.legend.sql.@com.legend.base.Nullable SqlType type, com.legend.sql.dialect.SqlDialect dialect)
             throws SQLException {
         Object o = rs.getObject(i);
         if (o != null) {
@@ -694,17 +694,17 @@ public final class Executor {
             // sibling of the deleted midnight heuristic): every
             // timestamp cell re-fetches as java.time, the BC-faithful
             // carrier — Timestamp's epoch is WRONG for BC years
-            // (a driver that answers the re-fetch with another class -- Databricks' answers its text, which is
-            // the Timestamp's own and drops a BC year's sign -- or refuses it -- Snowflake's throws a plain
-            // SQLException, "Type passed to getObject(int, Class) is unsupported", 2026-10-11 -- keeps the
-            // Timestamp it already delivered for this cell: the re-fetch is the carrier's upgrade, never the read)
-            Object ldt;
-            try {
-                ldt = rs.getObject(i, java.time.LocalDateTime.class);
-            } catch (SQLException e) {
+            // (a dialect whose driver delivers no java.time says so and keeps the Timestamp it delivered:
+            // Databricks' answers the re-fetch with its text, Snowflake's refuses it, both measured 2026-10-11;
+            // their BC date-time is designed, not built, docs/CLOUD_BACKENDS_PCT_2026_10_11.md §15. Any other
+            // driver's refusal fails loudly, AGENTS invariant 4 -- the independent review of
+            // neema2/legend-lite#30 narrowed a catch that had kept the Timestamp for every driver.)
+            if (!dialect.refetchesTimestampAsJavaTime()) {
                 return o;
             }
-            return ldt instanceof java.time.LocalDateTime ? ldt : o;
+            java.time.LocalDateTime ldt =
+                    rs.getObject(i, java.time.LocalDateTime.class);
+            return ldt != null ? ldt : o;
         }
         return o;
     }
@@ -962,7 +962,7 @@ public final class Executor {
         List<Object> cells = new ArrayList<>(n);
         boolean lateBound = schema.isLateBound();
         for (int i = 1; i <= n; i++) {
-            Object cell = unwrap(fetch(rs, i, sqlTypeOf(plan, i - 1, lateBound)),
+            Object cell = unwrap(fetch(rs, i, sqlTypeOf(plan, i - 1, lateBound), dialect),
                     sqlTypeOf(plan, i - 1, lateBound), dialect);
             // E2 (JAVA_EVICTION_PLAN): the host-side row explosion is
             // DEAD — the scalar-stream projection explodes IN SQL

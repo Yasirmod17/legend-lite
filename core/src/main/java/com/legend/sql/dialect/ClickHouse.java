@@ -732,7 +732,9 @@ public final class ClickHouse extends AnsiSqlRenderer {
                 case SUM -> "sum";
                 case AVG -> "avg";
                 case BOOL_AND -> "min";
-                default -> "max";
+                case BOOL_OR -> "max";
+                // the outer arm admits only the six above (Charter C2.4: an unmatched kind throws)
+                default -> throw new IllegalStateException("reducer " + rc.reducer() + " reached the min/max arm");
             }, rc.collection()));
             case STDDEV_SAMP, STDDEV -> writer.piece(reduced("stddevSampStable", rc.collection()));
             case STDDEV_POP -> writer.piece(reduced("stddevPopStable", rc.collection()));

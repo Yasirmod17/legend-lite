@@ -47,6 +47,12 @@ public interface SqlDialect {
         return this;
     }
 
+    /** Whether this dialect's driver re-fetches a timestamp cell as {@code java.time.LocalDateTime} (the
+     *  BC-faithful carrier the executor reads every timestamp as). Default: it does, and a refusal fails loudly. */
+    default boolean refetchesTimestampAsJavaTime() {
+        return true;
+    }
+
     /** JDBC cell value → canonical Java value for {@code type}. Default: identity. */
     default @com.legend.base.Nullable Object normalize(@com.legend.base.Nullable Object jdbcValue,
             com.legend.sql.@com.legend.base.Nullable SqlType type) {

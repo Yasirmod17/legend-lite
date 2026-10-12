@@ -39,6 +39,14 @@ import java.util.List;
  */
 public final class Databricks extends AnsiSqlRenderer {
 
+    /** No java.time re-fetch (measured 2026-10-11): its driver answers getObject(int, LocalDateTime.class)
+     *  with the timestamp as text. A timestamp cell keeps the driver's Timestamp;
+     *  a BC date-time is designed, not built (docs/CLOUD_BACKENDS_PCT_2026_10_11.md §15). */
+    @Override
+    public boolean refetchesTimestampAsJavaTime() {
+        return false;
+    }
+
     public Databricks() {
         super(Lexicon.DATABRICKS, TypeNames.DATABRICKS, Spellings.DATABRICKS);
     }

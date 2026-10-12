@@ -101,7 +101,10 @@ class DialectBoundaryTest {
             // the plan side's owner: DuckDB, H2, Postgres, SQLite, Databricks, Snowflake, BigQuery (4 -> 7, 2026-10-11,
             // docs/CLOUD_BACKENDS_PCT_2026_10_11.md §12: SQLite is a dialect class of its own, no longer an
             // AnsiSqlRenderer with its lexicon, and the guard names it and the three cloud dialects)
-            "Databases.java", 7,
+            // 7 -> 11 (2026-10-12, the independent review of neema2/legend-lite#30): MariaDb, MySql, Trino and
+            // ClickHouse were constructed there since 2026-10-11/12 but the census below did not name them, so it
+            // counted 7; it names all eleven now
+            "Databases.java", 11,
             "EngineText.java", 5);          // legend-engine's text printers, root layer only (invariant 4d)
 
     /** Lines spelling a JDBC URL, by file: only the execution side's session owner opens a database (C3b). */
@@ -114,13 +117,14 @@ class DialectBoundaryTest {
     void eachDatabaseDecisionHasOneOwner() throws IOException {
         assertEquals(new TreeMap<>(DIALECT_CONSTRUCTIONS),
                 census(Pattern.compile("\\bnew\\s+(com\\.legend\\.sql\\.dialect\\.)?(H2|H2Modern|DuckDb|Postgres"
-                        + "|SQLite|Databricks|Snowflake|BigQuery"
+                        + "|SQLite|Databricks|Snowflake|BigQuery|MariaDb|MySql|Trino|ClickHouse"
                         + "|AnsiSqlRenderer|EngineStyleH2|EngineStyleDB2|EngineStyleComposite)\\s*\\(")),
                 "a dialect constructed outside its owner — ask com.legend.database.Databases (the SQL a"
                         + " query runs) or com.legend.EngineText (legend-engine's golden text)");
         assertEquals(new TreeMap<>(JDBC_URLS), census(Pattern.compile("\"jdbc:")),
                 "a JDBC URL outside com.legend.exec.Sessions — it opens every session");
-        assertEquals(new TreeMap<>(), census(Pattern.compile("\"org\\.(duckdb|h2|postgresql|sqlite)\\.")),
+        assertEquals(new TreeMap<>(), census(Pattern.compile("\"(org\\.(duckdb|h2|postgresql|sqlite|mariadb)|com\\.(clickhouse|databricks|mysql"
+                        + "|google\\.cloud\\.bigquery)|io\\.trino|net\\.snowflake)\\.")),
                 "a driver class named in core — a driver's own types live beside it (exec.DriverCells, :duckdb_load)");
     }
 
