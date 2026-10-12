@@ -462,9 +462,7 @@
 {"id":"functions/date_literals/date_literal__datetime_t_with_tz","columns":["result"],"rows":[["s1999-01-07 22:35:06"]]}
 {"id":"functions/date_literals/date_literal__iso_non_padded","columns":["result"],"rows":[["s9999-01-01"]]}
 {"id":"functions/date_literals/date_literal__compact_with_time","columns":["result"],"rows":[["s9999-12-01 00:00:00"]]}
-{"id":"functions/datetime_functions/age__tstz__from_table","columns":["result"],"rows":[["s9 mons 9 days 18 hours"],["s9 mons 16 days 6 hours"],["s2 years 3 mons 25 days 15 hours 30 mins"],["s3 years 3 mons 6 days 12 hours"],["s3 years 8 mons 26 days 13 hours 30 mins"],["s6 years 7 mons 11 days"],["s26 years 9 mons 9 days 12 hours"],["s26 years 9 mons 10 days 1 secs"],["s56 years 9 mons 10 days"]]}
 {"id":"functions/datetime_functions/age__tstz_tstz__from_table","columns":["result"],"rows":[["s-30 years"],["s-1 secs"],["s12 hours"],["s20 years 1 mons 28 days"],["s23 years 14 days 10 hours 30 mins"],["s23 years 6 mons 3 days 12 hours"],["s24 years 5 mons 14 days 8 hours 30 mins"],["s25 years 11 mons 24 days 18 hours"],["s26 years 6 hours"]]}
-{"id":"functions/datetime_functions/age__ts__from_table","columns":["result"],"rows":[["s9 mons 9 days 18 hours"],["s9 mons 16 days 6 hours"],["s2 years 3 mons 25 days 15 hours 30 mins"],["s3 years 3 mons 6 days 12 hours"],["s3 years 8 mons 26 days 13 hours 30 mins"],["s6 years 7 mons 11 days"],["s26 years 9 mons 9 days 12 hours"],["s26 years 9 mons 10 days 1 secs"],["s56 years 9 mons 10 days"]]}
 {"id":"functions/datetime_functions/age__ts_ts__from_table","columns":["result"],"rows":[["s-30 years"],["s-1 secs"],["s12 hours"],["s20 years 1 mons 28 days"],["s23 years 14 days 10 hours 30 mins"],["s23 years 6 mons 3 days 12 hours"],["s24 years 5 mons 14 days 8 hours 30 mins"],["s25 years 11 mons 24 days 18 hours"],["s26 years 6 hours"]]}
 {"id":"functions/datetime_functions/age__xid__unsupported_type","columns":["result"],"rows":[["i1"]]}
 {"id":"functions/datetime_functions/clock_timestamp__basic","columns":["result"],"rows":[["i1"]]}
@@ -1328,7 +1326,6 @@
 {"id":"structural/interval_arithmetic/interval_divide_scalar","columns":["result"],"rows":[["s12 hours"]]}
 {"id":"structural/interval_arithmetic/interval_compound_literal","columns":["result"],"rows":[["s1971-03-04 00:00:00"],["s2001-03-03 00:00:00"],["s2001-03-04 00:00:00"],["s2021-05-02 00:00:00"],["s2024-03-18 00:00:00"],["s2024-09-07 00:00:00"],["s2025-08-18 00:00:00"],["s2027-02-28 00:00:00"],["s2027-03-04 00:00:00"]]}
 {"id":"structural/interval_arithmetic/interval_compound_time","columns":["result"],"rows":[["s1970-01-02 02:30:00"],["s2000-01-02 02:29:59"],["s2000-01-02 14:30:00"],["s2020-03-01 02:30:00"],["s2023-01-16 13:00:00"],["s2023-07-05 14:30:00"],["s2024-06-16 11:00:00"],["s2025-12-26 20:30:00"],["s2026-01-02 08:30:00"]]}
-{"id":"structural/interval_arithmetic/interval_in_where_filter","columns":["result"],"rows":[["s2025-12-25"],["s2026-01-01"]]}
 {"id":"structural/interval_arithmetic/interval_extract_epoch","columns":["result"],"rows":[["d-1577836800.000000"],["d-631152001.000000"],["d-631108800.000000"],["d5097600.000000"],["d95941800.000000"],["d110635200.000000"],["d140603400.000000"],["d188848800.000000"],["d189410400.000000"]]}
 {"id":"structural/interval_arithmetic/interval_extract_days","columns":["result"],"rows":[["d-18262"],["d-7305"],["d-7304"],["d59"],["d1110"],["d1280"],["d1627"],["d2185"],["d2192"]]}
 {"id":"structural/interval_arithmetic/interval_max_date_plus","columns":["result"],"rows":[["s2026-01-02 00:00:00"]]}

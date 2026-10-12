@@ -73,6 +73,11 @@ public final class SqlParity {
     /** The cases whose Postgres answer is no fixed fact, so none is snapped: each is run by no lane (a SKIP). */
     static final Map<String, String> VOLATILE = Map.of(
             "structural/interval_arithmetic/interval_in_where_ts", "volatile: NOW() - INTERVAL '10 years' moves",
+            // an answer measured from today cannot be snapped (2026-10-12: the two AGE cases drifted a day after the
+            // snap, PR neema2/legend-lite#28's CI); a clock read compared with a fixed past date stays snapped
+            "structural/interval_arithmetic/interval_in_where_filter", "volatile: CURRENT_DATE - INTERVAL '365 days' moves",
+            "functions/datetime_functions/age__ts__from_table", "volatile: AGE(x) is measured from today",
+            "functions/datetime_functions/age__tstz__from_table", "volatile: AGE(x) is measured from today",
             "functions/system_functions/version__basic", "volatile: VERSION() names the platform",
             "functions/math_functions/random_cov", "volatile: RANDOM()",
             "functions/network_functions/inet_client_port__unsupported", "volatile: the client's port");

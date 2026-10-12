@@ -37,6 +37,14 @@ class CorrelatedRelationCheckerTest extends AbstractDatabaseTest {
             2, 9
             #""";
 
+    /** Two rows of one group, numbered by v: rn is a window column, which a filter cannot fold in place. */
+    private static final String WINDOWED = """
+            #TDS
+            g, v
+            1, 10
+            1, 20
+            #->extend(over(~g, ~v->ascending()), ~rn:{p,w,r|$p->rowNumber($r)})""";
+
     @Override
     protected String getDatabaseType() {
         return "DuckDB";
@@ -86,6 +94,27 @@ class CorrelatedRelationCheckerTest extends AbstractDatabaseTest {
         assertEquals(List.of(1, 2), ids("|" + PEOPLE + "->filter(p|" + ORDERS + "->join(" + departments
                 + ", meta::pure::functions::relation::JoinKind.INNER, {o, d|($o.person == $p.id) && ($d.id == $p.dept)})"
                 + "->exists(x|true))->select(~[id])->sort(ascending(~id))"));
+    }
+
+    @Test
+    @DisplayName("a map->toOne over a filter on a window column, at the query's root: no enclosing row to consult")
+    void aRootMapToOneOverAWindowFilter() throws SQLException {
+        var result = executeRelation("|" + WINDOWED + "->filter(r|$r.rn == 1)->map(r|$r.v)->toOne()");
+        assertEquals(10, result.rows().get(0).values().get(0));
+    }
+
+    @Test
+    @DisplayName("a row's own column is its own, never the enclosing row's column of the same name")
+    void aRowsOwnColumnIsNeverTheEnclosingRows() throws SQLException {
+        // the outer rows have an rn too (5 and 7): the inner filter's $r.rn is the window column
+        var result = executeRelation("""
+                |#TDS
+                id, rn
+                1, 5
+                2, 7
+                #->extend(~[first:o|""" + WINDOWED + "->filter(r|$r.rn == 1)->map(r|$r.v)->toOne()])"
+                + "->select(~[id, first])->sort(ascending(~id))");
+        assertEquals(List.of(10, 10), result.rows().stream().map(r -> r.values().get(1)).toList());
     }
 
     @Test

@@ -8834,7 +8834,10 @@ Announced in `docs/IN_FLIGHT.md` the same day (2aa74a8). Branch `claude/loving-e
    - A join condition read any variable but the left side's as the right side, so an enclosing row's `$p.id` became
      the right side's own `id`. An enclosing row now resolves through the enclosing scopes.
    - A relation `map` read as a value (`map->toOne`) did not push the enclosing row's scope, so a correlated one
-     could not resolve. It now pushes it, as the `exists` and `size` arms do.
+     could not resolve. It now pushes it, as the `exists` and `size` arms do. The independent review found that
+     this let a row's own column that a filter cannot fold in place (a window column) resolve to the enclosing
+     row's same-named column, or fail at the query's root; a row's own variable is now never looked up among the
+     enclosing rows (`scopedResolver`, two more tests).
 3. **The parity corpus.** legend-engine 4.145.0's 1,703 `parity-tests` cases, plus 177 of legend-lite's own
    (`core/src/test/resources/sql-parity/lite/`), run as islands.
    - **Two lanes:** `//core:sql_parity_test` (DuckDB) and `//core:sql_parity_postgres_test` (Postgres 16), both in
@@ -8850,9 +8853,9 @@ Announced in `docs/IN_FLIGHT.md` the same day (2aa74a8). Branch `claude/loving-e
      | FAIL (wrong answer) | 0 | 0 |
      | BUG (answers what Postgres rejects) | 0 | 0 |
      | ERROR (errs where Postgres answers) | 0 | 0 |
-     | REFUSED by name | 626 | 18 |
+     | REFUSED by name | 623 | 18 |
      | BOTH_ERROR | 61 | 15 |
-     | SKIP | 65 | 0 |
+     | SKIP | 68 | 0 |
 
    - **Against upstream:** upstream legend-engine passes 1,026 of its 1,703, with 36 wrong answers and 61 accepted
      invalid queries.
@@ -8863,8 +8866,12 @@ Announced in `docs/IN_FLIGHT.md` the same day (2aa74a8). Branch `claude/loving-e
      7c21e6d on `claude/great-wright-p6t5s1`).
    - **The six corpus passes,** rerun against a baseline built from main 8c8b92d the same day: 22 result files
      identical, 0 differing (`compare_judges.py`; both builds executed every pass, 31 sandboxed processes each,
-     about 16 minutes).
-   - **The full CI run:** the pull request's, recorded at landing.
+     about 16 minutes). Rerun on 2026-10-12 with the review's `scopedResolver` fix: 0 differing again
+     (the six passes executed, about 20 minutes).
+   - **The full CI run:** the pull request's (neema2/legend-lite#28), recorded at landing. Its first run
+     (38194644588) failed only in the core lanes, on all three systems: `//core:sql_parity_postgres_test` found the
+     two `AGE(x)` answers drifted a day after their snap. `AGE(x)` is measured from today, and so is
+     `CURRENT_DATE - INTERVAL '365 days'`: the three are now volatile, not snapped (SKIP; they were refused).
 5. **Not done, recorded in the study** (§9.1, "Refused by name" and "Next steps"):
    - `round(x, n)`: Pure's round is half to even, Postgres's numeric round half away from zero.
    - `strpos`: Pure's `indexOf` is lowered one too high; PCT pins it.

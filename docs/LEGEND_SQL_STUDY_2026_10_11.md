@@ -844,7 +844,10 @@ All of this first ran locally on `javac` and JUnit with Maven Central's jars, th
 - **Postgres's answers, snapped.** Upstream asks a live Postgres (Testcontainers) on every run. Here Postgres 16's
   answers sit in `core/src/test/resources/sql-parity/postgres-answers.jsonl`, and the Postgres lane checks each one
   against Postgres itself on every run, so the file cannot drift.
-- **Not snapped:** four volatile cases (`NOW()`-relative, `VERSION()`, `RANDOM()`, the client's port).
+- **Not snapped:** seven volatile cases: three measured from today (`NOW()`- and `CURRENT_DATE`-relative, and
+  `AGE(x)` twice), `VERSION()`, `RANDOM()` and the client's port. The three from today were added on 2026-10-12,
+  after the two `AGE` answers drifted a day after their snap (neema2/legend-lite#28's CI). A clock read compared
+  with a fixed past date stays snapped.
 - **Compared unordered:** one case whose ORDER BY leaves tied rows' order to the database.
 - **The ratchet.** `ledger.tsv` holds every case's status in each lane. A changed status fails the test, as
   upstream's YAML statuses do (REGRESSION, FIX DETECTED, STATUS MISMATCH). `-Dsql.parity.update` rewrites the
@@ -858,7 +861,7 @@ All of this first ran locally on `javac` and JUnit with Maven Central's jars, th
   | BUG: answers what Postgres rejects | **0** | — |
   | REFUSED: not supported yet, by name | 1,086 | 586 PASS, 23 FAIL, 477 ERROR |
   | BOTH_ERROR: Postgres rejects it, and so does legend-lite | 61 | the 61 upstream BUGs |
-  | SKIP: upstream's 62, upstream's joined-model case, and two of the four volatile | 65 | 62 SKIP, 1 PASS, 2 ERROR |
+  | SKIP: upstream's 62, upstream's joined-model case, and two volatile | 65 | 62 SKIP, 1 PASS, 2 ERROR |
 
   Upstream passes 1,026, legend-lite 491, but upstream has 36 wrong answers and 61 accepted invalid queries;
   legend-lite has none. The 586 cases upstream passes and legend-lite refuses are the roadmap: joins, CTEs,
@@ -936,6 +939,9 @@ answers, is refused by name, or is an invalid query both reject.
 - A join condition read an enclosing row's `$p.id` as the right side's own `id`. Enclosing rows now resolve
   through the enclosing scopes.
 - A correlated `map->toOne` could not see the enclosing row. It now pushes it, as the `exists` and `size` arms do.
+  The independent review found that this fix let a row's own column that a filter cannot fold in place (a window
+  column) resolve to the enclosing row's column of the same name, and fail at the query's root. A row's own
+  variable is now never looked up among the enclosing rows (`Lowerer.scopedResolver`).
 
 **The ledger now,** identical in both lanes:
 
@@ -945,11 +951,11 @@ answers, is refused by name, or is an invalid query both reject.
   | FAIL: a wrong answer | **0** | **0** | 36 |
   | BUG: answers what Postgres rejects | **0** | **0** | 61 |
   | ERROR: errs where Postgres answers | **0** | **0** | 518 |
-  | REFUSED: not supported yet, by name | 626 | 18 | — |
+  | REFUSED: not supported yet, by name | 623 | 18 | — |
   | BOTH_ERROR: Postgres rejects it, and so does legend-lite | 61 | 15 | — |
-  | SKIP | 65 | 0 | 62 |
+  | SKIP | 68 | 0 | 62 |
 
-  Of the 951, upstream passes 801, errs on 133 and answers 17 wrongly. Of the 224 that upstream passes and
+  Of the 951, upstream passes 801, errs on 133 and answers 17 wrongly. Of the 223 that upstream passes and
   legend-lite refuses, most need arrays, JSON operators, regular expressions (Postgres's dialect, not DuckDB's),
   intervals, LATERAL, `generate_series` and other functions in FROM, and queries without FROM.
 

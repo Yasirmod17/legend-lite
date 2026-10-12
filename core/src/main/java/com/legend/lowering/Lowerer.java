@@ -1719,6 +1719,15 @@ public final class Lowerer {
                     instanceof Resolution.Resolved o) {
                 return o.expr();
             }
+            if (var != null && var.equals(ownVar)) {
+                // the lambda's OWN row is never an enclosing one: a miss
+                // (a window column, folded nowhere in place) is unfoldable
+                // here, never an enclosing row's same-named column nor a
+                // root scope's refusal (2026-10-12, PR #28's review: a
+                // map->toOne's pushed scope answered $r.rn with the outer
+                // row's rn, and at the root threw "no row scope")
+                throw new UnfoldableRef(name == null ? "<whole variable>" : name);
+            }
             for (var outer : outers) {
                 if (attempt(() -> outer.resolve(var, name))
                         instanceof Resolution.Resolved found) {
