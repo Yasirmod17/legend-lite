@@ -293,7 +293,12 @@ class SqlToPureTest {
         assertEquals("#>{s::DB.T}#->groupBy(~[dept], ~[a:r|if($r.age->isNotEmpty() && ($r.age->toOne() > 30), |true,"
                         + " |if($r.age->isNotEmpty() && !($r.age->toOne() > 30), |false, |[])):y|$y->and(),"
                         + " m:r|$r.age:y|$y->percentile(0.5, false, false)->cast(@Integer),"
-                        + " c:r|$r.age->rowMapper($r.ID):y|$y->corr()])"
+                        // corr: NULL where a value's variance over the pairs is 0 (DuckDB's quotient is NaN there)
+                        + " _sql_1:r|$r.age->rowMapper($r.ID):y|$y->corr(),"
+                        + " _sql_2:r|$r.age->rowMapper(if($r.ID->isEmpty(), |[], |$r.age)):y|$y->covarPopulation(),"
+                        + " _sql_3:r|$r.ID->rowMapper(if($r.age->isEmpty(), |[], |$r.ID)):y|$y->covarPopulation()])"
+                        + "->extend(~[c:r|if(($r._sql_2->isNotEmpty() && ($r._sql_2->toOne() == 0))"
+                        + " || ($r._sql_3->isNotEmpty() && ($r._sql_3->toOne() == 0)), |[], |$r._sql_1)])"
                         + "->select(~[dept, a, m, c])",
                 pure("select dept, bool_and(age > 30) as a, percentile_disc(0.5) within group (order by age desc) as m,"
                         + " corr(age, ID) as c from tb('s::DB.T') group by dept"));

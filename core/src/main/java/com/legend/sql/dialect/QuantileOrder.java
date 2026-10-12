@@ -17,8 +17,8 @@ import java.util.List;
  * and negates back (the same interpolation direction as the standard's
  * DESC form — engine golden 1.4 over [1,1.5,2]); a DESCENDING discrete
  * percentile is the ceil(p*N)-th element of the DESC-sorted collected
- * list (PERCENTILE_DISC DESC picks the first value whose cume_dist
- * >= p). A window-positioned percentile windows every reducer of its
+ * list, the first at p = 0 (PERCENTILE_DISC DESC picks the first value
+ * whose cume_dist >= p). A window-positioned percentile windows every reducer of its
  * encoding with the same window spec.
  */
 final class QuantileOrder extends SqlRewriter {
@@ -59,17 +59,22 @@ final class QuantileOrder extends SqlRewriter {
                     interpolate(SqlExpr.Call.of(SqlFn.NEGATE, value), p,
                             r.distinct()));
         }
+        // at p = 0, ceil(p*N) is 0, before the 1-based list's first element:
+        // the first value is the answer there (pure's percentile, Postgres's
+        // percentile_disc), so the position is at least 1
         return SqlExpr.Call.of(SqlFn.LIST_GET,
                 SqlExpr.Call.of(SqlFn.LIST_SORT_DESC,
                         new SqlAgg.Reducer(SqlAgg.Fn.LIST, List.of(value),
                                 r.distinct(), List.of())),
-                new SqlExpr.Cast(
-                        SqlExpr.Call.of(SqlFn.CEILING,
-                                SqlExpr.Call.of(SqlFn.TIMES, p,
-                                        new SqlAgg.Reducer(SqlAgg.Fn.COUNT,
-                                                List.of(value), r.distinct(),
-                                                List.of()))),
-                        SqlType.Scalar.BIGINT));
+                SqlExpr.Call.of(SqlFn.GREATEST,
+                        new SqlExpr.Cast(
+                                SqlExpr.Call.of(SqlFn.CEILING,
+                                        SqlExpr.Call.of(SqlFn.TIMES, p,
+                                                new SqlAgg.Reducer(SqlAgg.Fn.COUNT,
+                                                        List.of(value), r.distinct(),
+                                                        List.of()))),
+                                SqlType.Scalar.BIGINT),
+                        new SqlExpr.IntLit(1)));
     }
 
     /**

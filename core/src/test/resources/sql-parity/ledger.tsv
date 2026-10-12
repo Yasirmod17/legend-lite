@@ -1826,6 +1826,8 @@ lite/functions/percentile_without_within_group_is_an_error	BOTH_ERROR	BOTH_ERROR
 lite/functions/mode_is_refused	REFUSED	REFUSED
 lite/functions/correlation_and_covariance_by_group	PASS	PASS
 lite/functions/correlation_and_covariance_with_a_filter	PASS	PASS
+lite/functions/correlation_of_a_constant_or_one_pair_is_null	PASS	PASS
+lite/functions/percentile_disc_descending_at_zero_is_the_largest	PASS	PASS
 lite/joins/inner_join_on	PASS	PASS
 lite/joins/left_join_keeps_unmatched	PASS	PASS
 lite/joins/right_join_keeps_unmatched	PASS	PASS
@@ -2046,3 +2048,4 @@ lite/windows/lag_default_of_another_number_type	PASS	PASS
 lite/windows/lag_default_null_is_plain_lag	PASS	PASS
 lite/windows/window_bool_aggregates_and_correlation	PASS	PASS
 lite/windows/window_bool_and_of_an_integer_does_not_exist	BOTH_ERROR	BOTH_ERROR
+lite/windows/window_corr_is_refused	REFUSED	REFUSED

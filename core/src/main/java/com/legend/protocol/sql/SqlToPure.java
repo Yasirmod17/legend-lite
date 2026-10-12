@@ -1533,6 +1533,7 @@ public final class SqlToPure {
         }
         // the aggregates, wherever they are written
         List<ColSpec> aggregates = new ArrayList<>();
+        List<ColSpec> finishes = new ArrayList<>();
         List<SqlAst.Expr> scanned = new ArrayList<>();
         for (SqlAst.SelectItem item : s.items()) {
             if (item instanceof SqlAst.SelectExpr x) {
@@ -1557,7 +1558,7 @@ public final class SqlToPure {
             }
         }
         for (SqlAst.Expr e : scanned) {
-            collectAggregates(e, in, byCanon, aggregates, names, preferred);
+            collectAggregates(e, in, byCanon, aggregates, finishes, names, preferred);
         }
         if (!computedKeys.isEmpty()) {
             relation = call("extend", relation, new ColSpecArray(computedKeys));
@@ -1568,6 +1569,9 @@ public final class SqlToPure {
             relation = call("distinct", call("select", relation, new ColSpecArray(keys)));
         } else {
             relation = call("groupBy", relation, new ColSpecArray(keys), new ColSpecArray(aggregates));
+        }
+        if (!finishes.isEmpty()) {
+            relation = call("extend", relation, new ColSpecArray(finishes));
         }
         Grouped g = new Grouped(in, byCanon, keyBySource);
         if (having != null) {
@@ -1819,6 +1823,11 @@ public final class SqlToPure {
             }
             return new WindowColumn(windowLambda(property(row, arg.name())), lambda(group,
                     call(fn.equals("bool_or") ? "or" : "and", new Variable(group))), Kind.BOOLEAN, true);
+        }
+        if (fn.equals("corr")) {
+            // Postgres's is NULL where a value's variance in the frame is 0; DuckDB's is NaN there (a grouped corr is
+            // guarded by the pairs' variances; a window's would need them as window columns first)
+            throw SqlTranslationException.unsupported("corr over a window is not supported yet", f.pos());
         }
         if (BIVARIATE.containsKey(fn)) {
             windowArguments(f, 2, 2);
@@ -2339,8 +2348,13 @@ public final class SqlToPure {
     /** Postgres's boolean aggregates: Pure's and() (bool_and, every) or or() (bool_or) of the group. */
     private static final Set<String> BOOLEAN_AGGREGATES = Set.of("bool_and", "bool_or", "every");
 
-    /** An aggregate column of the grouped relation: its map and reduce, and its kind. */
-    private record Aggregate(ColSpec spec, Kind kind) {
+    /** An aggregate column of the grouped relation: its map and reduce (with any it is computed from), its kind, and
+     *  the column computed from them after the grouping when it is not one of them. */
+    private record Aggregate(List<ColSpec> specs, Kind kind, @com.legend.base.Nullable ColSpec finish) {
+
+        Aggregate(ColSpec spec, Kind kind) {
+            this(List.of(spec), kind, null);
+        }
     }
 
     /** Postgres's statistical aggregates and Pure's: sample (n - 1) unless named population. */
@@ -2402,7 +2416,7 @@ public final class SqlToPure {
 
     /** Every aggregate call of {@code e}, once each: a column of the grouped relation with its map and reduce. */
     private void collectAggregates(SqlAst.Expr e, Input in, Map<String, Col> byCanon, List<ColSpec> aggregates,
-            Set<String> names, Map<String, String> preferred) {
+            List<ColSpec> finishes, Set<String> names, Map<String, String> preferred) {
         if (e instanceof SqlAst.FunctionCall f && isAggregate(f)) {
             for (SqlAst.Expr arg : f.args()) {
                 if (containsAggregate(arg)) {
@@ -2418,10 +2432,13 @@ public final class SqlToPure {
             String name = want != null && !names.contains(want) && !want.startsWith(SYNTHETIC) ? want : fresh(names);
             if (fn.equals("string_agg") || PERCENTILES.contains(fn) || BIVARIATE.containsKey(fn)) {
                 Aggregate aggregate = fn.equals("string_agg") ? new Aggregate(stringAgg(f, in, name), Kind.STRING)
-                        : PERCENTILES.contains(fn) ? percentile(f, in, name) : bivariate(f, in, name);
+                        : PERCENTILES.contains(fn) ? percentile(f, in, name) : bivariate(f, in, name, names);
                 names.add(name);
                 byCanon.put(canon, Col.of(name, aggregate.kind(), true));
-                aggregates.add(aggregate.spec());
+                aggregates.addAll(aggregate.specs());
+                if (aggregate.finish() != null) {
+                    finishes.add(aggregate.finish());
+                }
                 return;
             }
             Tx arg;
@@ -2517,7 +2534,7 @@ public final class SqlToPure {
             return;
         }
         for (SqlAst.Expr child : children(e)) {
-            collectAggregates(child, in, byCanon, aggregates, names, preferred);
+            collectAggregates(child, in, byCanon, aggregates, finishes, names, preferred);
         }
     }
 
@@ -2590,7 +2607,7 @@ public final class SqlToPure {
 
     /** {@code corr(y, x)}, {@code covar_pop(y, x)}, {@code covar_samp(y, x)}: Pure's over the group's pairs
      *  ({@code rowMapper(y, x)}), a pair with a NULL skipped as Postgres skips it; double precision. */
-    private Aggregate bivariate(SqlAst.FunctionCall f, Input in, String name) {
+    private Aggregate bivariate(SqlAst.FunctionCall f, Input in, String name, Set<String> names) {
         String fn = functionName(f.name().get(0));
         if (!f.withinGroup().isEmpty()) {
             throw SqlTranslationException.invalid("WITHIN GROUP is required for ordered-set aggregates only; " + fn
@@ -2623,9 +2640,34 @@ public final class SqlToPure {
             y = call("if", test, thunk(y), thunk(empty()));
             x = call("if", test, thunk(x), thunk(empty()));
         }
-        return new Aggregate(new ColSpec(name, lambda(row, call("rowMapper", y, x)),
-                lambda(group, call(java.util.Objects.requireNonNull(BIVARIATE.get(fn)), new Variable(group))), null),
-                Kind.FLOAT);
+        ValueSpecification reduce = call(java.util.Objects.requireNonNull(BIVARIATE.get(fn)), new Variable(group));
+        if (!fn.equals("corr")) {
+            return new Aggregate(new ColSpec(name, lambda(row, call("rowMapper", y, x)), lambda(group, reduce), null),
+                    Kind.FLOAT);
+        }
+        // Postgres's corr is NULL where either value's variance over the pairs is 0 (one pair among them); a
+        // database's quotient is NaN there (DuckDB's). The pairs' variances -- a value's covariance with itself, over
+        // the pairs that hold both -- say where; the column is the correlation elsewhere.
+        String raw = fresh(names);
+        String vy = fresh(names);
+        String vx = fresh(names);
+        ValueSpecification yPaired = call("if", call("isEmpty", x), thunk(empty()), thunk(y));
+        ValueSpecification xPaired = call("if", call("isEmpty", y), thunk(empty()), thunk(x));
+        ValueSpecification flat = call("or", knownZero(vy), knownZero(vx));
+        return new Aggregate(List.of(
+                new ColSpec(raw, lambda(row, call("rowMapper", y, x)), lambda(group, reduce), null),
+                new ColSpec(vy, lambda(row, call("rowMapper", y, yPaired)), lambda(group,
+                        call("covarPopulation", new Variable(group))), null),
+                new ColSpec(vx, lambda(row, call("rowMapper", x, xPaired)), lambda(group,
+                        call("covarPopulation", new Variable(group))), null)),
+                Kind.FLOAT, new ColSpec(name, lambda(row, call("if", flat, thunk(empty()), thunk(property(row, raw)))),
+                        null, null));
+    }
+
+    /** Whether a grouped column holds 0: known and equal to 0. */
+    private ValueSpecification knownZero(String column) {
+        ValueSpecification v = property(row, column);
+        return call("and", call("isNotEmpty", v), call("equal", call("toOne", v), new CInteger(0L)));
     }
 
     /** {@code string_agg(text, 'sep' [ORDER BY col [DESC], ...]) [FILTER (WHERE ...)]}: Pure's joinStrings over the

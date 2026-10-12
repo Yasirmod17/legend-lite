@@ -274,3 +274,8 @@ tests:
     sql: "SELECT dept_id, corr(salary, age) AS c, covar_pop(age, salary) AS p, covar_samp(age, id) AS s FROM persons GROUP BY dept_id ORDER BY dept_id"
   - id: correlation_and_covariance_with_a_filter
     sql: "SELECT corr(float_val, int_val) AS c, covar_samp(int_val, small_val) FILTER (WHERE id < 9) AS s, covar_pop(numeric_val, float_val) AS p FROM numbers"
+  # corr is NULL where a value's variance over the pairs is 0 (one pair among them): DuckDB's is NaN there
+  - id: correlation_of_a_constant_or_one_pair_is_null
+    sql: "SELECT dept_id, corr(id, dept_id) AS a, corr(salary, age) FILTER (WHERE id < 3) AS b, corr(age, id) FILTER (WHERE id = 1) AS c FROM persons GROUP BY dept_id ORDER BY dept_id"
+  - id: percentile_disc_descending_at_zero_is_the_largest
+    sql: "SELECT dept_id, percentile_disc(0) WITHIN GROUP (ORDER BY age DESC) AS a, percentile_disc(0) WITHIN GROUP (ORDER BY salary) AS b FROM persons GROUP BY dept_id ORDER BY dept_id"

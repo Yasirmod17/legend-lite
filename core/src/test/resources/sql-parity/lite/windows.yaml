@@ -107,8 +107,11 @@ tests:
     sql: "SELECT id, lag(float_val, 1, 0) OVER (ORDER BY id) AS a, lag(int_val, 1, 0.5) OVER (ORDER BY id) AS b, lead(int_val, 1, '7') OVER (ORDER BY id) AS c FROM numbers ORDER BY id"
   - id: lag_default_null_is_plain_lag
     sql: "SELECT id, lag(name, 1, NULL) OVER (ORDER BY id) AS a FROM persons ORDER BY id"
-  # bool_and, bool_or, every, corr and covariances over a window
+  # bool_and, bool_or, every and covariances over a window; corr there is refused (DuckDB's is NaN where Postgres's is
+  # NULL: a value's variance in the frame is 0)
   - id: window_bool_aggregates_and_correlation
-    sql: "SELECT id, bool_and(active) OVER (PARTITION BY dept_id) AS a, bool_or(age > 40) OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS b, every(salary > 50000) OVER (ORDER BY id) AS e, corr(salary, age) OVER (PARTITION BY dept_id) AS c, covar_samp(age, id) OVER (ORDER BY id ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS s FROM persons ORDER BY id"
+    sql: "SELECT id, bool_and(active) OVER (PARTITION BY dept_id) AS a, bool_or(age > 40) OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS b, every(salary > 50000) OVER (ORDER BY id) AS e, covar_pop(salary, age) OVER (PARTITION BY dept_id) AS c, covar_samp(age, id) OVER (ORDER BY id ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS s FROM persons ORDER BY id"
   - id: window_bool_and_of_an_integer_does_not_exist
     sql: "SELECT id, bool_and(age) OVER () AS a FROM persons ORDER BY id"
+  - id: window_corr_is_refused
+    sql: "SELECT id, corr(salary, age) OVER (PARTITION BY dept_id) AS c FROM persons ORDER BY id"
