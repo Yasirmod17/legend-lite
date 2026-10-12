@@ -21,7 +21,7 @@ import { DuckDbEngine, type ArrowishConnection } from '../../engine-client/src/d
 import type { QueryEngine } from '../../engine-client/src/engine.ts';
 import type { SeedSource, TestData } from '../../engine-client/src/model-data.ts';
 import { inferFormat, mountRemote, type S3Credentials } from '../src/remote.ts';
-import { catalogColumns, forgetUpload, formatOf, ingestFile, tableNameOf } from '../src/upload.ts';
+import { formatOf, tableNameOf } from '../src/upload.ts';
 import { pickSource, type DatabaseSession, type PickerSections, type RemoteCredentials, type SectionId } from '../src/ui/source-picker.ts';
 import { saveDialog } from '../src/ui/save-dialog.ts';
 import { Latest, TabWork, mayLeave } from '../src/host.ts';
@@ -41,15 +41,6 @@ import {
 type FileCube = CubeDocument & { readonly source: FileSource };
 const isFileCube = (doc: CubeDocument): doc is FileCube => doc.source._type === 'file';
 import {
-  BrowserRecords,
-  MemoryRecords,
-  RuleStore,
-  openCubeDatabase,
-  persistStorage,
-  type CubeStore,
-} from '../src/cube-store.ts';
-import {
-  FileHandles,
   canKeepHandles,
   pickDataFile,
   readHandle,
@@ -66,23 +57,17 @@ import {
   type SavedDocument,
 } from '../src/page-document.ts';
 import type { InferredModel, TableModels } from '../src/infer.ts';
-import type { ModelHome } from '../../depot-client/src/model-home.ts';
-import { pageConfig, type DepotConfig, type PageConfig, type ProjectConfig } from './page-config.ts';
+import { pageConfig } from './page-config.ts';
 import type { ModelElement } from '../src/saved-queries.ts';
 import type { Query, QueryReader } from '../../query-store/src/index.ts';
+import { browserServices } from '../src/services/browser.ts';
+import type { ConfiguredProject, PlaneService, PlaneWord, Services } from '../src/app/services.ts';
 
 // SAVED QUERIES' CODE, fetched the first time it is needed -- the Saved queries section, a query
 // link -- as charts are: a grid-only page never downloads it (test/bundle-budget.test.ts).
 const savedQueries = () => import('../src/saved-queries.ts');
 const queryStores = () => import('../../query-store/src/index.ts');
-import {
-  connect,
-  listObjects,
-  signInWithKey,
-  WarehouseEngine,
-  type CatalogObject,
-  type WarehouseSession,
-} from '../../engine-client/src/warehouse.ts';
+import type { CatalogObject, WarehouseEngine, WarehouseSession } from '../../engine-client/src/warehouse.ts';
 import { makeWindow, type WindowSpec } from '../src/ui/window.ts';
 import type { MenuItem } from '../src/ui/menu.ts';
 import {
@@ -124,8 +109,8 @@ export const PLANES: readonly {
   { id: 'host.plane.engine', word: 'engine', label: 'Plan on the engine (legend-engine on :6300)' },
 ];
 
-/** Where the page plans: in this tab, on legend-lite, or on legend-engine -- the same API. */
-export type PlaneWord = 'local' | 'remote' | 'engine';
+/** Where the page plans: in this tab, on legend-lite, or on legend-engine -- the same API (src/app/services.ts). */
+export type { PlaneWord };
 
 /** CREATE A CLASS… (docs/DATACUBE_MODEL_DESIGN_2026_10_10.md §15.1): a grid's own entry, in its menu's data group. */
 const CREATE_CLASS = { id: 'host.createClass', label: 'Create a Class\u2026', section: 'data' } as const;
@@ -214,6 +199,11 @@ export function planeMenu(): MenuItem[] {
   }));
 }
 
+/** The tab's plane, as its services take it: the one `?planner=` chose, opened again on another by navigating. */
+function tabPlane(): PlaneService {
+  return { word: chosenPlane(), planes: PLANES, choose: (plane) => void goToPlane(plane.id) };
+}
+
 /** Navigate to a plane, if that is what was chosen. */
 export function goToPlane(id: string | undefined): boolean {
   const found = PLANES.find((plane) => plane.id === id);
@@ -283,10 +273,9 @@ export interface Engine {
   readonly seeds: SeedSource;
   /**
    * A file opened in this tab: the planner repointed at the model written for it from DuckDB's
-   * catalog (`tables`, infer.ts). Every planner takes one (planners.ts); absent, the page
-   * offers no file to open -- the capability and the affordance are the same fact.
+   * catalog (`tables`, infer.ts). Every planner takes one (planners.ts).
    */
-  readonly models?: {
+  readonly models: {
     use(model: string, runtime: string, how?: ModelOptions): void;
     /** ANOTHER source on the page: a planner over its model, on the same worker or server. */
     another(model: string, runtime: string, how?: ModelOptions): Planner;
@@ -428,9 +417,12 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
   engineReady.catch(() => {});
 
   const start = await startOf(location);
+  // the deployment's settings (config.json, the address's overrides), read once: the services hold what they say
+  const configured = pageConfig();
+  configured.catch(() => {});
   status.textContent = 'starting DuckDB…';
 
-  const { engine, db } = await startDuckDb();
+  const duck = await startDuckDb();
   performance.mark('dc:duckdb-ready');
 
   // A REMOTE SOURCE, when one is named.
@@ -451,7 +443,7 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
   if (start.kind === 'sample' && remote) {
     status.textContent = `mounting ${remote}…`;
     const format = params.get('format');
-    await mountRemote(engine, {
+    await mountRemote(duck.engine, {
       sources: [{
         name: 'trades',
         url: remote,
@@ -465,12 +457,12 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
       // embedding application.
     });
     // said on every receipt: this tab's DuckDB answers, reading the file over HTTP
-    engine.readsRemote(remote);
+    duck.engine.readsRemote(remote);
     status.textContent = `reading ${remote}`;
   } else if (start.kind === 'sample') {
 
   status.textContent = `generating ${ROWS.toLocaleString(UI_LOCALE)} rows…`;
-  await generateTrades(engine);
+  await generateTrades(duck.engine);
   generated = { label: 'trades (generated in this tab)', takenAt: new Date(), rowCount: ROWS };
   }
 
@@ -478,8 +470,20 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
 
   performance.mark('dc:data-ready');
   status.textContent = 'starting planner…';
-  const { planner, source, snapTarget, label, models, tables, seeds } = await engineReady;
+  const chosen = await engineReady;
+  const { planner, source, snapTarget, label } = chosen;
   status.textContent = label;
+  // THE TAB'S SERVICES (src/services/browser.ts): everything below reads its planner, its database, its stores and its
+  // browser through them
+  const services: Services = await browserServices({
+    plane: tabPlane(),
+    planner: chosen,
+    duckdb: duck,
+    config: await configured,
+    location,
+  });
+  const engine = services.engine.database.engine;
+  const { tables, seeds } = services.engine;
 
   /** The sample cube's opening view. */
   const sampleSnapshot = async (): Promise<CubeSnapshot> => ({
@@ -596,6 +600,7 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
     // `start`: a copy of a grid of this source (Copy of Grid), starting where that grid is now
     return (gridHost, spawned, start) => {
       let printed = 0;
+      const kept = services.browser.readSettings();
       const created: CubeApp = new CubeApp(gridHost, start?.snapshot ?? snap, {
         engine: place.engine ?? engine,
         planner: place.planner ?? planner,
@@ -634,10 +639,10 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
         },
         showColumnZone: true,
         dimensions: dims,
-        writeClipboard: (text) => navigator.clipboard?.writeText(text),
+        writeClipboard: (text) => services.browser.writeClipboard(text),
         // Settings kept between visits, as upstream's hosts keep them
         // (settingsData.values / onSettingsChanged); the page keeps them for every grid.
-        ...(storedSettings() ? { settings: storedSettings() as Record<string, unknown> } : {}),
+        ...(kept ? { settings: kept } : {}),
         download,
         onStatus: (text, kind) => {
           // ERRORS ONLY. The cube's own status bar carries the result
@@ -696,22 +701,16 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
     if (item.id === CREATE_DATA_SPACE.id) createDataSpace?.();
     // A NAVIGATION, not a switch: the same page loads again with the chosen ?planner= (a cube
     // never changes planner while it runs). Asked first when leaving would lose work here.
-    if (PLANES.some((plane) => plane.id === item.id)) {
+    const plane = services.engine.plane.planes.find((p) => p.id === item.id);
+    if (plane) {
       if (!mayLeave(work, (q) => window.confirm(q), 'Choosing another planner reloads the page')) return;
       leaving = true;
-      goToPlane(item.id);
+      services.engine.plane.choose(plane);
     }
   }
 
   /** Hand a file to the user. */
-  const download = (name: string, mime: string, text: string | Uint8Array): void => {
-    const url = URL.createObjectURL(new Blob([typeof text === 'string' ? text : text.slice()], { type: mime }));
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = name;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
+  const download = (name: string, mime: string, text: string | Uint8Array): void => services.browser.download(name, mime, text);
 
   /** Opens the saved cubes' window; set once the page can open files. */
   let showCubes: (() => void) | undefined;
@@ -772,20 +771,12 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
   const page = new PageApp({
     host,
     hostMenu: () => [
-      // ONLY IF THE PAGE CAN OPEN FILES. Without `models` the
-      // bar's controls are inert -- this page's planner compiles a
-      // fixed model -- and an entry that opens a panel of dead
-      // controls is the dead-button fault one layer up.
-      ...(models
-        ? [
-          // saved pages: in this browser, over the sources they were built on
-          { id: 'host.save' as const, label: 'Save', section: 'file' as const },
-          { id: 'host.saveAs' as const, label: 'Save As\u2026', section: 'file' as const },
-          { id: 'host.open' as const, label: 'Open\u2026', section: 'file' as const },
-          // the page's settings in a link: never a row of data (src/share/link.ts)
-          { id: 'host.share' as const, label: 'Share\u2026', section: 'file' as const },
-        ]
-        : []),
+      // saved pages: in this browser, over the sources they were built on
+      { id: 'host.save' as const, label: 'Save', section: 'file' as const },
+      { id: 'host.saveAs' as const, label: 'Save As\u2026', section: 'file' as const },
+      { id: 'host.open' as const, label: 'Open\u2026', section: 'file' as const },
+      // the page's settings in a link: never a row of data (src/share/link.ts)
+      { id: 'host.share' as const, label: 'Share\u2026', section: 'file' as const },
       { id: 'host.query', label: 'Generated Pure & SQL\u2026', section: 'view' as const },
       // THE PAGE'S MODEL: its associations and its data space, once the page has a model home
       ...(createDataSpace ? [{ label: 'Model', section: 'data' as const, submenu: [CREATE_ASSOCIATION, CREATE_DATA_SPACE] }] : []),
@@ -822,12 +813,10 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
       title.textContent = 'A blank page';
       const lead = doc.createElement('p');
       lead.className = 'dc-blank-lead';
-      lead.textContent = models
-        ? 'Start with a data source: a file from your computer, an example, a table in a warehouse, or a remote Parquet, CSV or Iceberg file.'
-        : 'This planner opens only the sample.';
+      lead.textContent = 'Start with a data source: a file from your computer, an example, a table in a warehouse, or a remote Parquet, CSV or Iceberg file.';
       blankLead = lead;
       card.append(title, lead);
-      if (models) {
+      {
         const actions = doc.createElement('div');
         actions.className = 'dc-blank-actions';
         const add = doc.createElement('button');
@@ -848,24 +837,15 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
       blankCard = blank;
       slot.append(blank);
     },
-    ...(models ? {
-      // New ▸ Data Source…: a grid over another source, through the picker, beside the others
-      openSource: () => picker?.('add') ?? Promise.resolve(undefined),
-      onBlankPage: () => blankPage?.(),
-    } : {}),
+    // New ▸ Data Source…: a grid over another source, through the picker, beside the others
+    openSource: () => picker?.('add') ?? Promise.resolve(undefined),
+    onBlankPage: () => blankPage?.(),
     onChange: () => {
       harnessSignal.changes += 1;
       dropUnread?.();
       onCubeView?.();
     },
-    onSettingsChanged: (values) => {
-      try {
-        window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(values));
-      } catch {
-        // storage refused (private window, quota): the settings hold
-        // for this visit
-      }
-    },
+    onSettingsChanged: (values) => services.browser.writeSettings(values),
     download: (name, mime, text) => download(name, mime, text),
   });
   // a start that throws, from here on: the empty page shows its card, saying why
@@ -896,11 +876,7 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
   // compiles an ordinary model over an ordinary table, which is why
   // the SQL panel, the tree and the snap plane all keep working
   // without a second code path.
-  if (models) {
-
-    // Narrowed once: the check above does not reach into a function.
-    const local = models;
-
+  {
     // A WAREHOUSE (the picker's Database section): the development sign-in, the warehouse's own users.
     /** The cubes live on a warehouse: renewed when the same user signs in again (P2-297). */
     const liveEngines = new Set<WarehouseEngine>();
@@ -909,16 +885,7 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
       return live;
     };
     work.add(() => (signedIn ? `the warehouse session (${signedIn.session.principal})` : undefined));
-    // Which warehouse to offer: the deployment's (config.json, ?warehouse=), else the last one this
-    // browser signed in to -- a convenience kept in this browser only; storage may be refused.
-    const REMEMBERED = 'datacube.warehouse.url';
-    const rememberedWarehouse = (): string => {
-      try {
-        return window.localStorage.getItem(REMEMBERED) ?? '';
-      } catch {
-        return '';
-      }
-    };
+    const warehouse = services.warehouse;
 
     /**
      * A warehouse table's model: its own runtime (the catalog's database type), and the runtime its
@@ -933,7 +900,7 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
     const snapOf = (o: CatalogObject, m: InferredModel & { readonly snapRuntime: string }): { snapTarget: SnapTarget } => ({
       snapTarget: {
         schema: o.schema, table: o.name, source: m.source, conversions: m.conversions,
-        planner: local.another(m.model, m.snapRuntime, { bitColumns: m.bitColumns }),
+        planner: services.engine.another(m.model, m.snapRuntime, { bitColumns: m.bitColumns }),
       },
     });
 
@@ -973,9 +940,9 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
       // A warehouse table is read-only: a column the compiler says must be
       // converted to be declared cannot be, so it is left out, and named.
       const m = await warehouseModel(chosen);
-      const own = local.another(m.model, m.runtime, { bitColumns: m.bitColumns });
+      const own = services.engine.another(m.model, m.runtime, { bitColumns: m.bitColumns });
       const columns = await sourceColumns(own, m.source);
-      const live = track(new WarehouseEngine(signedIn, chosen.catalog));
+      const live = track(warehouse!.live(signedIn, chosen.catalog));
       const name = `${chosen.schema}.${chosen.name}`;
       // where it is, never the sign-in: whoever reopens it signs in as themselves
       const cubeSource: WarehouseSource = {
@@ -1084,7 +1051,7 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
       for (const [table, fileName] of [...held]) {
         if (read.has(table)) continue;
         held.delete(table);
-        void forgetUpload(engine, db, fileName, table).catch(() => {}).finally(() => taken.delete(table));
+        void services.engine.database.forgetFile(fileName, table).catch(() => {}).finally(() => taken.delete(table));
       }
       // a planner no grid plans through any more lets its model go (a grid and its copies share one)
       for (const [grid, owned] of [...gridPlanners]) {
@@ -1171,9 +1138,9 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
         const kept = how.table !== undefined && !taken.has(how.table) ? how.table : undefined;
         if (kept !== undefined) taken.add(kept);
         const table = kept ?? freshTable(tableNameOf(file.name));
-        const opened = await ingestFile(engine, db, file, tables, { table });
+        const opened = await services.engine.database.ingestFile(file, { table });
         const loadedAt = new Date();
-        const own = local.another(opened.model, opened.runtime, { bitColumns: opened.bitColumns });
+        const own = services.engine.another(opened.model, opened.runtime, { bitColumns: opened.bitColumns });
         const columns = await sourceColumns(own, opened.source);
         const source = await fileSource(file, formatOf(file.name), columns, how.sample);
         const saved = how.saved;
@@ -1196,7 +1163,7 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
           // never made into a grid: its planner's model let go, its table gone, and its name free again
           discard: () => {
             own.dispose?.();
-            return forgetUpload(engine, db, file.name, table).catch(() => {}).finally(() => taken.delete(table));
+            return services.engine.database.forgetFile(file.name, table).catch(() => {}).finally(() => taken.delete(table));
           },
           make: gridMaker(r.snapshot, r.configuration, [], {
             planner: own,
@@ -1245,22 +1212,10 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
       return o.notes;
     }
 
-    // SAVED CUBES, in this browser: IndexedDB when the browser gives it, else memory (this
-    // visit only, and said so). One database holds the cubes and their files' handles.
-    let store: CubeStore;
-    let handles: FileHandles | undefined;
+    // SAVED PAGES (the services' page store): in this browser, IndexedDB when the browser gives it, else memory (this
+    // visit only, and said so); and their files' handles
+    const { store, handles, memoryOnly } = services.pages;
     let persistent = false;
-    /** The browser gave no database: saved cubes last only as long as this visit. */
-    let memoryOnly = false;
-    try {
-      const database = openCubeDatabase();
-      await database;
-      store = new RuleStore(new BrowserRecords(database), 'this browser');
-      handles = new FileHandles(database);
-    } catch {
-      store = new RuleStore(new MemoryRecords(), 'this browser');
-      memoryOnly = true;
-    }
 
     /**
      * The file a saved cube needs, got the least intrusive way that works: a sample is
@@ -1368,7 +1323,7 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
     async function reopened(doc: CubeDocument, keys: readonly string[], several: boolean, table?: string): Promise<Opened | undefined> {
       const src = doc.source;
       // `several`: one of a page's grids, its columns panel folded as a grid added beside others is
-      if (src._type === 'savedQuery') return openedSavedQuery(await openedRecord(await pageConfig(), src.query), doc, several);
+      if (src._type === 'savedQuery') return openedSavedQuery(await openedRecord(src.query), doc, several);
       if (src._type === 'warehouseTable') return reopenTable(src, doc, several);
       if (src._type === 'remoteFile') return reopenRemote(src, doc, several);
       // a dataframe's rows are the Python's that serves it: opened there (`ll.show(page)`), never here
@@ -1483,7 +1438,7 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
       current = { ...current, cubeId: id, name, savedName: name, baseline: form.definition, lost: [] };
       page.setTitle(name);
       onCubeView?.();
-      if (!persistent) persistent = await persistStorage();
+      if (!persistent) persistent = await services.pages.persist();
       library?.sync();
     }
 
@@ -1617,7 +1572,7 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
           name: offered,
           ...(current.cubeId !== undefined
             ? { over: { name: current.name ?? offered, ...(savedAt !== undefined ? { savedAt } : {}) } } : {}),
-          where: memoryOnly ? 'for this visit only (this browser refused storage)' : 'in this browser',
+          where: services.pages.where,
           keeps,
           leaves,
           ...(current.lost?.length
@@ -1724,12 +1679,9 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
     };
     const lastSegment = (url: string): string => url.replace(/[?#].*$/, '').replace(/\/+$/, '').split('/').pop() || url;
 
-    /** A remote file as a view of this tab's DuckDB, and the model written from its catalog. */
-    async function mountedRemote(url: string, s3: S3Credentials | undefined, name: string) {
-      await mountRemote(engine, { sources: [{ name, url }], ...(s3 ? { s3 } : {}) });
-      // a view of a remote file cannot be rewritten: a column that needs a conversion is left out
-      return tables.tableModel(await catalogColumns(engine, tables, name), { table: name, convertible: false, databaseType: engine.databaseType });
-    }
+    /** A remote file as a view of the host's database, and the model written from its catalog. */
+    const mountedRemote = (url: string, s3: S3Credentials | undefined, name: string): Promise<InferredModel> =>
+      services.engine.database.mountRemote(url, s3, name);
 
     // A SAVED QUERY (the picker's Saved queries; the user, 2026-10-01: "load from a saved Query"):
     // read from the query store as upstream serves it, never from Query's browser storage, by the
@@ -1750,30 +1702,22 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
       /** A project opened by name: the tab's engine with its version's own rows made there for each query (withTestData). */
       readonly engine?: QueryEngine;
     };
-    const fetchText = async (url: string): Promise<string> => {
-      const r = await fetch(url);
-      if (!r.ok) throw new Error(`${url} answered ${r.status}`);
-      return r.text();
-    };
+    const fetchText = (url: string): Promise<string> => services.queries.fetchText(url);
     /** Each project's model text, fetched once. */
     const projectModels = new Map<string, Promise<string>>();
     /** Each configured project's rows (its seed), in this tab's DuckDB once. */
     const seeded = new Map<string, Promise<void>>();
     /** Where a project opened by name puts its test data in this tab (each query its cubes run makes its version's rows there). */
     let testData: TestData | undefined;
-    /** The model home a depot names (the page's own SDLC and Depot, or servers), opened once. */
-    let home: Promise<ModelHome> | undefined;
-    // loaded only when a saved query's project is opened by name: the grid-only page's budget does not carry it
-    const modelHome = (d: DepotConfig): Promise<ModelHome> => (home ??= import('../../depot-client/src/model-home.ts')
-      .then(({ connectModelHome }) => connectModelHome({ sdlc: d.sdlc, vendor: d.vendor })));
+    /** The model home (the page's own SDLC and Depot, or servers), when the page has one: the services'. */
+    const modelHome = services.modelHome;
 
     /** CREATE A CLASS… of a grid (src/create-class.ts, fetched the first time it is asked for). */
     const makeClass = async (grid: CubeApp, place: GridPlace, cube: string | undefined): Promise<void> => {
-      const config = await pageConfig();
       const grid0 = place.planner ?? planner;
       const source = grid0.source?.();
       // the model's writer: the tab's module, on every plane (the one beside a server's planner writes table models too)
-      if (!config.depot || !source || !writesModels(tables)) return;
+      if (!modelHome || !source || !writesModels(tables)) return;
       const sourceName = place.label ?? 'this source';
       const snapshot = grid.snapshot;
       // refused before the window opens, in words: a source read from no table of its own, a pivot, a lone total
@@ -1789,7 +1733,7 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
         window.alert(`Cannot create a class of this grid: ${e instanceof Error ? e.message : String(e)}`);
         return;
       }
-      const [{ createClassOf }, home] = await Promise.all([import('../src/create-class.ts'), modelHome(config.depot)]);
+      const [{ createClassOf }, home] = await Promise.all([import('../src/create-class.ts'), modelHome.connect()]);
       const model = await createClassOf({
         query,
         table,
@@ -1804,9 +1748,8 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
         pageName: current.name ?? ((page.suggestedName || sourceName).replace(/\.[A-Za-z0-9]+$/, '') || 'page'),
         model: current.model,
         client: home.client,
-        studio: (project, workspace) => new URL(
-          `/studio/demo/index.html#/edit/${encodeURIComponent(project)}/${encodeURIComponent(workspace)}`, window.location.href).href,
-        persist: async () => (persistent ||= await persistStorage()),
+        studio: (project, workspace) => modelHome.studio(project, workspace),
+        persist: async () => (persistent ||= await services.pages.persist()),
       });
       if (!model) return;
       // the page's model, made with its first class or a grid's table kept: the page has changed
@@ -1819,9 +1762,8 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
      * page as they read it -- its class when it is one, else its rows as a class's, or why they cannot be one.
      */
     const modelActions = async (): Promise<{ actions: typeof import('../src/model-actions.ts'); of: import('../src/model-actions.ts').ModelActionsOf } | undefined> => {
-      const config = await pageConfig();
-      if (!config.depot || !writesModels(tables)) return undefined;
-      const [actions, home] = await Promise.all([import('../src/model-actions.ts'), modelHome(config.depot)]);
+      if (!modelHome || !writesModels(tables)) return undefined;
+      const [actions, home] = await Promise.all([import('../src/model-actions.ts'), modelHome.connect()]);
       const grids = actions.pageGrids(page.grids, (id) => {
         const place = gridPlaces.get(id);
         const grid = page.grid(id);
@@ -1838,9 +1780,8 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
           model: current.model,
           client: home.client,
           grids,
-          studio: (project, workspace) => new URL(
-            `/studio/demo/index.html#/edit/${encodeURIComponent(project)}/${encodeURIComponent(workspace)}`, window.location.href).href,
-          persist: async () => (persistent ||= await persistStorage()),
+          studio: (project, workspace) => modelHome.studio(project, workspace),
+          persist: async () => (persistent ||= await services.pages.persist()),
           duplicate: duplicateLambda,
           call: (path) => fn(path),
         },
@@ -1870,25 +1811,25 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
       }
       return p;
     };
-    const projectFor = (config: PageConfig, q: Pick<Query, 'groupId' | 'artifactId' | 'versionId'>): ProjectConfig | undefined =>
-      config.projects.find((p) => p.groupId === q.groupId && p.artifactId === q.artifactId && p.versionId === q.versionId);
+    const projectFor = (q: Pick<Query, 'groupId' | 'artifactId' | 'versionId'>): ConfiguredProject | undefined =>
+      services.queries.projects.find((p) => p.groupId === q.groupId && p.artifactId === q.artifactId && p.versionId === q.versionId);
 
-    async function openedQuery(config: PageConfig, store: QueryReader, id: string): Promise<OpenedQuery> {
-      return openedRecord(config, await store.get(id));
+    async function openedQuery(store: QueryReader, id: string): Promise<OpenedQuery> {
+      return openedRecord(await store.get(id));
     }
 
     /** A saved query's record -- from a store, or as a share link carries it -- as a cube's source. */
-    async function openedRecord(config: PageConfig, q: Pick<Query, 'name' | 'groupId' | 'artifactId' | 'versionId' | 'content' | 'executionContext' | 'defaultParameterValues'>): Promise<OpenedQuery> {
+    async function openedRecord(q: Pick<Query, 'name' | 'groupId' | 'artifactId' | 'versionId' | 'content' | 'executionContext' | 'defaultParameterValues'>): Promise<OpenedQuery> {
       const { contextOf, enumerationsOf, enumsAsStrings, projectOf, sourceOf } = await savedQueries();
-      const project = projectFor(config, q);
-      const byName = config.depot;
+      const project = projectFor(q);
+      const byName = modelHome;
       if (!project && !byName) throw new Error(`“${q.name}” belongs to ${projectOf(q)}, which this page has no model for (config.json projects[], or a depot)`);
       const key = projectOf(q);
       // the page's own project (config.json projects[]), else the version opened by name from Depot (design Phase 3)
       const model = await once(projectModels, key, async () => (project
         ? (await Promise.all(project.models.map(fetchText))).join('\n')
-        : (await import('../../depot-client/src/model-text.ts')).modelText((await modelHome(byName!)).depot, q.groupId, q.artifactId, q.versionId)));
-      const elements = await local.elements(model) as ModelElement[];
+        : (await import('../../depot-client/src/model-text.ts')).modelText((await byName!.connect()).depot, q.groupId, q.artifactId, q.versionId)));
+      const elements = await services.engine.elements(model) as ModelElement[];
       const context = contextOf(q, elements);
       const lambdaOf = await planner.parse(q.content);
       const values = new Map<string, ValueSpecification>();
@@ -1917,7 +1858,7 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
         });
       }
       const how: ModelOptions = { mapping: context.mapping, enumerations: [...enumerationsOf(elements)] };
-      const own = local.another(model, context.runtime, how);
+      const own = services.engine.another(model, context.runtime, how);
       // rule 4: an enumeration column is read as its value's name
       const named = new Set((await own.relationType(lambda([], source))).filter((c) => c.enumeration).map((c) => c.name));
       if (named.size > 0) source = enumsAsStrings(source, named);
@@ -1946,7 +1887,7 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
     /** A remote file for a grid, mounted as a view of its own; its keys are never written down. */
     async function openedRemote(url: string, s3: S3Credentials | undefined, saved?: CubeDocument, capped = false): Promise<Opened> {
       const m = await mountedRemote(url, s3, freshTable('remote'));
-      const own = local.another(m.model, m.runtime, { bitColumns: m.bitColumns });
+      const own = services.engine.another(m.model, m.runtime, { bitColumns: m.bitColumns });
       const columns = await sourceColumns(own, m.source);
       const name = lastSegment(url);
       const cubeSource: RemoteSource = { _type: 'remoteFile', name, url, columns: columns.map((c) => ({ name: c.name, type: c.type })) };
@@ -1980,26 +1921,8 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
       await inPlace(() => opened(chosen, false), what);
     }
 
-    // THE QUERY STORE, through the one client (query-store/README.md): the server config.json names,
-    // or -- none named -- the same API answered in this page from this origin's browser store, the
-    // one Legend Query keeps its saved queries in when it runs without a server.
-    let stores: { readonly url: string; readonly store: Promise<QueryReader>; readonly where: string } | undefined;
-    const queryStore = (config: PageConfig): { readonly store: Promise<QueryReader>; readonly where: string } => {
-      if (stores?.url !== config.queryStore) {
-        const url = config.queryStore;
-        stores = {
-          url,
-          where: url ? `on ${new URL(url).host}` : 'in this browser',
-          store: queryStores().then((m) => (url
-            ? new m.QueryStoreClient(url)
-            : new m.QueryStoreClient(m.LOCAL_API, m.localQueryServer({ records: new m.BrowserRecords(), user: config.user }).fetch))),
-        };
-      }
-      return stores;
-    };
-
     picker = async (purpose: 'add' | 'open', start?: SectionId): Promise<GridMaker | undefined> => {
-      const config = await pageConfig();
+      const queries = services.queries;
       const act = async (chosen: Chosen): Promise<GridMaker | null> => {
         if (purpose === 'add') return (await opened(chosen, true)).make;
         await openInPlace(chosen);
@@ -2032,23 +1955,16 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
           },
         },
         saved: {
-          where: queryStore(config).where,
+          where: queries.where,
           // the browser's store: a query saved in another tab (Legend Query) appears without reopening
-          ...(config.queryStore ? {} : {
-            watch: (changed: () => void) => {
-              let stop = (): void => undefined;
-              let stopped = false;
-              void queryStores().then((m) => { if (!stopped) stop = m.watchBrowserStore(changed); });
-              return () => { stopped = true; stop(); };
-            },
-          }),
-          search: async (text, mineOnly) => (await (await queryStore(config).store).search({
+          ...(queries.watch ? { watch: queries.watch } : {}),
+          search: async (text, mineOnly) => (await (await queries.store()).search({
             ...(text ? { searchTermSpecification: { searchTerm: text, includeOwner: true } } : {}),
             showCurrentUserQueriesOnly: mineOnly,
             sortByOption: 'SORT_BY_UPDATE',
             limit: 50,
           })).map((q) => {
-            const project = projectFor(config, q);
+            const project = projectFor(q);
             return {
               id: q.id,
               name: q.name,
@@ -2056,19 +1972,19 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
               ...(q.lastUpdatedAt ? { modified: new Date(q.lastUpdatedAt).toLocaleDateString(UI_LOCALE) } : {}),
               project: project?.title ?? `${q.groupId}:${q.artifactId}:${q.versionId}`,
               // with a depot, a project not in config.json opens by name (openedRecord)
-              ...(project || config.depot ? {} : { unusable: 'This page has no model for its project' }),
+              ...(project || modelHome ? {} : { unusable: 'This page has no model for its project' }),
             };
           }),
-          open: async (id) => act({ kind: 'saved', query: await openedQuery(config, await queryStore(config).store, id) }),
+          open: async (id) => act({ kind: 'saved', query: await openedQuery(await queries.store(), id) }),
           // a link to this page that opens the query as its source (query-store/src/share.ts)
           copyLink: async (id) => {
-            const [store, { queryFragment }] = await Promise.all([queryStore(config).store, queryStores()]);
+            const [store, { queryFragment }] = await Promise.all([queries.store(), queryStores()]);
             const link = `${location.origin}${location.pathname}${location.search}#${await queryFragment(await store.get(id))}`;
             await navigator.clipboard.writeText(link);
             return `Link copied (${link.length.toLocaleString(UI_LOCALE)} characters): it opens the query as the cube’s source, and holds the query, never its rows.`;
           },
         },
-        database: databaseSection(config, (session, object) => act({ kind: 'table', session, object })),
+        ...(warehouse ? { database: databaseSection(warehouse, (session, object) => act({ kind: 'table', session, object })) } : {}),
         remote: {
           detect: detectFormat,
           open: (url, credentials) => act({ kind: 'remote', url, ...(credentials ? { s3: s3Of(credentials) } : {}) }),
@@ -2101,11 +2017,11 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
      * another warehouse not, and the table opened as soon as it is listed.
      */
     function databaseSection<T>(
-      config: PageConfig,
+      on: NonNullable<Services['warehouse']>,
       open: (session: WarehouseSession, object: CatalogObject) => Promise<T>,
       want?: { readonly warehouse: string; readonly schema: string; readonly name: string },
     ): NonNullable<PickerSections<T>['database']> {
-      const url = want?.warehouse ?? (config.warehouse || rememberedWarehouse());
+      const url = want?.warehouse ?? on.offered();
       const keep = signedIn && (!want || sameWarehouse(signedIn.session.baseUrl, want.warehouse)) ? signedIn : undefined;
       return {
         ...(url ? { url } : {}),
@@ -2114,13 +2030,9 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
         signIn: async (url, user, password) => {
           // nothing of a previous sign-in stays on offer until this one has listed its tables (P2-334)
           signedIn = undefined;
-          const connected = await connect(url, user, password);
+          const connected = await on.connect(url, user, password);
           signedIn = { session: connected.session, objects: connected.objects };
-          try {
-            window.localStorage.setItem(REMEMBERED, connected.session.baseUrl);
-          } catch {
-            // storage refused: not remembered, nothing else changes
-          }
+          on.remember(connected.session.baseUrl);
           // THE CUBES LIVE THERE go on with the new token when it is the same user (P2-297)
           for (const live of liveEngines) {
             try {
@@ -2152,12 +2064,13 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
       if (on && found) return openedTable(on.session, found, saved, several);
       let got: Opened | undefined;
       const host = (() => { try { return new URL(src.warehouse).host; } catch { return src.warehouse; } })();
+      if (!warehouse) throw new Error(`“${saved.name}” reads ${src.name} on ${host}: this page reaches no warehouse`);
       const done = await pickSource<boolean>(document, {
         purpose: 'open',
         start: 'database',
         reason: `“${saved.name}” reads ${src.name} on ${host}: sign in there to open it.`,
         sections: {
-          database: databaseSection(await pageConfig(), async (session, object) => {
+          database: databaseSection(warehouse, async (session, object) => {
             got = await openedTable(session, object, saved, several);
             return true;
           }, { warehouse: src.warehouse, schema: src.schema, name: src.table }),
@@ -2223,8 +2136,7 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
     if (links?.isQueryFragment(queryLink)) {
       history.replaceState(null, '', location.pathname + location.search);
       try {
-        const config = await pageConfig();
-        await openInPlace({ kind: 'saved', query: await openedRecord(config, await links.readQueryFragment(queryLink)) });
+        await openInPlace({ kind: 'saved', query: await openedRecord(await links.readQueryFragment(queryLink)) });
       } catch (e) {
         failedStart(e);
       }
@@ -2247,11 +2159,9 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
     // to the warehouse that served this page (its config.json names it), then the table asked for is
     // opened, or the tables are offered. The key stays in the address: a reload signs in again.
     if (start.kind === 'warehouse') {
-      const config = await pageConfig();
       try {
-        if (!config.warehouse) throw new Error('this page was not served by a warehouse: its config.json names none');
-        const session = await signInWithKey(config.warehouse, start.key);
-        signedIn = { session, objects: await listObjects(session) };
+        if (!warehouse) throw new Error('this page reaches no warehouse');
+        signedIn = await warehouse.signInWithKey(start.key);
       } catch (e) {
         failedStart(e);
       }
@@ -2273,9 +2183,6 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
     // A START THAT OPENED NOTHING (a link that failed, a key refused) leaves the blank page, saying
     // why: never an empty page without a word
     if (page.empty) blankPage(startProblem);
-  } else if (start.kind !== 'sample') {
-    status.textContent = 'this planner opens only the sample: the link or key in the address needs the in-tab planner';
-    status.classList.add('bad');
   }
   // the start has settled: from now on an empty page is a blank one
   if (blankCard) blankCard.hidden = false;
@@ -2348,18 +2255,4 @@ export function must(id: string): HTMLElement {
   const el = document.getElementById(id);
   if (!el) throw new Error(`missing #${id}`);
   return el;
-}
-
-const SETTINGS_KEY = 'dataCube.settings';
-
-/** The settings this browser kept, or none. */
-function storedSettings(): Record<string, unknown> | undefined {
-  try {
-    const raw = window.localStorage.getItem(SETTINGS_KEY);
-    const parsed: unknown = raw === null ? undefined : JSON.parse(raw);
-    return parsed !== null && typeof parsed === 'object'
-      ? (parsed as Record<string, unknown>) : undefined;
-  } catch {
-    return undefined;
-  }
 }

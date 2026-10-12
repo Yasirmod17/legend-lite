@@ -67,8 +67,12 @@ function startup(bundle = join(DEMO, 'bundle.js')): string[] {
  *  (query.ts duplicateLambda) and each grid's class read and written with the page (page-document.ts), at startup; the
  *  windows, the actions, the names and the SDLC client are chunks fetched the first time one is asked for
  *  (src/model-actions.ts, src/model-names.ts: imported by nothing the page loads at startup). Measured 386,448, main
- *  before it 385,251 (+1,197). */
-const BUDGET = 387_000;
+ *  before it 385,251 (+1,197).
+ *  387,000 -> 388,000 (2026-10-11, DataCube one app, step 1a, docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md §12): the tab's
+ *  services (src/services/browser.ts: the planner, the database, the page store, the query store, the model home, the
+ *  warehouse and the browser, built once), which demo/boot.ts now reads everything through; the dead branches of a
+ *  planner that opens no file gone. Measured 387,056, main before it 386,536 (+520). */
+const BUDGET = 388_000;
 
 /** The engine page's (demo/engine.html: one cube on an engine that runs its queries, Python's) startup download,
  *  gzipped: the grid and the remote client, no DuckDB-WASM and no compiler. Set 2026-10-08 at its first measure
