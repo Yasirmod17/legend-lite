@@ -1019,7 +1019,6 @@ browser_test(
 # entry point -> bundle
 _BUNDLES = {
     "demo/main.ts": "demo/bundle.js",
-    "demo/page.ts": "demo/bundle-page.js",
     "src/planner-worker.ts": "demo/planner-worker.js",
     "demo/remote-harness.ts": "demo/remote-bundle.js",
     "demo/stress.ts": "demo/stress.js",
@@ -1103,16 +1102,16 @@ esbuild_bundle(
     ],
 )
 
-# THE BUNDLES DATACUBE SHIPS (//:web; docs/BUILD_REBUILD_DESIGN_2026_10_05.md, D10): the app, the embeddable page, the
-# page of one cube on an engine (engine.html: Python's engine serves it), a notebook's cube (the widget's loader and
-# DataCube's module) and the planner's worker. remote-bundle and stress are fixtures of their harnesses (verify_remote,
+# THE BUNDLES DATACUBE SHIPS (//:web; docs/BUILD_REBUILD_DESIGN_2026_10_05.md, D10): the app, the page of one cube on an
+# engine (engine.html: Python's engine serves it), a notebook's cube (the widget's loader and DataCube's module) and the
+# planner's worker. (The page of several cubes, demo/page.ts, went with the one-app design's step 1d: its checks run on
+# the app, verify_page.) remote-bundle and stress are fixtures of their harnesses (verify_remote,
 # run_stress), not product: they leave the site with D5.
 filegroup(
     name = "bundles",
     srcs = [
         ":bundle_bundle",
         ":bundle_bundle_engine",
-        ":bundle_bundle_page",
         ":bundle_planner_worker",
         ":widget",
         ":widget_loader",
