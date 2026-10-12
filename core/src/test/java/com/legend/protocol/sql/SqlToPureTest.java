@@ -337,8 +337,8 @@ class SqlToPureTest {
         assertEquals("#>{s::DB.T}#->extend(~[p:r|$r.j->get('a')->get('b c'), t:r|$r.j->get('a')->to(@String),"
                 + " k:r|$r.j->get('k')])->select(~[p, t, k])", pure("select j #> '{a,\"b c\"}' as p, j #>> '{a}' as t, j['k'] as k from tb('s::DB.T')",
                 JSON_COLUMNS));
-        assertEquals("#>{s::DB.T}#->extend(~[v:r|meta::pure::functions::variant::convert::fromJson('{\"a\":1}')->get('a')"
-                + "->to(@String), s:r|meta::pure::functions::variant::convert::fromJson('\"x\"')])->select(~[v, s])", pure("select '{\"a\":1}'::jsonb ->> 'a' as v, to_jsonb('x') as s from tb('s::DB.T')",
+        assertEquals("#>{s::DB.T}#->extend(~[v:r|fromJson('{\"a\":1}')->get('a')"
+                + "->to(@String), s:r|fromJson('\"x\"')])->select(~[v, s])", pure("select '{\"a\":1}'::jsonb ->> 'a' as v, to_jsonb('x') as s from tb('s::DB.T')",
                 JSON_COLUMNS));
     }
 

@@ -583,7 +583,7 @@ public final class SqlToPure {
     }
 
     private static boolean setReturning(SqlAst.FunctionCall f) {
-        return f.name().size() == 1 && SET_RETURNING.contains(functionName(f.name().get(0)));
+        return f.name().size() == 1 && SET_RETURNING.containsKey(functionName(f.name().get(0)));
     }
 
     private static void noSetReturning(SqlAst.Expr e) {
@@ -614,7 +614,7 @@ public final class SqlToPure {
             throw SqlTranslationException.unsupported("a subquery without FROM is not supported yet", s.pos());
         }
         if (s.from().isEmpty() && s.items().stream().anyMatch(i -> i instanceof SqlAst.AllColumns)) {
-            throw SqlTranslationException.invalid("SELECT * with no tables specified is not valid", s.pos());
+            throw SqlTranslationException.invalid("with no tables specified, SELECT * is not valid", s.pos());
         }
         // no FROM: one row, of no columns the query can name
         String one = "\n" + SYNTHETIC + "row\n1\n";
@@ -868,7 +868,8 @@ public final class SqlToPure {
         SqlAst.Ident alias = f.alias();
         // a function with an OUT parameter names its column by it (json_array_elements's value); one returning a
         // plain type by the table alias, else itself
-        String column = OUT_VALUE_FUNCTIONS.contains(fn) ? "value"
+        SetReturning kind = SET_RETURNING.get(fn);
+        String column = kind != null && kind.outValue ? "value"
                 : alias != null ? alias.quoted() ? alias.text() : fold(alias.text()) : fn;
         Rel rel = setReturning(f, fn, column, scope);
         Source source = bound(rel, alias != null ? alias : f.name().get(f.name().size() - 1), f.columnAliases(),
@@ -877,7 +878,8 @@ public final class SqlToPure {
         return new Source(source.relation(), List.of(new Binding(b.qualifier(), b.columns(), true)), source.star());
     }
 
-    /** {@code generate_series} and {@code unnest} as Pure's {@code flatten} of a collection: one row per element. */
+    /** A set-returning function ({@link #SET_RETURNING}) as Pure's {@code flatten} of a collection: one row per
+     *  element. */
     private Rel setReturning(SqlAst.TableFunction f, String fn, String column, Scope scope) {
         if (f.name().size() != 1) {
             throw SqlTranslationException.unsupported("function \"" + f.name().get(f.name().size() - 1).text()
@@ -890,37 +892,39 @@ public final class SqlToPure {
             }
             argExprs.add(a.value());
         }
-        switch (fn) {
-            case "generate_series" -> {
-                return new Rel(call("flatten", series(argExprs, scope, f.pos()), colSpec(column)),
-                        List.of(new OutCol(column, Kind.INTEGER, false)));
-            }
-            case "unnest" -> {
+        SetReturning kind = SET_RETURNING.get(fn);
+        if (kind == null) {
+            throw SqlTranslationException.unsupported("function \"" + fn + "\" in FROM is not supported yet", f.pos());
+        }
+        return switch (kind) {
+            case SERIES -> new Rel(call("flatten", series(argExprs, scope, f.pos()), colSpec(column)),
+                    List.of(new OutCol(column, Kind.INTEGER, false)));
+            case UNNEST -> {
                 if (argExprs.size() != 1) {
                     throw SqlTranslationException.unsupported("unnest of " + argExprs.size() + " arrays is not"
                             + " supported yet", f.pos());
                 }
                 Tx elements = array(argExprs.get(0), scope);
-                return new Rel(call("flatten", elements.vs(), colSpec(column)),
+                yield new Rel(call("flatten", elements.vs(), colSpec(column)),
                         List.of(new OutCol(column, elements.kind(), false)));
             }
-            case "json_array_elements", "jsonb_array_elements" -> {
+            case ELEMENTS -> {
                 // each element as jsonb (jsonb's null an element too); none for SQL's NULL; a value that is not an
                 // array is Postgres's error, and Pure's toMany's
                 ValueSpecification elements = jsonElements(f, fn, argExprs, scope);
-                return new Rel(call("flatten", elements, colSpec(column)),
+                yield new Rel(call("flatten", elements, colSpec(column)),
                         List.of(new OutCol(column, Kind.JSON, true)));
             }
-            case "json_array_elements_text", "jsonb_array_elements_text" -> {
+            case ELEMENTS_TEXT -> {
                 // each element's text (->> of it: NULL for jsonb's null)
                 String held = SYNTHETIC + "element";
                 ValueSpecification rel = call("select", call("extend", call("flatten",
                         jsonElements(f, fn, argExprs, scope), colSpec(held)), new ColSpecArray(List.of(
                                 new ColSpec(column, lambda(SYNTHETIC + "e", call("to", property(SYNTHETIC + "e", held),
                                         typeArg("String"))), null, null)))), new ColSpecArray(List.of(colSpec(column))));
-                return new Rel(rel, List.of(new OutCol(column, Kind.STRING, true)));
+                yield new Rel(rel, List.of(new OutCol(column, Kind.STRING, true)));
             }
-            case "json_object_keys", "jsonb_object_keys" -> {
+            case OBJECT_KEYS -> {
                 if (argExprs.size() != 1) {
                     throw SqlTranslationException.invalid("function " + fn + " takes one argument", f.pos());
                 }
@@ -934,22 +938,32 @@ public final class SqlToPure {
                 if (x.nullable()) {
                     keys = call("if", call("isEmpty", x.vs()), thunk(empty()), thunk(keys));
                 }
-                return new Rel(call("flatten", keys, colSpec(column)),
+                yield new Rel(call("flatten", keys, colSpec(column)),
                         List.of(new OutCol(column, Kind.STRING, false)));
             }
-            default -> throw SqlTranslationException.unsupported("function \"" + fn + "\" in FROM is not supported yet",
-                    f.pos());
+        };
+    }
+
+    /** What a set-returning function this step reads is: {@code generate_series}'s range, {@code unnest}'s array, a
+     *  jsonb array's elements (as jsonb, or as text), a jsonb object's keys. {@code outValue}: its one column is its
+     *  OUT parameter's, {@code value}, rather than named by its alias or itself. */
+    private enum SetReturning {
+        SERIES(false), UNNEST(false), ELEMENTS(true), ELEMENTS_TEXT(true), OBJECT_KEYS(false);
+
+        final boolean outValue;
+
+        SetReturning(boolean outValue) {
+            this.outValue = outValue;
         }
     }
 
-    /** The set-returning functions whose one column is their OUT parameter's, {@code value}. */
-    private static final Set<String> OUT_VALUE_FUNCTIONS = Set.of("json_array_elements", "jsonb_array_elements",
-            "json_array_elements_text", "jsonb_array_elements_text");
-
-    /** The set-returning functions this step reads, in FROM or as a select-list item. */
-    private static final Set<String> SET_RETURNING = Set.of("generate_series", "unnest", "json_array_elements",
-            "jsonb_array_elements", "json_array_elements_text", "jsonb_array_elements_text", "json_object_keys",
-            "jsonb_object_keys");
+    /** The set-returning functions this step reads, in FROM or as a select-list item, by their Postgres names. */
+    private static final Map<String, SetReturning> SET_RETURNING = Map.of(
+            "generate_series", SetReturning.SERIES, "unnest", SetReturning.UNNEST,
+            "json_array_elements", SetReturning.ELEMENTS, "jsonb_array_elements", SetReturning.ELEMENTS,
+            "json_array_elements_text", SetReturning.ELEMENTS_TEXT, "jsonb_array_elements_text",
+            SetReturning.ELEMENTS_TEXT, "json_object_keys", SetReturning.OBJECT_KEYS, "jsonb_object_keys",
+            SetReturning.OBJECT_KEYS);
 
     private static final String MAP = "meta::pure::functions::collection::Map";
 
@@ -2012,7 +2026,7 @@ public final class SqlToPure {
         }
         if (s.distinct()) {
             for (Output o : outputs) {
-                notJsonKey(o.kind(), "SELECT DISTINCT", s.pos());
+                notJsonKey(o.kind(), "DISTINCT", s.pos());
             }
             relation = call("distinct", call("select", relation, new ColSpecArray(selection)));
             if (!sortInfos.isEmpty()) {
@@ -3475,13 +3489,16 @@ public final class SqlToPure {
         return strict(target, List.of(x), v -> call(convert, v.get(0)));
     }
 
-    /** {@code DATE '...'} and {@code TIMESTAMP '...'} in ISO 8601 spelling: Pure date constants. */
+    /** {@code DATE '...'} and {@code TIMESTAMP '...'} in ISO 8601 spelling: Pure date constants; {@code JSONB '...'}
+     *  and {@code JSON '...'}: a Variant constant. */
     private static Tx typedLiteral(SqlAst.TypedLit lit) {
+        if (JSON_TYPES.contains(lit.type().name())) {
+            return jsonConstant(new SqlAst.StringLit(lit.value(), lit.pos()));
+        }
         return switch (lit.type().name()) {
             case "date" -> dateFromString(new SqlAst.StringLit(lit.value(), lit.pos()), Kind.DATE);
             case "timestamp", "timestamp without time zone" ->
                     dateFromString(new SqlAst.StringLit(lit.value(), lit.pos()), Kind.DATETIME);
-            case "json", "jsonb" -> jsonConstant(new SqlAst.StringLit(lit.value(), lit.pos()));
             default -> throw SqlTranslationException.unsupported("constants of type " + lit.type().name() + " are not"
                     + " supported yet", lit.pos());
         };
@@ -3571,7 +3588,7 @@ public final class SqlToPure {
 
     /** Pure's semi-structured value: Postgres's jsonb here (register S49). */
     private static final String VARIANT = "meta::pure::metamodel::variant::Variant";
-    private static final String FROM_JSON = "meta::pure::functions::variant::convert::fromJson";
+    private static final String FROM_JSON = "fromJson";
 
     /** jsonb's navigation operators: {@code ->} a member or an element, {@code ->>} its text, {@code #>} and
      *  {@code #>>} the same along a path. */
@@ -3705,7 +3722,7 @@ public final class SqlToPure {
         }
         String body = text.substring(1, text.length() - 1);
         List<String> keys = new ArrayList<>();
-        if (body.isBlank()) {
+        if (body.strip().isEmpty()) {
             return keys;
         }
         int i = 0;
@@ -3744,7 +3761,7 @@ public final class SqlToPure {
                     throw SqlTranslationException.unsupported("an empty or NULL path element is not supported yet",
                             lit.pos());
                 }
-                if (bare.matches("[+-]?[0-9]+")) {
+                if (isIntegerText(bare)) {
                     throw SqlTranslationException.unsupported("a path element that is a number (" + bare + ") reads"
                             + " an array's element or an object's member by the value it meets; it is not supported"
                             + " yet", lit.pos());
@@ -3760,6 +3777,20 @@ public final class SqlToPure {
             }
             i++;
         }
+    }
+
+    /** Whether {@code s} is an integer's digits, signed or not: a path element jsonb reads by the value it meets. */
+    private static boolean isIntegerText(String s) {
+        int start = !s.isEmpty() && (s.charAt(0) == '+' || s.charAt(0) == '-') ? 1 : 0;
+        if (start == s.length()) {
+            return false;
+        }
+        for (int i = start; i < s.length(); i++) {
+            if (s.charAt(i) < '0' || s.charAt(i) > '9') {
+                return false;
+            }
+        }
+        return true;
     }
 
     /** {@code json_extract_path(x, VARIADIC keys)}: {@code #>}'s path, its keys constants; the _text form
@@ -3778,7 +3809,7 @@ public final class SqlToPure {
                 throw SqlTranslationException.unsupported("a path key other than a constant is not supported yet",
                         f.args().get(i).pos());
             }
-            if (key.value().matches("[+-]?[0-9]+")) {
+            if (isIntegerText(key.value())) {
                 throw SqlTranslationException.unsupported("a path key that is a number (" + key.value() + ") reads"
                         + " an array's element or an object's member by the value it meets; it is not supported yet",
                         key.pos());
