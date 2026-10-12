@@ -146,8 +146,8 @@ interface Services {
 - **Python headless:** the in-process services and the app's actions without its windows (§8).
 - **Legend Query** keeps embedding one `CubeApp` (a grid inside another app, not a DataCube page). Nothing changes for
   it.
-- **`demo/page.ts`** (the F6 fixture, before `PageApp`) goes, with its `verify_page` test; the app's own page tests
-  cover what it covered.
+- **`demo/page.ts`** (the F6 fixture, before `PageApp`) goes. Its test, `verify_page`, stays and runs on the app: the
+  sample grid and its copy on DataCube's own page. Those two-cube checks have no other home in a real browser.
 
 ### 3.4 What differs by host is a capability, said by its services
 
@@ -329,7 +329,7 @@ Python's in-process services.
 | `demo/engine-page.ts`, `demo/engine-cube.ts`: frames, `RemoteRun` to Python | `src/services/python-host.ts` (Python's services over HTTP or the widget channel) |
 | `src/headless/` | the headless services (in-process) and the cores' entry points |
 | `demo/main.ts`, `demo/engine.ts`, `demo/widget.ts` | each: build its services, `openDataCube` |
-| `demo/page.ts` and `verify_page` | gone |
+| `demo/page.ts` | gone; `verify_page` runs on the app (demo/index.html) |
 | `create-class.ts`, `model-actions.ts` | the app's model actions, over the model home service; each a core and a window |
 | Python's `engine.py` | answers the new services' routes: the page store, the data-in calls, the SDLC and Depot, the query store, the plane |
 | `native/` (the native library) | adds the SDLC and Depot rules over `GitStorage`, and the folder query store |

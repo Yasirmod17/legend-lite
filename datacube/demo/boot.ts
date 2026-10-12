@@ -252,8 +252,7 @@ const DESKS = ['Rates', 'Credit', 'FX', 'Equity', 'Commodities'];
 
 /**
  * DuckDB in this tab: its bundle from our own origin, its worker, one connection -- the engine,
- * and the database itself (files are registered on it). Shared by the demo page and the page of
- * several cubes (page.ts).
+ * and the database itself (files are registered on it): the tab's database service (src/services/browser.ts).
  */
 export async function startDuckDb(): Promise<{ readonly engine: DuckDbEngine; readonly db: duckdb.AsyncDuckDB }> {
   // Bundles are served from OUR origin, copied out of node_modules by
