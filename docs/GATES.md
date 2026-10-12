@@ -8868,10 +8868,16 @@ Announced in `docs/IN_FLIGHT.md` the same day (2aa74a8). Branch `claude/loving-e
      identical, 0 differing (`compare_judges.py`; both builds executed every pass, 31 sandboxed processes each,
      about 16 minutes). Rerun on 2026-10-12 with the review's `scopedResolver` fix: 0 differing again
      (the six passes executed, about 20 minutes).
-   - **The full CI run:** the pull request's (neema2/legend-lite#28), recorded at landing. Its first run
-     (38194644588) failed only in the core lanes, on all three systems: `//core:sql_parity_postgres_test` found the
-     two `AGE(x)` answers drifted a day after their snap. `AGE(x)` is measured from today, and so is
-     `CURRENT_DATE - INTERVAL '365 days'`: the three are now volatile, not snapped (SKIP; they were refused).
+   - **The full CI run:** the pull request's (neema2/legend-lite#28), recorded at landing. Its first two runs failed
+     only in the core lanes, in `//core:sql_parity_postgres_test`'s check that the snapped answers are Postgres's:
+     - **Linux, macOS and Windows** (38194644588): the two `AGE(x)` answers drifted a day after their snap. `AGE(x)` is
+       measured from today, and so is `CURRENT_DATE - INTERVAL '365 days'`: the three are now volatile, not snapped
+       (SKIP; they were refused).
+     - **macOS and Windows** (both runs): 13 `bytea` answers had been snapped as the JVM's identity hash of a byte
+       array (`[B@2abf4075`), which repeats from run to run on Linux only; they are Postgres's `\x` hex now. And 15
+       answers of Postgres's float functions (`cbrt`, `atan`, `log`, `cosh`, ...) differ in the last digit, because
+       each platform's C library computes them: the check now lets two doubles differ by 1e-12 of the larger (the
+       judge's own tolerance is 1e-6).
 5. **Not done, recorded in the study** (§9.1, "Refused by name" and "Next steps"):
    - `round(x, n)`: Pure's round is half to even, Postgres's numeric round half away from zero.
    - `strpos`: Pure's `indexOf` is lowered one too high; PCT pins it.

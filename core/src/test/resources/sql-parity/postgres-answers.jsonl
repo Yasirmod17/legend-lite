@@ -281,15 +281,15 @@
 {"id":"functions/array_functions/unnest_anyarray_cov","error":{"state":"42725","message":"ERROR: function unnest(unknown) is not unique"}}
 {"id":"functions/array_functions/unnest_anymultirange_cov","error":{"state":"42725","message":"ERROR: function unnest(unknown) is not unique"}}
 {"id":"functions/array_functions/unnest_tsvector_tsvector_OUT_lexeme_cov","error":{"state":"42725","message":"ERROR: function unnest(unknown) is not unique"}}
-{"id":"functions/binary_functions/convert__bytea_name_name","columns":["result"],"rows":[["s[B@2abf4075"]]}
+{"id":"functions/binary_functions/convert__bytea_name_name","columns":["result"],"rows":[["s\\x48656c6c6f"]]}
 {"id":"functions/binary_functions/convert_from__bytea_name","columns":["result"],"rows":[["sHello"]]}
-{"id":"functions/binary_functions/convert_to__txt_name","columns":["result"],"rows":[["s[B@770d3326"]]}
+{"id":"functions/binary_functions/convert_to__txt_name","columns":["result"],"rows":[["s\\x48656c6c6f"]]}
 {"id":"functions/binary_functions/get_byte__bytea_int","columns":["result"],"rows":[["i65"]]}
-{"id":"functions/binary_functions/set_byte__bytea_int_int","columns":["result"],"rows":[["s[B@4cc8eb05"]]}
-{"id":"functions/binary_functions/sha224__bytea","columns":["result"],"rows":[["s[B@51f116b8"]]}
-{"id":"functions/binary_functions/sha256__bytea","columns":["result"],"rows":[["s[B@19d481b"]]}
-{"id":"functions/binary_functions/sha384__bytea","columns":["result"],"rows":[["s[B@1f97cf0d"]]}
-{"id":"functions/binary_functions/sha512__bytea","columns":["result"],"rows":[["s[B@140c9f39"]]}
+{"id":"functions/binary_functions/set_byte__bytea_int_int","columns":["result"],"rows":[["s\\x4342"]]}
+{"id":"functions/binary_functions/sha224__bytea","columns":["result"],"rows":[["s\\x4149da18aa8bfc2b1e382c6c26556d01a92c261b6436dad5e3be3fcc"]]}
+{"id":"functions/binary_functions/sha256__bytea","columns":["result"],"rows":[["s\\x185f8db32271fe25f561a6fc938b2e264306ec304eda518007d1764826381969"]]}
+{"id":"functions/binary_functions/sha384__bytea","columns":["result"],"rows":[["s\\x3519fe5ad2c596efe3e276a6f351b8fc0b03db861782490d45f7598ebd0ab5fd5520ed102f38c4a5ec834e98668035fc"]]}
+{"id":"functions/binary_functions/sha512__bytea","columns":["result"],"rows":[["s\\x3615f80c9d293ed7402687f94b22d58e529b8cc7916f8fac7fddf7fbd5af4cf777d3d795a7a00a16bf7e7f3fb9561ee9baae480da9fe7a18769e71886b03f315"]]}
 {"id":"functions/comparison_functions/eq__int__match","columns":["id","result"],"rows":[["i1","btrue"]]}
 {"id":"functions/comparison_functions/eq__int__no_match","columns":["id","result"],"rows":[["i1","bfalse"]]}
 {"id":"functions/comparison_functions/eq__int__null","columns":["id","result"],"rows":[["i5",null]]}
@@ -802,12 +802,12 @@
 {"id":"functions/pattern_matching/regexp_like__txt_txt__fully_anchored_supported","columns":["matches","nomatch"],"rows":[["btrue","bfalse"]]}
 {"id":"functions/pattern_matching/similar_to__txt_txt__unsupported","columns":["result"],"rows":[["bfalse"],["bfalse"],["bfalse"],["bfalse"],["bfalse"],["bfalse"],["bfalse"],["bfalse"],["bfalse"],["btrue"]]}
 {"id":"functions/pattern_matching/not_similar_to__txt_txt__unsupported","columns":["result"],"rows":[["bfalse"],["btrue"],["btrue"],["btrue"],["btrue"],["btrue"],["btrue"],["btrue"],["btrue"],["btrue"]]}
-{"id":"functions/pgcrypto_functions/digest_sha1__bytea","columns":["result"],"rows":[["s[B@73ee04c8"]]}
-{"id":"functions/pgcrypto_functions/digest_sha256__bytea","columns":["result"],"rows":[["s[B@7671cb68"]]}
-{"id":"functions/pgcrypto_functions/digest_md5__bytea","columns":["result"],"rows":[["s[B@49dc7102"]]}
-{"id":"functions/pgcrypto_functions/digest_sha1_column__bytea","columns":["result"],"rows":[["s[B@6b8ca3c8"]]}
-{"id":"functions/pgcrypto_functions/digest_sha256_column__bytea","columns":["result"],"rows":[["s[B@68c72235"]]}
-{"id":"functions/pgcrypto_functions/digest_md5_column__bytea","columns":["result"],"rows":[["s[B@10959ece"]]}
+{"id":"functions/pgcrypto_functions/digest_sha1__bytea","columns":["result"],"rows":[["s\\x0a0a9f2a6772942557ab5355d76af442f8f65e01"]]}
+{"id":"functions/pgcrypto_functions/digest_sha256__bytea","columns":["result"],"rows":[["s\\xdffd6021bb2bd5b0af676290809ec3a53191dd81c7f70a4b28688a362182986f"]]}
+{"id":"functions/pgcrypto_functions/digest_md5__bytea","columns":["result"],"rows":[["s\\x65a8e27d8879283831b664bd8b7f0ad4"]]}
+{"id":"functions/pgcrypto_functions/digest_sha1_column__bytea","columns":["result"],"rows":[["s\\x35318264c9a98faf79965c270ac80c5606774df1"]]}
+{"id":"functions/pgcrypto_functions/digest_sha256_column__bytea","columns":["result"],"rows":[["s\\x3bc51062973c458d5a6f2d8d64a023246354ad7e064b1e4e009ec8a0699a3043"]]}
+{"id":"functions/pgcrypto_functions/digest_md5_column__bytea","columns":["result"],"rows":[["s\\x64489c85dc2fe0787b85cd87214b3810"]]}
 {"id":"functions/pgcrypto_functions/encode_digest_sha1__text","columns":["result"],"rows":[["s0a0a9f2a6772942557ab5355d76af442f8f65e01"]]}
 {"id":"functions/pgcrypto_functions/encode_digest_sha256__text","columns":["result"],"rows":[["sdffd6021bb2bd5b0af676290809ec3a53191dd81c7f70a4b28688a362182986f"]]}
 {"id":"functions/pgcrypto_functions/encode_digest_md5__text","columns":["result"],"rows":[["s65a8e27d8879283831b664bd8b7f0ad4"]]}

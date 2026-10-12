@@ -11,11 +11,13 @@ import org.junit.jupiter.api.Test;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -52,5 +54,19 @@ class SqlParityTest {
                 update == null ? null : Path.of(update));
         assertTrue(problems.isEmpty(), problems.size() + " cases differ from the ledger:\n"
                 + String.join("\n", problems));
+    }
+
+    @Test
+    void aSnappedAnswerAgreesWithPostgresOnAnotherPlatformInItsLastDigitsOnly() {
+        // cbrt(-0.1) from Postgres on Linux and on Windows: their C libraries differ in the last place
+        // (2026-10-12, PR neema2/legend-lite#28's CI)
+        assertTrue(SqlParity.agrees(oneCell(-0.46415888336127786), oneCell(-0.464158883361278)));
+        assertFalse(SqlParity.agrees(oneCell(-0.46415888336127786), oneCell(-0.4641588833)));
+        assertFalse(SqlParity.agrees(oneCell(1.0), oneCell(null)));
+        assertFalse(SqlParity.agrees(oneCell(1.0), oneCell("1.0")));
+    }
+
+    private static SqlParity.Answer oneCell(Object value) {
+        return new SqlParity.Rows(new SqlParity.Grid(List.of("result"), List.of(Collections.singletonList(value))));
     }
 }

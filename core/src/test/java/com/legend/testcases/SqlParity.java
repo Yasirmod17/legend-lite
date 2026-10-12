@@ -444,6 +444,9 @@ public final class SqlParity {
                 String fraction = d.subsecond().replaceAll("0+$", "");
                 yield fraction.isEmpty() ? base : base + "." + fraction;
             }
+            // a bytea as Postgres writes one (2026-10-12: as an array's toString it was the JVM's identity hash, which
+            // matched from run to run on Linux only, PR neema2/legend-lite#28's macOS and Windows CI)
+            case byte[] b -> "\\x" + java.util.HexFormat.of().formatHex(b);
             default -> v.toString();
         };
     }
@@ -694,7 +697,42 @@ public final class SqlParity {
         return c.file().replaceAll("\\.yaml$", "") + "/" + c.id();
     }
 
-    /** An answer exactly as it would be written (two answers agree when their encodings do). */
+    /** The largest relative difference between two doubles of one answer from Postgres on two platforms. */
+    private static final double PLATFORM_EPSILON = 1e-12;
+
+    /**
+     * Whether the answers file's {@code snapped} answer is Postgres's {@code live} one: their encodings agree, but for
+     * doubles that differ only in their last digits. Postgres's float functions are the platform's C library's, which
+     * differ in the last place between Linux, macOS and Windows (2026-10-12: {@code cbrt}, {@code atan}, {@code log}
+     * and others, PR neema2/legend-lite#28's CI); the judge compares doubles within a far wider tolerance.
+     */
+    public static boolean agrees(Answer snapped, Answer live) {
+        if (snapped instanceof Rows s && live instanceof Rows l && s.grid().columns().equals(l.grid().columns())
+                && s.grid().rows().size() == l.grid().rows().size()) {
+            for (int r = 0; r < s.grid().rows().size(); r++) {
+                List<Object> sr = s.grid().rows().get(r);
+                List<Object> lr = l.grid().rows().get(r);
+                if (sr.size() != lr.size()) {
+                    return false;
+                }
+                for (int c = 0; c < sr.size(); c++) {
+                    Object sv = sr.get(c);
+                    Object lv = lr.get(c);
+                    boolean same = sv instanceof Double sd && lv instanceof Double ld
+                            ? sd.equals(ld)
+                                    || Math.abs(sd - ld) <= PLATFORM_EPSILON * Math.max(Math.abs(sd), Math.abs(ld))
+                            : (sv == null ? lv == null : lv != null && encode(sv).equals(encode(lv)));
+                    if (!same) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+        return encoded(snapped).equals(encoded(live));
+    }
+
+    /** An answer exactly as it would be written. */
     public static String encoded(Answer a) {
         return switch (a) {
             case Rejected r -> "error " + r.sqlState() + ": " + r.message();

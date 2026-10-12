@@ -848,6 +848,9 @@ All of this first ran locally on `javac` and JUnit with Maven Central's jars, th
   `AGE(x)` twice), `VERSION()`, `RANDOM()` and the client's port. The three from today were added on 2026-10-12,
   after the two `AGE` answers drifted a day after their snap (neema2/legend-lite#28's CI). A clock read compared
   with a fixed past date stays snapped.
+- **The same answers on every platform.** A `bytea` is snapped as Postgres writes it (`\x` hex). A double from
+  Postgres's float functions may differ from the snapped one by 1e-12 of the larger: each platform's C library computes
+  them, and macOS and Windows differ from Linux in the last digit.
 - **Compared unordered:** one case whose ORDER BY leaves tied rows' order to the database.
 - **The ratchet.** `ledger.tsv` holds every case's status in each lane. A changed status fails the test, as
   upstream's YAML statuses do (REGRESSION, FIX DETECTED, STATUS MISMATCH). `-Dsql.parity.update` rewrites the

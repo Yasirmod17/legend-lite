@@ -68,7 +68,7 @@ class SqlParityPostgresTest {
                     SqlParity.Answer snapped = answers.get(e.getKey());
                     if (snapped == null) {
                         problems.add("UNSNAPPED: " + e.getKey() + " has no answer in the answers file");
-                    } else if (!SqlParity.encoded(snapped).equals(SqlParity.encoded(e.getValue()))) {
+                    } else if (!SqlParity.agrees(snapped, e.getValue())) {
                         problems.add("DRIFT: " + e.getKey() + ": the file says " + SqlParity.encoded(snapped)
                                 + ", Postgres says " + SqlParity.encoded(e.getValue()));
                     }
