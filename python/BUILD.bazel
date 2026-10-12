@@ -546,7 +546,8 @@ py_test(
 )
 
 # the REPL built in a lane, so it does not rot unseen (as //tools/metrics:tools_build_test keeps its tool): everything
-# it builds is built for engine_test and python_engine_test anyway, bar its own wrapper
+# it builds is built for engine_test, python_engine_test and headless_test (the bundle, the extensions) anyway, bar its
+# own wrapper
 build_test(
     name = "tools_build_test",
     targets = [":repl"],
