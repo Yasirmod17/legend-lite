@@ -137,6 +137,12 @@ public final class Postgres extends AnsiSqlRenderer {
         return "ROLLBACK";
     }
 
+    /** The corpus's raw H2 text in DuckDB's flavor, its types Postgres's (DOUBLE PRECISION, no TINYINT). */
+    @Override
+    public RawSqlBoundary.Target rawTarget() {
+        return RawSqlBoundary.Target.POSTGRES;
+    }
+
     /** No native PIVOT: static pivots are emulated by the carrier pass; a dynamic
      * pivot needs a key-discovery round trip the browser planner cannot make. */
     @Override
@@ -726,6 +732,13 @@ public final class Postgres extends AnsiSqlRenderer {
                 return writer.piece(compactJson(w -> w.append("CAST(").expr(c.value(), 0).append(" AS VARCHAR)")));
             }
         }
+        // DuckDB's Float text keeps an integral value's '.0' (41.0, where Postgres writes 41: measured 2026-10-11 by
+        // channel B on Postgres, an average's TDS cell printed in the query), as Snowflake's
+        if (c.target() == SqlType.Scalar.VARCHAR && (isDouble(c.value()) || c.value() instanceof SqlExpr.FloatLit)) {
+            writer.append("regexp_replace(");
+            super.variantAwareCast(writer, c);
+            return writer.append(", '^(-?[0-9]+)$', '\\1.0')");
+        }
         return super.variantAwareCast(writer, c);
     }
 
@@ -787,7 +800,7 @@ public final class Postgres extends AnsiSqlRenderer {
                  PLUS, MINUS, TIMES, NEGATE, IS_NULL, IS_NOT_NULL, IN, IS_DISTINCT_FROM,
                  NULL_SAFE_EQUAL, NULL_SAFE_NOT_EQUAL, XOR, CONCAT, CONCAT_JOIN, PARSE_INT,
                  PARSE_DATE, PI, CEILING, FLOOR, SIGN, LPAD, RPAD, UC_FIRST, LC_FIRST, TODAY,
-                 DATE_TRUNC_DAY, BOOL_TO_TEXT, CURRENT_USER_FN,
+                 DATE_TRUNC_DAY, BOOL_TO_TEXT, FLOAT_CANON, CURRENT_USER_FN,
                  // bit operators and rounding ride the base's hooks (overridden below);
                  // HASH's hook walls: Postgres has no signed 64-bit hash of the reference
                  BIT_AND, BIT_OR, BIT_XOR, BIT_SHIFT_LEFT, BIT_SHIFT_RIGHT, ROUND, HASH,

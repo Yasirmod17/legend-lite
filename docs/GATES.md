@@ -23,8 +23,9 @@ PCT, the stress corpus, parser equivalence, Channel B, the native image's tests)
 | `corpus_h2` | 5 | `//spec:corpus_h2` | the relational corpus on H2, both judges and their per-assert join — :corpus_duckdb's shape (joined since 2026-09-23; `rcorpus/h2-database-untriaged-register.txt` lists what the first join found and has yet to be explained) |
 | `pct_duckdb` | 6 | `//pct:pct_duckdb` | the five PCT suites on DuckDB, a suite of one target per PCT suite (`//pct:pct_duckdb_<suite>`, each judged on its own census traffic; Bazel workplan P3-09) |
 | `pct_h2` | 7 | `//pct:pct_h2` | PCT relation on H2 2.4.240: 469 tests, H2's 26 expected failures (27 -> 26, 2026-10-02: the self-referencing exists) each pinned by message (`Test_LegendLite_H2_RelationFunctions_PCT`) |
-| `pct_postgres` | 7P | `//pct:pct_postgres` | PCT, all five suites, on Postgres 16.15 (one target per suite, `//pct:pct_postgres_<suite>`; P3-09) started by the test JVM from pinned binaries (`@embedded_postgres`, no Docker): 1,249 tests, Postgres's expected failures each pinned by message (`Test_LegendLite_Postgres_*Functions_PCT`), grouped as wrong answers, Postgres's own errors, leg P4's collections and Variant, and named refusals: 267 first measured, 242 after tier 1 (multi-column pivots, the self-referencing exists, half-even rounding to a scale, calendar buckets, whole-partition median/mode/quantile, maxBy/minBy, pow, ordered removeDuplicates), 230 after tier 2 (Variant over jsonb: key and index access, toVariant, parse, typed reads), 145 after tier 3 (lists of scalars as native arrays), 129 after tier 4 (structs and non-scalar lists as jsonb, held flat); its census divergence ceilings measured per suite (Essential 12, Grammar 4, the others 0; P3-09) |
+| `pct_postgres` | 7P | `//pct:pct_postgres` | PCT, all five suites, on Postgres 16.15 (one target per suite, `//pct:pct_postgres_<suite>`; P3-09) started by the test JVM from pinned binaries (`@embedded_postgres`, no Docker): 1,249 tests, Postgres's expected failures each pinned by message (`Test_LegendLite_Postgres_*Functions_PCT`), grouped as wrong answers, Postgres's own errors, leg P4's collections and Variant, and named refusals: 267 first measured, 242 after tier 1 (multi-column pivots, the self-referencing exists, half-even rounding to a scale, calendar buckets, whole-partition median/mode/quantile, maxBy/minBy, pow, ordered removeDuplicates), 230 after tier 2 (Variant over jsonb: key and index access, toVariant, parse, typed reads), 145 after tier 3 (lists of scalars as native arrays), 129 after tier 4 (structs and non-scalar lists as jsonb, held flat); its census divergence ceilings measured per suite (Essential 13, Grammar 5, the others 0; P3-09; 12 and 4 until 2026-10-11, when two more tests reached the wire with a struct as jsonb, the by-design class: `PctCensusGate.maxWireDiverge`) |
 | `pct_channel_b` | 9 | `//pct:pct_channel_b` | Channel B dual-verdict suites, one target per class (`//pct:pct_channel_b_<suite>`; P3-09) |
+| (heavy) | 9 | `//pct:pct_channel_b_<lane>` | Channel B on each other database (h2, postgres, sqlite, mariadb, mysql, databricks, snowflake, bigquery, trino, clickhouse), judged against that lane's own channel A ledger (2026-10-11, `docs/CLOUD_BACKENDS_PCT_2026_10_11.md` §16); manual, in `//gates:heavy` |
 | `parser_equivalence` | 8 | `//parser-equivalence:parser_parity`, `//parser-equivalence:round_trip_proof`, `//wasm:round_trip_test` | byte parity with legend-engine's parser; text to JSON to text to JSON over the corpus, lite's projects and the upstream showcase projects, in the JVM and in the tab (the WebAssembly build held to the JVM's answers; the protocol program's leg 5) |
 | `stress` | 10 | `//core:stress_suites`, `//core:stress_suites_h2` | the stress corpus, on DuckDB (shared sessions, MIN_PASS) and on H2 (a fresh session per test, the engine's shape, MIN_PASS_H2; enforced since 2026-10-05, Bazel workplan P3-12); its measuring knobs are `bazel run //core:stress_tool` |
 | `warehouse` (also Linux arm64) | — | `//warehouse:tests`, `//warehouse:sqlapi_wasm_build_test`, `//warehouse:tests_native`, `//warehouse:postgres_live`, `//warehouse:postgres_live_native` | the warehouse's suite on the JVM, and its SQL API compiled to WebAssembly (P3-24); the suite against the native binary, on Linux, macOS and Windows x64 (since 2026-10-02) and Linux arm64 (since 2026-10-04, P1-13), linked on Linux by the hermetic LLVM toolchain (P1-09); the launchers and their test went with the build rebuild's L1c (2026-10-07: the server runs as built, nothing of Bazel in it; the app as a plain folder is `//datacube:verify_app_test`'s, in `datacube`); the two tests against a live Postgres, in a lane for the first time on 2026-10-07. On Windows the lane runs in Eastern time, not the runners' UTC, so a test that reads the machine's zone shows (since 2026-10-03; the warehouse's reference session) |
@@ -32,6 +33,37 @@ PCT, the stress corpus, parser equivalence, Channel B, the native image's tests)
 | `ui` | — | `//studio:tests`, `//query:tests`, `//query-store:local_test`, `//query-store:share_test`, `//query-store:lite_test` | Studio's and Query's suites and typechecks; the saved-query store's one suite against the page's own store and against legend-lite's server (started by the test), and a saved query's share link round trip. Their browser harnesses (`//studio:verify_test`, `//query:verify`, `//site:verify`) join in L1b |
 | `sdlc` | — | `//sdlc-server:git_repository_test`, `//sdlc-client:tests`, `//depot-client:tests` | the model home (`docs/STUDIO_DESIGN_2026_10_02.md`): the SDLC and Depot suites, each run on the page's WebAssembly module and on the server over git |
 | `heavy` (manual; no per-push lane) | — | `//spec:reference_lane`, `//spec:update_reference_lane_test`, `//spec:corpus_warehouse_verdict`, `//spec:manifest_world_census`, `//parser-equivalence:diagnostics`, `//pct:update_ratchets_test`, `//tools/python:requirements.test` | the reference lane (about 8 GB), the warehouse corpus passes (they build the GraalVM server), the manifest-world census, the parser-equivalence diagnostics battery, PCT's ratchet re-measure, the Python requirements test: a landing runs the ones it needs by hand (`docs/build-inventory/program/START_HERE.md` §5); a scheduled run is PHASE_8.md Test-11 |
+
+**The Postgres lanes in a root container** (2026-10-11). The embedded Postgres refuses root (`initdb` does), so a
+session that runs as root (a cloud container) runs a Postgres test as an unprivileged user, outside the sandbox:
+`chmod o+x /root` once (other users may pass through the Bazel output base's parent, not list it), then
+`bazel test //pct:pct_postgres --strategy=TestRunner=standalone --run_under="$PWD/tools/postgres/as_unprivileged.sh ubuntu"`
+(any existing non-root user). The wrapper hands the test's own directories to the user and drops root with `setpriv`.
+Measured: all five Postgres suites green as `ubuntu`. CI runs as a non-root user and needs none of this.
+
+**`//gates:local` in a root container behind a TLS-intercepting proxy** (2026-10-12, measured at 5b05af7 in a
+Claude Code cloud container). Three things differ from CI, and each has its own remedy:
+
+1. *Postgres refuses root*: the recipe above, over the whole gate (every test then runs as `ubuntu`). With it alone,
+   334 of 347 tests passed; the 13 that failed were all DataCube, Query and site tests over DuckDB-WASM or the pinned
+   Chromium, not one of them a Postgres test.
+2. *The proxy re-signs TLS, and a Bazel test inherits none of the variables that trust it.* DuckDB-WASM downloads its
+   `json` and `parquet` extensions from `extensions.duckdb.org` when a test first reads JSON or Parquet. In Node it
+   fetches them on a worker thread and waits on an `Atomics` flag that only a successful fetch sets. Without
+   `NODE_EXTRA_CA_CERTS`, Node 22 refuses the proxy's certificate (`SELF_SIGNED_CERT_IN_CHAIN`, measured with the
+   toolchain's node). The flag is never set, so the test hangs until its TIMEOUT. Chromium reads its trust store from
+   `$HOME/.pki/nssdb`, and a test's `HOME` is its `TEST_TMPDIR`, which has none. Pass the bundle and a home whose NSS
+   store trusts the proxy's CA (made once with `certutil -A -t "C,," ...` as that user):
+   `--test_env=NODE_EXTRA_CA_CERTS=/root/.ccr/ca-bundle.crt --test_env=HOME=/home/ubuntu`. With these, 11 of the 13
+   passed.
+3. *Two tests write into their working directory*, the runfiles tree, which root owns: `//datacube:upload_test` and
+   `//engine-client:model_data_test` (DuckDB-WASM's `COPY ... TO 'nested.json'`, `'tmp_made.parquet'`). As `ubuntu`
+   they fail with `EACCES`. Run those two as root, without `--run_under`, with item 2's
+   `NODE_EXTRA_CA_CERTS`: both passed.
+
+So all 347 tests passed in this container. The two hazards are the tests' own: an extension fetched from the
+network at run time, and a scratch file written outside `TEST_TMPDIR`. CI doesn't see them because it has direct
+internet and owns its runfiles tree.
 
 Beside the gates, in `bazel test //...`:
 

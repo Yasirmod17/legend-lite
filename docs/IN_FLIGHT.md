@@ -755,6 +755,113 @@ green on every job after one re-run of windows / warehouse; diagnostics run 3819
 - **The independent review's one finding** (fix 4 let a row's own window column resolve to the enclosing row's) is
   fixed in `Lowerer.scopedResolver`, with two tests.
 
+## An eighth line, 2026-10-11: Databricks, Snowflake and BigQuery (the user's ask, rule 5)
+
+The user: add Snowflake, Databricks and BigQuery as backends "very similar to how we just added Postgres", the PCT
+suites on real accounts; then DataCube straight to each one's HTTP SQL API from the browser. Design, state and how to
+run: `docs/CLOUD_BACKENDS_PCT_2026_10_11.md`. Branch `claude/great-wright-p6t5s1`; nothing lands on `main` without
+the user. **Announced 2026-10-11, the first step (landed on the branch):** `tools/deps/jars_table.bzl` (three
+test-only drivers, users `pct`), `tools/deps/jars.bzl` (an optional classifier), `tools/guards/classpath.bzl` (the
+same), `MODULE.bazel` (their `use_repo`), `pct/BUILD.bazel` (the cloud lanes, all `manual`), `pct/` sources
+(`CloudLane`, `PctBackend`, fifteen suite classes), and one core edit: `core/.../test/StorelessRuntime.java`
+(`declaring`, additive). **Announced, next:** three new dialects in `core/src/main/java/com/legend/sql/dialect/`
+(`Databricks`, `Snowflake`, `BigQuery`, siblings of `Postgres`; new `Lexicon`, `TypeNames` and `Spellings` rows) and
+their arms in the `DatabaseType` switches (`database/Databases.java`, `exec/Sessions.java`), in that order: core files
+the database-owner line also reads, so each lands with its own announcement line here.
+**2026-10-11, Databricks landed on the branch** (all five suites green on the account, 44 pinned of 1,250): new
+`sql/dialect/Databricks.java`; rows in `Lexicon`, `TypeNames`, `Spellings`, `CarrierStrategies.Caps`; the base
+renderer's composite type names as hooks (`AnsiSqlRenderer.arrayTypeName`/`mapTypeName`/`structTypeName`,
+byte-identical for every other dialect); arms in `database/Databases.java` and `exec/Sessions.java`; two exec edits:
+`exec/Executor.java` (the timestamp re-fetch keeps the driver's Timestamp when the driver answers another class) and
+`exec/SqlTypeCensus.java` (Spark's type names are spellings); `tools/census/RenderCensus.java` renders Databricks.
+**2026-10-11, Snowflake landed on the branch** (all five suites green on the account, 40 pinned of 1,250; 38 later the
+same day, the comparator dedup's nested lambda carried through a REDUCE; 36 when Jaro-Winkler was written exactly in
+SQL, DuckDB's bits, on Snowflake and Databricks alike -- Databricks 44 -> 42; the plan's §9): new
+`sql/dialect/Snowflake.java` (its passes nested in it, marked MOVE TO their own files); rows in `Lexicon`,
+`TypeNames`, `Spellings`, `CarrierStrategies.Caps`; arms in `database/Databases.java` and `exec/Sessions.java`; two exec
+edits: `exec/Executor.java` (the timestamp re-fetch keeps the Timestamp when the driver refuses the java.time read) and
+`exec/SqlTypeCensus.java` (Snowflake's `NUMBER(p,0)` and `OBJECT` deliver integer and struct/map labels);
+`tools/census/RenderCensus.java` renders Snowflake.
+**2026-10-11, Databricks 41 -> 35** (the plan's §8): an as-of join is a LEFT JOIN with a window pick in the select's
+QUALIFY (`Databricks.asOf`; `CarrierStrategies.asOfKey` shared with the portable form), a list's variance and
+standard deviation DuckDB's own update in an `aggregate` (`Databricks.moments`), a list's compaction `array_compact`.
+Snowflake and Databricks are each at 35, one row beyond the DuckDB lane's: the BC date-time, designed in §15 (not
+built).
+**2026-10-11, BigQuery landed on the branch** (all five suites green on the account, 83 pinned of 1,250): new
+`sql/dialect/BigQuery.java` and `sql/dialect/ExplosionMarkers.java` (the explosion passes, moved out of `Snowflake`
+and shared); rows in `Lexicon`, `TypeNames`, `Spellings`, `CarrierStrategies.Caps`; arms in `database/Databases.java`
+and `exec/Sessions.java`; `exec/SqlTypeCensus.java` (BigQuery's type names, BIGNUMERIC as its decimal carrier);
+`tools/census/RenderCensus.java` renders BigQuery.
+**2026-10-11, SQLite landed on the branch** (all five suites green in-process, 52 pinned of 1,249; the plan's §12):
+new `sql/dialect/SQLite.java` (no longer the `Lexicon.SQLITE` row handed to `AnsiSqlRenderer`), `SqliteRegex.java`
+(regular expressions as a recursive walk in SQL) and `CommonSubexpressions.java` (a SQLite pass: the statement cap);
+rows in `TypeNames`, `Spellings`, `CarrierStrategies.Caps`; arm in `database/Databases.java`; two exec edits:
+`exec/RaisedErrors.java` (a raised message's quote mark, U+001D) and `exec/SqlTypeCensus.java` (SQLite's type names);
+guard edits, each with its dated reason: `DialectBoundaryTest` (the census's dialect label; the four new dialects'
+constructions owned by `Databases`); `gates/BUILD.bazel` puts the cloud and SQLite lanes in `heavy` (the cloud lanes
+were in no lane); `tools/census/RenderCensus.java` renders SQLite.
+**2026-10-11, MariaDB landed on the branch** (all five suites green on a real MariaDB 11.4 server, 62 pinned of 1,249;
+the plan's §13): new `sql/dialect/MariaDb.java`; rows in `Lexicon`, `TypeNames`, `Spellings`, `CarrierStrategies.Caps`;
+`model/ConnectionDefinition.java` (`MariaDB` and `MySQL` in `DatabaseType`, register row S43) and
+`parser/section/ConnectionSectionGrammar.java` (the lite database types); arms in `database/Databases.java`,
+`exec/Sessions.java` (and its `raisedMessage`), `EngineText.java` and `test/StorelessRuntime.java`; exec edits:
+`exec/RaisedErrors.java` (`unwrapped(e, session)`), `exec/Executor.java` (its
+failure sites pass the session), `exec/SqlTypeCensus.java` (MariaDB's type names); new `testing/.../EmbeddedMariaDb.java`
+and `tools/mariadb/` (the server, as a Bazel repository); `MODULE.bazel`, `tools/deps/jars_table.bzl` (the driver,
+test-only); guard edits, each with its dated reason: `DialectBoundaryTest` (a JDBC URL), `TenetRatchetTest` (one
+accessor), `SqlTextRatchetTest` (one session read); `gates/BUILD.bazel` puts the MariaDB lanes in `heavy`;
+`tools/census/RenderCensus.java` renders MariaDB.
+**2026-10-11, the system database on a server engine** (the user's design; the plan's §14): a query reading the
+metamodel store on a server runs on the HOST's system connection for that engine, configured apart from every runtime
+(`ExecuteOptions.withSystemConnections`, `Sessions.Opener`), checked to be the runtime's engine, seeded once per graph
+with every table as session-private temporary tables named `metamodel_<table>` and read through the table renames.
+Edits: `exec/SystemDatabase.java` (`routeFor`, `Route`), `exec/Sessions.java` (`Opener`, `inProcess`),
+`ExecuteOptions.java`, `StatementExecutor.java` (`withSystemRoute`), `setup/Ddl.java` (`systemTable`,
+`metamodelTemporary`), `setup/RowLoad.java` (`casts`), `sql/dialect/SqlDialect.java` (`sessionTable`),
+`AnsiSqlRenderer.java` (`ddlNullability`), `Databricks.java` (a temporary view; DDL spellings), `BigQuery.java`
+(`CREATE TEMP TABLE`); the PCT harness (`PctBackend.systemConnections`, `CloudLane.openSystem`, the
+`c.system.property.*` keys). `testBasic` unpinned on Snowflake (35), Databricks (41), BigQuery (82), MariaDB (61) and
+Postgres (verified by CI only: the embedded Postgres refuses root); it passes on MySQL.
+**2026-10-11, BigQuery burned down 82 -> 42** (all five suites green on the account; the plan's §10): its 42 are the
+DuckDB lane's 34 and 8 measured limits of BigQuery (no nested arrays 3, the date-time range 2, no Jaro-Winkler 2, a
+fold that reads its row 1). Edits: `sql/dialect/BigQuery.java` (lateral joins as `UNNEST(ARRAY(SELECT AS STRUCT ..))`,
+mode by counts, the descending window percentile, maps as `ARRAY<STRUCT<key, value>>`, the empty list, the time
+zone's operand, `%E3S`, the JSON lambda parameter); new `sql/dialect/FoldsAsRecursiveCtes.java` (a fold that reads
+nothing of its row as a top-level recursive expression) with a `recursive` flag on `sql/SqlWith.java`, carried by
+every rebuild (`SqlRewriter`, `StableScanOrder`, `RootNumericTypes`, `lowering/SqlPostProcessors`,
+`lowering/SubselectPrune`) and rendered by `AnsiSqlRenderer`; `CommonSubexpressions` on BigQuery;
+`sql/SqlTyping.java` (`MAP_FROM_LISTS` typed); `sql/dialect/CarrierStrategies.java` (`substParam`: a parameter's
+field), measured on the other lambda-less lanes: SQLite 52 -> 50 and MariaDB 61 -> 59 (two pass, `testFilterInstance`
+now fails on instance identity as on DuckDB); on Postgres `testExistsInSelect` passes and two pins moved to later
+errors, its census ceilings 12 -> 13 (Essential) and 4 -> 5 (Grammar), each one more struct as jsonb, the by-design
+class (`PctCensusGate`, dated); `exec/Executor.java` (a map cell carried as its entries, through the array and struct
+arms: no new JDBC accessor); `exec/SqlTypeCensus.java` (BigQuery's ARRAY delivers MAP); `ParkedWorkLedgerTest` and
+`docs/PARKED_WORK_LEDGER.md` (PARK-2's construction anchor re-pointed, dated: `SqlWith.with` keeps the flag).
+**2026-10-12, Trino landed on the branch** (all five suites green on a real Trino 483 coordinator, 40 pinned of
+1,251; channel B pinned; the plan's §18): new `sql/dialect/Trino.java`, and two passes shared from it,
+`sql/dialect/PivotAsGroupBy.java` (a static pivot as a grouped CASE aggregation) and `sql/dialect/AsOfAsPick.java` (an
+as-of join as a LEFT JOIN with a window pick); rows in `Lexicon`, `TypeNames`, `Spellings`, `CarrierStrategies.Caps`;
+arms in `database/Databases.java` and `exec/Sessions.java`; `exec/SqlTypeCensus.java` (Trino's `ROW(` is a STRUCT; its
+carrier STRUCT <- JSON; a ResultSet of no columns before a failing statement's columns is no claim, adjudicated, dated);
+new `testing/.../EmbeddedTrino.java` and `tools/trino/` (the server, as a Bazel repository); `MODULE.bazel` and
+`tools/deps/jars_table.bzl` (the driver, test-only); `pct/BUILD.bazel` (the lanes, `manual`), `PctBackend`
+(`Lane.TRINO`), five suite classes and `ChannelBLane`'s pins; `gates/BUILD.bazel` puts the Trino lanes in `heavy`.
+**2026-10-12, ClickHouse landed on the branch** (all five suites green on a real ClickHouse 25.8 server, 65 pinned of
+1,251, 31 of them ClickHouse's own limits; channel B pinned; the plan's §19): `sql/dialect/ClickHouse.java` (its
+ARRAY JOIN columns named after a star, guarded raises kept by `query_plan_merge_expressions = 0`, NULL keys at a RANGE
+frame's edge, JSON constructors, typed descending keys, out-of-range date literals refused); `Spellings` (ClickHouse's
+`abs` is its own arm); `exec/DynamicPivot.java` (an integral key delivered as a BigInteger, the `BigDecimal` arm's
+twin; `JavaEvalLedgerTest`'s pin 111 -> 112, dated); `exec/SqlTypeCensus.java` (ClickHouse's spellings and its
+carrier JSON <- VARCHAR); five suite classes and `ChannelBLane`'s pins.
+**2026-10-12, the coverage map measured** (the plan's §20, `docs/PRIMITIVE_COVERAGE_2026_10_12.md`): new
+`exec/PrimitiveCensus.java` (`-Dlegend.diagnostics=primitives[=per-test]`, measurement only; `Executor` records each
+plan by outcome; `ArchitectureTest` registers its two tallies, dated); `spec/.../rcorpus/MinimalCorpus.java`
+attributes it per test; `tools/census/primitive_map.py` and `primitive_cover.py` (README section 3). The corpus needs
+244 primitives; 48 PCT never runs anywhere; 77 corpus tests carry all 244.
+**Next** (the user's order): the corpus harness on any database, built for speed (§20: the fixture seeded once,
+packages in parallel, every round trip counted) -- Postgres first, then the 77 on every lane, then the whole corpus
+on Snowflake, Databricks and BigQuery; then MongoDB, Elasticsearch, SingleStore (the plan's §2).
+
 ## Rules between sessions
 
 1. Never force-push; never bare `git stash` (the stash stack is shared by every worktree).
