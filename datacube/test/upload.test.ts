@@ -179,7 +179,7 @@ describe('ingestFile with JSON', () => {
   });
 });
 
-describe('a text file reads as the tab has always read it (fileBytes), on every host', () => {
+describe('a text file reads as the tab has always read it: the bytes every host\'s DuckDB is given (fileParts, fileBytes)', () => {
   /** A picked file of these bytes. */
   function pickedBytes(name: string, bytes: Uint8Array): File {
     return new File([bytes.slice()], name);
