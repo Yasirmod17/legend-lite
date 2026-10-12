@@ -755,6 +755,18 @@ green on every job after one re-run of windows / warehouse; diagnostics run 3819
 - **The independent review's one finding** (fix 4 let a row's own window column resolve to the enclosing row's) is
   fixed in `Lowerer.scopedResolver`, with two tests.
 
+**Announced 2026-10-12 -- a stored Variant column leaves a star-framed statement as JSON (branch
+`core/variant-star-egress`):** the DataCube line's finding (2026-10-12): under a bare source, `limit`, `filter` and
+`sort` a native STRUCT column typed Variant left the query as stored, under `select` as JSON text
+(`docs/VARIANT_STORAGE_CENSUS_2026_09_27.md` D2: V2's `columnRef` hook fires on a reference, and `SELECT *` renders
+none). Files: new `core/src/main/java/com/legend/sql/dialect/VariantEgress.java` (a DuckDB render pass, root only);
+`sql/dialect/DuckDb.java` (`storedVariant` over an output column, the pass last in `passes()`; the SQL island line's
+announced `variantElements` edit is another method of the same file); `core/src/test/java/com/legend/lowering/LowerRelationTest.java`
+(one test over six shapes and three storages, the storages' set-up shared with the census's test); the census's
+addendum; `docs/GATES.md` at landing. Judged by the judges, the render census, the corpora and the local gate; one
+full CI on the branch; the push to main after the DataCube line's PR #31 is in. The Plan Gen line agreed: lowering
+only, and result typing assumes JSON for a Variant output in every shape.
+
 **Announced 2026-10-12 -- the semi-structured step: jsonb, LATERAL, set-returning functions** (the user's ask: JSON
 and Variant are what lite's DuckDB users do; branch `claude/loving-euler-gjta59`, three commits over main c03ac6b; the
 study's §9.2). It lands as a pull request, merged after its full CI run.
