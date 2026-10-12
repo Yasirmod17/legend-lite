@@ -755,6 +755,18 @@ green on every job after one re-run of windows / warehouse; diagnostics run 3819
 - **The independent review's one finding** (fix 4 let a row's own window column resolve to the enclosing row's) is
   fixed in `Lowerer.scopedResolver`, with two tests.
 
+**Announced 2026-10-12 -- a stored Variant column leaves a star-framed statement as JSON (branch
+`core/variant-star-egress`):** the DataCube line's finding (2026-10-12): under a bare source, `limit`, `filter` and
+`sort` a native STRUCT column typed Variant left the query as stored, under `select` as JSON text
+(`docs/VARIANT_STORAGE_CENSUS_2026_09_27.md` D2: V2's `columnRef` hook fires on a reference, and `SELECT *` renders
+none). Files: new `core/src/main/java/com/legend/sql/dialect/VariantEgress.java` (a DuckDB render pass, root only);
+`sql/dialect/DuckDb.java` (`storedVariant` over an output column, the pass last in `passes()`; the SQL island line's
+announced `variantElements` edit is another method of the same file); `core/src/test/java/com/legend/lowering/LowerRelationTest.java`
+(one test over six shapes and three storages, the storages' set-up shared with the census's test); the census's
+addendum; `docs/GATES.md` at landing. Judged by the judges, the render census, the corpora and the local gate; one
+full CI on the branch; the push to main after the DataCube line's PR #31 is in. The Plan Gen line agreed: lowering
+only, and result typing assumes JSON for a Variant output in every shape.
+
 **Announced 2026-10-12 -- the semi-structured step: jsonb, LATERAL, set-returning functions** (the user's ask: JSON
 and Variant are what lite's DuckDB users do; branch `claude/loving-euler-gjta59`, three commits over main c03ac6b; the
 study's §9.2). It lands as a pull request, merged after its full CI run.
@@ -771,6 +783,21 @@ study's §9.2). It lands as a pull request, merged after its full CI run.
   `lowering/LowerRelationTest.java` (two shape pins follow the new elements SQL); `sql-parity/` the ledger, the answers,
   `lite/json.yaml`, `lite/lateral.yaml`.
 - **Docs:** `docs/SEMANTICS_REGISTER.md` (S49: a Variant is jsonb), the study's §9.2, `docs/GATES.md`.
+- **Widened 2026-10-12** (the user: the basics first -- filters, aggregations, joins, select lists, functions -- before
+  the PR; it was closed to fold them in): a randomized check of the basics against Postgres (generated queries, both
+  lanes), and what it and the independent review found. One more cross-area edit in `sql/dialect/`:
+  `RootNumericTypes.java` -- under DISTINCT, an ORDER BY key that was a projection it casts to its numeric type is
+  ordered by the cast expression (Postgres: "for SELECT DISTINCT, ORDER BY expressions must appear in select list";
+  Postgres, Trino, ClickHouse, Databricks and Snowflake run the pass; the cast changes no value). The SQL front end
+  gains `FILTER (WHERE ...)`, `DISTINCT` in every aggregate, integer division (exact for every bigint),
+  `string_agg(... ORDER BY ...)`, and Postgres's typing of CASE, COALESCE, GREATEST, LEAST, ceil, floor, sign, round,
+  extract and date_part. Judged as above.
+- **Widened again 2026-10-12:** casts, `bool_and`/`bool_or`/`every`, `percentile_cont`/`percentile_disc`,
+  `corr`/`covar_*`, `lag`/`lead` with a default (on the branch, d75e4b8). One more cross-area edit in `sql/dialect/`:
+  `QuantileOrder.java` -- DuckDB's descending discrete percentile reads element `ceil(p * N)` of the sorted list, which
+  at `p = 0` is element 0 of a 1-based list: NULL. Pure's percentile and Postgres's `percentile_disc` both take the
+  first value there; the index becomes `greatest(ceil(p * N), 1)`. A test beside
+  `TypeInferenceIntegrationTest.testPercentile_GroupBy_Discrete_Descending` pins it. Judged as above.
 
 ## An eighth line, 2026-10-11: Databricks, Snowflake and BigQuery (the user's ask, rule 5)
 
