@@ -8921,3 +8921,56 @@ Announced in `docs/IN_FLIGHT.md` the same day (2aa74a8). Branch `claude/loving-e
    - `strpos`: Pure's `indexOf` is lowered one too high; PCT pins it.
    - `parseDecimal` lowers to a fixed `DECIMAL(5, 2)`.
    - LATERAL, intervals, arrays, JSON operators, regular expressions.
+
+## 2026-10-12 — `#SQL{...}#`: the semi-structured step — jsonb over Variant, LATERAL, set-returning functions
+
+Announced in `docs/IN_FLIGHT.md` the same day (d9adc5a). Branch `claude/loving-euler-gjta59`; the study,
+`docs/LEGEND_SQL_STUDY_2026_10_11.md` §9.2 (what reads, what is refused, the findings, the numbers below).
+
+1. **What lands.** A Variant column is Postgres's `jsonb` in the SQL front end (register S49).
+   - **Navigation:** `->` and subscripts are `get`. `->>` is its text (`to(@String)`). `#>` and `#>>` walk a constant
+     `text[]` path, as do `json(b)_extract_path(_text)`.
+   - **Constants and casts:** `'...'::jsonb`, `jsonb '...'` and `text::jsonb` are `fromJson`. `to_jsonb` is `toVariant`.
+   - **Set-returning functions,** in FROM, after a LATERAL, or as a whole select-list item:
+     - `json(b)_array_elements(_text)` and `json(b)_object_keys`;
+     - `generate_series` of integers (`range`);
+     - `unnest(ARRAY[...])` and `unnest(string_to_array(...))` (`flatten`).
+   - **LATERAL subqueries:** by comma, `CROSS JOIN` and `[INNER] JOIN ... ON`, each Pure's `lateral`.
+   - **A query without FROM:** one row.
+   - **Refused by name:** what lite would answer otherwise than Postgres (the study's list), e.g. `jsonb`'s order and
+     equality as keys, `json(b)_array_length`, `LEFT JOIN LATERAL`, `WITH ORDINALITY`.
+2. **Two fixes in `sql/dialect/`,** found by the cases, both in plain Pure:
+   - **`DuckDb.java`:** `toMany(@Variant)` cast to `JSON[]`, which turns jsonb's null elements into SQL's NULL: a
+     list read them as missing. It now reads an array's elements with `json_extract(x, '$[*]')`.
+     `LowerRelationTest`'s two pins of that SQL changed with it. PCT's `testToManyFromNonArray` still holds.
+   - **`Postgres.java`:** `toMany(@Variant)` and `to(@Map)` read a value of the wrong shape as an empty list or no
+     map, where Postgres, Pure and DuckDB raise an error. They now raise Postgres's own.
+3. **The parity corpus,** identical in both lanes (`//core:sql_parity_test`, `//core:sql_parity_postgres_test`):
+
+   | | upstream's 1,703 | own 244 (177 before) |
+   |---|---|---|
+   | PASS | 1,016 (951 before) | 192 (144 before) |
+   | FAIL, BUG, ERROR | 0 | 0 |
+   | REFUSED by name | 558 | 30 |
+   | BOTH_ERROR | 61 | 22 |
+   | SKIP | 68 | 0 |
+
+   The own cases are `lite/json.yaml` (41) and `lite/lateral.yaml` (26), new. The judge reads a `json` or `jsonb`
+   cell as its JSON value, and the text of an object or array as JSON (S49).
+4. **Judges,** on the branch rebased onto main c03ac6b (main's d9adc5a since, documentation only, merged in):
+   - **core, checks, the PCT lanes:** `//core:core_tests`, `//gates:checks`, `//pct:pct_duckdb` and `//pct:pct_channel_b`: 169 of 169
+     pass. Their first run found two red: `//core:guardrails` (four rules: the bare-name switch arms, the regex
+     family, TeaVM's `isBlank`, SQL-shaped text) and `//core:update_generated_4_test` (the claim census named the
+     translator for `fromJson`'s FQN). Each is held now without moving a pin (51ef576): the set-returning functions
+     are a table, not name arms, and the translator calls `fromJson` by its simple name, as it does every native.
+   - **The Postgres targets** (`//pct:pct_postgres`, `//core:sql_parity_postgres_test`,
+     `//core:sql_island_postgres_test`, `//core:postgres_arm_test`), through the unprivileged wrapper: 8 of 8 pass.
+   - **The six corpus passes,** against a baseline built from main d9adc5a: 0 result files differing
+     (`compare_judges.py`). The branch changes core, which every pass reads, so with the disk cache off both builds
+     executed all six.
+   - **The full CI run:** the pull request's; recorded here when it has run.
+5. **Not done, recorded in the study** (§9.2's open findings and its "Next steps"):
+   - the literal-Variant fold in `CarrierStrategies` on Postgres, H2 and the engine text;
+   - DuckDB's arrow reading a key that starts with `$` or `/` as a path;
+   - Postgres's `toOne` of a `jsonb` value, and `toVariant` of a string constant there;
+   - a lateral over a correlated one-row relation.
