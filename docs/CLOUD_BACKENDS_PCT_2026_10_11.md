@@ -510,7 +510,7 @@ The work:
   and `SqlAgg.Fn`;
 - MariaDB rows in `Lexicon`, `TypeNames`, `Spellings` and `CarrierStrategies.Caps`;
 - `MariaDB` and `MySQL` in `ConnectionDefinition.DatabaseType`, accepted by the grammar as lite extensions beside
-  SQLite (`docs/SEMANTICS_REGISTER.md` S43); MySQL is declared, not built (its connections and dialect refuse by name);
+  SQLite (`docs/SEMANTICS_REGISTER.md` S48); MySQL is declared, not built (its connections and dialect refuse by name);
 - `Databases.dialect` constructs it, `Sessions` opens `jdbc:mariadb://` for a static datasource;
 - the raise path: `Sessions.raisedMessage` and `RaisedErrors.unwrapped(e, session)` (below);
 - the wire census reads MariaDB's type names (`SqlTypeCensus.mariaDbOwn`, `dialectSpelling`);

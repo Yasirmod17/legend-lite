@@ -1365,7 +1365,7 @@ final class ElementParserTest {
                   auth: Test;
                 }
                 """));
-        // (MariaDB until 2026-10-11, when it became a lite database type: docs/SEMANTICS_REGISTER.md S43)
+        // (MariaDB until 2026-10-11, when it became a lite database type: docs/SEMANTICS_REGISTER.md S48)
         assertTrue(String.valueOf(ex.getMessage()).contains("Teradata"),
                 () -> "should name the unknown type, got: " + ex.getMessage());
     }

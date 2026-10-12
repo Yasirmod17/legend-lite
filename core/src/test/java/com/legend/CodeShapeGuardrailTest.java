@@ -94,6 +94,11 @@ class CodeShapeGuardrailTest {
             // GqlParser: the raw-text scanner cursor, same family as the
             // other parser cursors above
             "GqlParser.pos",
+            // the #SQL{...}# island's Postgres reader (2026-10-11, docs/LEGEND_SQL_STUDY_2026_10_11.md §3):
+            // SqlLexer's scanner cursor and its line/column tracking, SqlParser's token cursor -- the same
+            // parser-cursor family, scoped to one parse -- and SqlToPure's fresh-name counter, scoped to one
+            // translation (the StoreResolver.freshVarCounter shape)
+            "SqlLexer.at", "SqlLexer.line", "SqlLexer.column", "SqlParser.at", "SqlToPure.fresh",
             "MappingProtocolParser.pos",
             // ConnectionSectionGrammar.Cursor / RuntimeSectionGrammar
             // .SliceCursor: the re-lex feeds' parser cursors — same shape,

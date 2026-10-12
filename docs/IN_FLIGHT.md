@@ -148,7 +148,12 @@ with the compiler's plan/execution split**, in this order:
    (the warehouse lane's two tests); `tools/python/requirements.in`, its lock and `MODULE.bazel.lock` (mini-racer). The
    native entry points (`lite_plan_text_held`, `lite_relation_type_text_held`, `lite_test_data_sql`) are `native/`'s,
    over `Boundary`'s existing functions, reviewed by the Plan Gen / Exec Split line; the build by the Compiler Rewrite
-   line. **Step 2's second landing announced 2026-10-11 (rule 5; branch `datacube-m3`; the design's §15.6a,
+   line. **Now (2026-10-11): DataCube as one app for every host** (`docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md`,
+   agreed with the user: one app in `datacube/src/app/` over services -- the browser tab, Python's tab and widget, and
+   Python headless each a set of services; Python's model home an SDLC, the browser's in Python's terms). Its steps 1-4
+   touch `datacube/`, `python/` and `native/` only; step 5 (Studio and Query started from Python) is built with the
+   Studio line. Python's `create_class`, `create_association` and `create_data_space` wait for its step 3 (parked on
+   branch `datacube/python-model-parked`). **Step 2's second landing announced 2026-10-11 (rule 5; branch `datacube-m3`; the design's §15.6a,
    agreed with the user): a cross-area edit in `core/`** -- the route renamed and two more beside it,
    `/api/lite/v1/model/createClass` (was `/api/lite/v1/relational/promoteRelationToModel`), `createAssociation`,
    `createDataSpace`, one atomic writer under them. Core files: `core/src/main/java/com/legend/server/`
@@ -734,6 +739,21 @@ full CI run on it.
 
 Not touched: the database owner's `lowering/` files (`Render`, `WireRender`, `LiteralSpelling`, `Fold`, `Scalars`,
 `MixedEncoding`), `sql/dialect/`, the parser.
+
+**Landed 2026-10-12 (ebc419f, the merge of PR neema2/legend-lite#28 at d312dfd over main d2eefc5; gates run 38198865199,
+green on every job after one re-run of windows / warehouse; diagnostics run 38198865034, green; GATES "`#SQL{...}#`").**
+- **The re-run:** `//datacube:python_engine_test` failed once in its teardown. Answers to a taken-down widget view were
+  still in flight when the browser closed: the race the TeaVM landing met, which the DataCube line is fixing. This
+  change touches nothing under `datacube/`.
+- **Files beyond the announced list:** none.
+- **Found by the PR's CI on the way:**
+  - the Postgres parity harness's snapped answers held on Linux only: `bytea` was snapped as a JVM identity hash, and
+    float answers differ in their last digit between platforms;
+  - two `AGE(x)` answers drifted a day after their snap.
+
+  Both are fixed in the harness (`testcases/SqlParity.java`).
+- **The independent review's one finding** (fix 4 let a row's own window column resolve to the enclosing row's) is
+  fixed in `Lowerer.scopedResolver`, with two tests.
 
 ## An eighth line, 2026-10-11: Databricks, Snowflake and BigQuery (the user's ask, rule 5)
 
