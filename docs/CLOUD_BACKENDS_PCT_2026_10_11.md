@@ -723,7 +723,10 @@ charter's Clause 4 refuses (`docs/TENET_CHARTER.md`), so the database still comp
   dialect ever need a constant bound, the uncorrelated form is a one-row table joined in the select's FROM.
 
 It moved: MariaDB 59 -> 51 (the five statement-memory pins, and 3 windowed modes below), SQLite 50 -> 49 (the mixed
-sort); every other lane unchanged on both channels.
+sort); every other lane unchanged on both channels. Re-measured after the revert (2026-10-12, 79ca7e9): all eight lanes
+green on both channels at exactly the numbers above (Snowflake's six back), MySQL's channel B judged by its pins for
+the first time; `//gates:local` 311 of 324, the other 13 the browser and WASM tests this container fails at the
+branch's base too.
 
 **What else differs from MariaDB, and the dialect's answer:**
 
