@@ -161,9 +161,12 @@ public final class Executor {
         // declared labels vs the bottom-up judgment (measurement only)
         SqlTypeCensus.probe(plan);
         try {
-            return execute0(sql, plan, rootType, shape, connection, dialect,
+            ExecutionResult result = execute0(sql, plan, rootType, shape, connection, dialect,
                     rider, trace);
+            PrimitiveCensus.record(plan, true);
+            return result;
         } catch (SQLException e) {
+            PrimitiveCensus.record(plan, false);
             // B7 (RaisedErrors) + THE SEAM: a message WE raised in SQL
             // surfaces clean of the driver's transport envelope — HERE,
             // once, for every consumer — and java.sql STOPS HERE
