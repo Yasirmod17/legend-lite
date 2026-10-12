@@ -239,6 +239,31 @@ The picker's sections come from the engine service. A host offers what its datab
 A saved page reopens each source the way its host can. A page over a frame opens on the Python that serves the frame,
 and nowhere else, as today.
 
+### 4.5 One way to open a source on every host (the engine service's contract, step 2a)
+
+Step 1 gave the engine service the tab's own shape: a planner and a database in the page. A Python host has neither in
+the page (R4), so before Python's pages open the app, the contract says what every host answers. The rule is that **a
+source is opened by the same code on every host; only the services differ**:
+
+1. **The data comes in through the database service**, which answers with the model it wrote for it: a file (ingest),
+   a remote file (mount), a frame (Python's: the model Python wrote when the frame was registered). Each answer is the
+   same `InferredModel`: its model, runtime, source relation and columns. The tab writes the model in the page (its
+   module's table-model writer). Python writes it in Python, with DataCube's own code run headless (§4.3).
+2. **A grid's rows come from the engine service over that model**, `rows(model, runtime, how?)`, in the shape `CubeApp`
+   already takes:
+   - in the tab and headless, planned here and run here: `{planner, engine}`, the planner over the source's own model
+     (a page's grids share no model);
+   - on a Python host, planned and run by Python: `{runner}`, the page sending Pure, never SQL (R4).
+3. **The page's own compiler** (a saved query's text parsed, a query printed) is the engine service's `compiler`: the
+   tab's planner, or Python's compile routes. It is never a planner whose `plan` refuses.
+
+What only one shape has stays with that shape's service, never as a branch in the app:
+- **Snap into the host's database**: the tab's local pair (`SnapManager`); Python's, a call to Python (step 2b).
+- **The model writer of a warehouse table, and test data**: the tab's module; on Python with steps 2b and 3.
+
+The app branches on the shape in one place only: when a grid is made, its rows are either a planner and an engine, or a
+runner (`GridPlace`).
+
 ## 5. Where pages live, and who else edits an open page
 
 "Who owns the page" is two separate things:
