@@ -12,7 +12,7 @@ the database's gaps, and no dialect work removes them. A database's **own** pins
 
 | database | pins | of which the platform's (also on DuckDB) | **own** |
 |---|---:|---:|---:|
-| Postgres | 109 → **42** | 34 | 75 → **8** (burned down, below) |
+| Postgres | 109 → **43** | 34 | 75 → **9** (burned down, below) |
 | H2 (Relation suite only) | 26 | 1 | **25** |
 | MySQL | 54 | 34 | **20** |
 | MariaDB | 51 | 34 | **17** |
@@ -68,7 +68,7 @@ lane.
 
 ## Postgres: its 75 own pins (2026-10-12)
 
-**Outcome: 67 fixed, 8 kept pinned** (48 in the first pass, then the 12 jsonb ones, then 7 more, each at the user's
+**Outcome: 66 fixed, 9 kept pinned** (48 in the first pass, then the 12 jsonb ones, then 6 more, each at the user's
 ask). Each Postgres fix is in `Postgres.java` and was probed on the embedded Postgres 16.15 first; the typing gap was
 the shared lowering's, fixed there for the ordered aggregate and re-measured on every lane. Both channels are green; channel B's floors rose to
 329, 132, 465, 204 and 91.
@@ -88,12 +88,12 @@ the shared lowering's, fixed there for the ordered aggregate and re-measured on 
 | 2 | **A comparator dedup's CASE** (two `removeDuplicates` tests) is typed Unknown: on a list-less backend the shared carrier pass strips the LITERAL label from the list branch but not from the reduction's stamps | An identity transform on the list branch made Postgres pass, but it is a new list emission in the lowering, which the carrier-purity ratchet bans (`CodeShapeGuardrailTest`: lower to a semantic node, CARRIER_REDESIGN.md tenet #1). The fix is a semantic dedup node with strategy rules | kept: reverted, for the carrier lane |
 | 3 | **jsonb reorders an object's keys** (shorter first), where Pure keeps them as written | A Variant as `json` (its text as written), jsonb only where it is compared, grouped or merged; printed minified | kept: Variants stay jsonb (the user's call, 2026-10-12): `json` has no equality, so the switch would reverse the dialect's documented choice and touch every Variant path for these 3 |
 | 2 | **Postgres's own limits**: no NUL character in text, a timestamp range | None | kept |
-| 2 | `testPairCollectionToString`: `to_jsonb` of a quoted literal, which has no type yet. `testConcatenateTypeInference`: a Variant cell (instances of two subclasses) came back as the driver's jsonb object | The literal cast to text first; a JSON cell delivered as its text, as every other driver hands it | fixed |
+| 2 | `testPairCollectionToString`: `to_jsonb` of a quoted literal, which has no type yet. `testConcatenateTypeInference`: a Variant cell (instances of two subclasses) came back as the driver's jsonb object | The literal cast to text first: fixed. The cell: delivering it as text in the dialect's `normalize` passed, but broke main's Postgres parity harness, which reads the driver's object (2026-10-12, at the merge of the `#SQL{...}#` line). The executor already turns a driver's JSON object into text through that driver's `DriverCells` (DuckDB's `DuckDbCells`); Postgres has none. A `PostgresCells` is the fix, in the plan's P5 connector | literal fixed; the cell kept, for P5 |
 
 **Found in passing:** Snowflake's printf unroll pads with `LPAD`, which also cuts a longer text. A `%3d` of 12345
 would likely print `123` there. Not yet checked on Snowflake.
 
 ## The other databases
 
-H2 has the most own pins (25), then MySQL (20), MariaDB (17) and SQLite (15); Postgres has 8 after its burn-down.
+H2 has the most own pins (25), then MySQL (20), MariaDB (17) and SQLite (15); Postgres has 9 after its burn-down.
 BigQuery (8) and Trino (6) were burned down hardest, and Databricks and Snowflake have 1 each.

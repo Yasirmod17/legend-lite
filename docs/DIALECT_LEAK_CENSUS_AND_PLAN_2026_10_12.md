@@ -333,7 +333,9 @@ Size: about 400 lines.
   - `opening(spec, auth)`, the URL;
   - `inProcess()` / `openPrivate()`;
   - `bulkLoad()`, which absorbs `DuckDbAppenderLoad`;
-  - `cells()`, which absorbs `DuckDbCells`;
+  - `cells()`, which absorbs `DuckDbCells`. Postgres needs one too: pgjdbc hands a jsonb cell back as its `PGobject`,
+    which nothing turns into text, so `testConcatenateTypeInference` stays pinned on Postgres until it exists
+    (2026-10-12; converting it in the dialect's `normalize` broke the Postgres parity harness, which reads the object);
   - `heldRaise(Connection)` for MariaDB and MySQL; the SQL text comes from the dialect;
   - `inMemoryDeclaration()`, used by `StorelessRuntime` and `CreateClass`.
   - H2's private URL and its `H2Settings` suffix are spelled once, in H2's connector.

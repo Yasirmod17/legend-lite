@@ -62,6 +62,10 @@ public class Test_LegendLite_Postgres_EssentialFunctions_PCT extends PCTReportCo
             // reduction keeps it (Unknown); the fix is a semantic dedup node (CARRIER_REDESIGN tenet #1), not a dialect's
             one("meta::pure::functions::collection::tests::removeDuplicates::testRemoveDuplicatesPrimitiveNonStandardFunction_Function_1__Boolean_1_", "UNNEST over Unknown[] reached Postgres: a list of unknown element type"),
             one("meta::pure::functions::collection::tests::removeDuplicates::testRemoveDuplicatesPrimitiveStandardFunctionExplicit_Function_1__Boolean_1_", "UNNEST over Unknown[] reached Postgres: a list of unknown element type"),
+            // a Variant cell (instances of two subclasses) reaches the bridge as pgjdbc's PGobject: no DriverCells reads
+            // it, as DuckDbCells reads DuckDB's node (2026-10-12: delivering it as text in normalize broke main's
+            // Postgres parity, which reads the PGobject); a Postgres DriverCells is the fix, the plan's P5 connector
+            one("meta::pure::functions::collection::tests::concatenate::testConcatenateTypeInference_Function_1__Boolean_1_", "no typed conversion for org.postgresql.util.PGobject (type=ClassType[fqn=meta::pure::functions::collection::tests::model::CO_GeographicEntity])"),
             // refused by name: a construct the Postgres dialect does not spell yet
             one("meta::pure::functions::collection::tests::fold::testFoldFiltering_Function_1__Boolean_1_", "'otherNames' is not a known class, mapping, runtime, connection, or database — user elements in a query need a fully qualified name"),
             one("meta::pure::functions::collection::tests::fold::testFoldToMany_Function_1__Boolean_1_", "'otherNames' is not a known class, mapping, runtime, connection, or database — user elements in a query need a fully qualified name"),

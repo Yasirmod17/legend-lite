@@ -1905,9 +1905,7 @@ public final class Postgres extends AnsiSqlRenderer {
 
     /** A struct is jsonb here, and the driver hands a jsonb cell back as its own object, whose text is the JSON
      *  (PGobject's toString): decoded to the platform's map, a struct's fields in its declared order (nested ones
-     *  too), a Float field a Double. A Variant cell is its JSON text, as every other driver hands it (DuckDB's
-     *  node through its DriverCells): an instance of a class carried as a Variant (a list of two subclasses'
-     *  instances) otherwise reached the caller as the driver's object. */
+     *  too), a Float field a Double. */
     @Override
     public @com.legend.base.Nullable Object normalize(@com.legend.base.Nullable Object jdbcValue,
             @com.legend.base.Nullable SqlType type) {
@@ -1916,9 +1914,6 @@ public final class Postgres extends AnsiSqlRenderer {
             if (text.startsWith("{")) {
                 return declared(com.legend.sql.Json.parse(text), st);
             }
-        }
-        if (jdbcValue != null && type == SqlType.Scalar.JSON && !(jdbcValue instanceof String)) {
-            return jdbcValue.toString();
         }
         return jdbcValue;
     }

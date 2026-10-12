@@ -933,10 +933,11 @@ Variant path), Postgres's limits (2), two not yet examined. Channel B: 326 / 2 /
 Postgres rose by the by-design class (a struct as jsonb), Essential 13 -> 14 and Grammar 5 -> 6, as tests that stopped
 at their first struct now run their later statements (`PctCensusGate`, dated).
 
-Then, at the user's ask, 7 more: **109 pins become 42; the own 8**. Levenshtein and Jaro-Winkler are recursive walks in
+Then, at the user's ask, 6 more: **109 pins become 43; the own 9**. Levenshtein and Jaro-Winkler are recursive walks in
 plain SQL, not extension functions (fuzzystrmatch's Levenshtein stops at 255 characters, and no extension has a
 Jaro-Winkler); both equal DuckDB's on 1,585 ASCII pairs, by characters where DuckDB counts bytes. A quoted literal is
-cast before `to_jsonb`, and a Variant cell is delivered as its text, as every other driver hands it. One typing gap was
+cast before `to_jsonb`. (A Variant cell delivered as its text in `normalize` passed one more, then broke main's Postgres
+parity harness at the merge, so it waits for a Postgres `DriverCells`, the plan's P5.) One typing gap was
 the shared lowering's (AGENTS.md invariant 1), so every lane was re-measured: the ordered list aggregate (a mixed sort's)
 is typed as the LIST reducer types it, a list of its value's type, where it had been VARCHAR whatever it aggregated, and
 Postgres spells it `array_agg`. The other, a comparator dedup's CASE typed Unknown, stays pinned: the shared carrier pass
