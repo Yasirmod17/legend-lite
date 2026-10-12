@@ -279,3 +279,13 @@ tests:
     sql: "SELECT dept_id, corr(id, dept_id) AS a, corr(salary, age) FILTER (WHERE id < 3) AS b, corr(age, id) FILTER (WHERE id = 1) AS c FROM persons GROUP BY dept_id ORDER BY dept_id"
   - id: percentile_disc_descending_at_zero_is_the_largest
     sql: "SELECT dept_id, percentile_disc(0) WITHIN GROUP (ORDER BY age DESC) AS a, percentile_disc(0) WITHIN GROUP (ORDER BY salary) AS b FROM persons GROUP BY dept_id ORDER BY dept_id"
+  # BETWEEN is x >= low AND x <= high in three-valued logic: a NULL bound leaves the other to decide FALSE; an IN list
+  # with an element that may be NULL is TRUE where one element matches (found by the randomized check)
+  - id: between_with_a_null_bound
+    sql: "SELECT id, int_val BETWEEN 5 AND NULL AS a, int_val NOT BETWEEN NULL AND 10 AS b, id BETWEEN int_val AND small_val AS c FROM numbers ORDER BY id"
+  - id: not_between_a_null_bound_in_a_filter
+    sql: "SELECT id FROM numbers WHERE int_val NOT BETWEEN 0 AND NULL ORDER BY id"
+  - id: in_a_list_with_a_nullable_column
+    sql: "SELECT id, 7 IN (small_val, int_val) AS a, int_val IN (small_val, 42) AS b, int_val NOT IN (small_val, 1) AS c FROM numbers ORDER BY id"
+  - id: in_a_list_with_a_nullable_column_in_a_filter
+    sql: "SELECT p.id FROM persons p WHERE 30 IN (p.age, p.dept_id * 30) ORDER BY 1"

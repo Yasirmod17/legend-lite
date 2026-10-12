@@ -1846,6 +1846,10 @@ lite/functions/correlation_and_covariance_by_group	PASS	PASS
 lite/functions/correlation_and_covariance_with_a_filter	PASS	PASS
 lite/functions/correlation_of_a_constant_or_one_pair_is_null	PASS	PASS
 lite/functions/percentile_disc_descending_at_zero_is_the_largest	PASS	PASS
+lite/functions/between_with_a_null_bound	PASS	PASS
+lite/functions/not_between_a_null_bound_in_a_filter	PASS	PASS
+lite/functions/in_a_list_with_a_nullable_column	PASS	PASS
+lite/functions/in_a_list_with_a_nullable_column_in_a_filter	PASS	PASS
 lite/joins/inner_join_on	PASS	PASS
 lite/joins/left_join_keeps_unmatched	PASS	PASS
 lite/joins/right_join_keeps_unmatched	PASS	PASS

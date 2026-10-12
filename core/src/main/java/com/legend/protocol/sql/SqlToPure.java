@@ -3480,7 +3480,25 @@ public final class SqlToPure {
             // x IN (NULL): never TRUE, never FALSE
             return nullOf(Kind.BOOLEAN);
         }
-        Tx test = strictTest(operands, v -> call("in", v.get(0), new PureCollection(v.subList(1, v.size()))));
+        boolean nullableElement = false;
+        for (Tx element : operands.subList(1, operands.size())) {
+            nullableElement |= element.nullable();
+        }
+        Tx test;
+        if (nullableElement) {
+            // an element that may be NULL: x = e for each, in three-valued OR -- TRUE where one holds, FALSE where every
+            // one fails, else NULL (x IN (col, 5) is TRUE for x = 5 whatever col is)
+            ValueSpecification holds = null;
+            ValueSpecification fails = null;
+            for (Tx element : operands.subList(1, operands.size())) {
+                Tx eq = compare(SqlAst.BinaryOp.EQ, operands.get(0), element);
+                holds = holds == null ? eq.vs() : call("or", holds, eq.vs());
+                fails = fails == null ? eq.falseWhen() : call("and", fails, eq.falseWhen());
+            }
+            test = Tx.condition(java.util.Objects.requireNonNull(holds), java.util.Objects.requireNonNull(fails), true);
+        } else {
+            test = strictTest(operands, v -> call("in", v.get(0), new PureCollection(v.subList(1, v.size()))));
+        }
         if (nullInList) {
             // a NULL in the list: TRUE where the value is found, else NULL (it might equal the NULL), never FALSE
             test = Tx.condition(test.vs(), new CBoolean(false), true);
@@ -3491,9 +3509,11 @@ public final class SqlToPure {
     private Tx between(SqlAst.Between b, Scope scope, String row) {
         List<Tx> low = comparable(b.operand(), b.low(), scope, row, b.pos());
         List<Tx> high = comparable(b.operand(), b.high(), scope, row, b.pos());
-        Tx test = strictTest(List.of(low.get(0), low.get(1), high.get(1)),
-                v -> call("and", call("greaterThanEqual", v.get(0), v.get(1)),
-                        call("lessThanEqual", v.get(0), v.get(2))));
+        // x >= low AND x <= high, in three-valued logic: a NULL bound leaves the other to decide FALSE
+        Tx l = compare(SqlAst.BinaryOp.GE, low.get(0), low.get(1));
+        Tx h = compare(SqlAst.BinaryOp.LE, high.get(0), high.get(1));
+        Tx test = Tx.condition(call("and", l.vs(), h.vs()), call("or", l.falseWhen(), h.falseWhen()),
+                l.nullable() || h.nullable());
         return b.negated() ? not(test) : test;
     }
 
