@@ -2669,9 +2669,7 @@ public final class SqlToPure {
 
     /** Whether a value is a NULL constant: untyped ({@code NULL}) or typed ({@link #nullOf}). */
     private static boolean isNullConstant(Tx t) {
-        return t.kind() == Kind.NULL || t.whenFalse() == null && t.vs() instanceof AppliedFunction af
-                && af.function().equals("cast") && !af.parameters().isEmpty()
-                && af.parameters().get(0) instanceof PureCollection c && c.values().isEmpty();
+        return t.kind() == Kind.NULL || t.whenFalse() == null && t.vs().equals(nullOf(t.kind()).vs());
     }
 
     /** An operator's operands, a NULL constant typed as the other operand (Postgres resolves an unknown by the other
@@ -3531,8 +3529,8 @@ public final class SqlToPure {
             kinds(f, a, Kind.STRING, Kind.STRING);
             return strictTest(a, v -> call("startsWith", v.get(0), v.get(1)));
         });
-        m.put("extract", (t, f, a, s, r) -> datePart(f, a));
-        m.put("date_part", (t, f, a, s, r) -> datePart(f, a));
+        m.put("extract", (t, f, a, s, r) -> datePart(f, a, true));
+        m.put("date_part", (t, f, a, s, r) -> datePart(f, a, false));
         return java.util.Collections.unmodifiableMap(m);
     }
 
@@ -3848,7 +3846,9 @@ public final class SqlToPure {
 
     /** {@code extract(field FROM x)}, {@code date_part('field', x)}: the whole-number fields of a date or timestamp
      *  (DATE_FIELDS); a time of day is a timestamp's only. */
-    private static Tx datePart(SqlAst.FunctionCall f, List<Tx> args) {
+    /** {@code extract(field FROM x)} ({@code numeric}, Postgres 14 on) and {@code date_part('field', x)} (double
+     *  precision): a field's whole number. */
+    private static Tx datePart(SqlAst.FunctionCall f, List<Tx> args, boolean numeric) {
         arity(f, args, 2);
         String fn = functionName(f.name().get(0));
         if (!(f.args().get(0) instanceof SqlAst.StringLit field)) {
@@ -3867,7 +3867,7 @@ public final class SqlToPure {
                     Locale.ROOT) + " value is not supported yet", f.args().get(1).pos());
         }
         // extract is numeric in Postgres (14 on), date_part double precision: a field's whole number as either
-        return fn.equals("extract") ? strict(Kind.DECIMAL, List.of(x), v -> call(pure, v.get(0)))
+        return numeric ? strict(Kind.DECIMAL, List.of(x), v -> call(pure, v.get(0)))
                 : strict(Kind.FLOAT, List.of(x), v -> call("toFloat", call(pure, v.get(0))));
     }
 
