@@ -273,6 +273,23 @@ Python libraries are twins, the same in every column.
   end's how-many preset from whether its key is unique over its grid's rows, as the window presets it),
   `page.create_data_space(name, title=, description=, associations=)`, and `page.model`.
 - Still owed: the revision the page is pinned to (model design §6).
+- **Reviewed** (the audit, the Studio / SDLC / Depot line, the Compiler Rewrite line):
+  - the SDLC is one with lite's text routes (the page's, the model home, sdlc-server). **A real legend-sdlc is owed:**
+    it answers neither `…/pure` nor `…/pureChanges`, its project ids are its own, and it may answer a stale save 500;
+    reading `…/revisions/{r}/entities` and saving with `entityChanges` waits on the Studio line's leg 8 (the JSON hop);
+  - a workspace whose making is refused is read again (lite answers 500 "Branch already exists" once it has commits),
+    the refusal said only when it is still not there; a save that changes nothing (the SDLC's 204) keeps the revision
+    read, sdlc-client's `performPureChanges` and `performChanges` answering `Revision | undefined`;
+  - `projectText` is sdlc-client's (`src/project-text.ts`), the one rule the Studio line moves its own readers onto;
+  - Python asks DataCube for the page's names and project (headless `pageModelNames`), a grid that cannot be a class
+    refused in DataCube's words, an association's how-many read as the window reads it (the class's relation function
+    over the project: headless `classDuplicate`), its samples written as the window writes them, a Live frame read
+    once; `project=` names the project a page's first class makes.
+- **How the two are held alike, as built:** recorded transcripts, replayed against a stub SDLC and a stub writer over
+  `writerBodies` (the function the module's writer and a server's both use); the race and 204 answers the real SDLC
+  cannot record are unit tests in both languages. The in-page SDLC and the module's writer are not run against the
+  cases (changed from this plan's first draft: a request, the files before and after, run against each host's own);
+  DataCube's own windows are proved by `create_class_test` and `python_engine_test`.
 
 **Files.** The new TypeScript package and its BUILD, `datacube/src/{create-class,model-actions,page-model}.ts`,
 `python/legend_lite/{model.py,page.py}`, the corpus folder and its two tests, and `gates/BUILD.bazel` for the tests'

@@ -10,8 +10,8 @@ import { readLambda } from '../../pure-protocol/src/index.ts';
 import { SdlcClient } from '../../sdlc-client/src/client.ts';
 import { runfilesFromEnv } from '../../tools/js/runfiles.mts';
 import {
-  createAssociation, createClass, createDataSpace, writerBodies, type ClassAction, type Created, type ModelAnswer,
-  type ModelWriter, type NewProject,
+  createAssociation, createClass, createDataSpace, ensureWorkspace, writerBodies, type ClassAction, type Created,
+  type ModelAnswer, type ModelWriter, type NewProject,
 } from '../src/index.ts';
 
 type Call =
@@ -90,7 +90,7 @@ function run(c: Case, sdlc: SdlcClient, writer: ModelWriter): Promise<Created> {
 const CASES = runfilesFromEnv('MODEL_CHANGES_CASES').map((f) => JSON.parse(readFileSync(f, 'utf8')) as Case);
 
 describe("into a project: the cases Python's twin recorded", () => {
-  it('there are cases', () => assert.ok(CASES.length >= 4));
+  it('there are cases', () => assert.ok(CASES.length >= 5));
   for (const c of CASES) {
     it(c.name, async () => {
       const { sdlc, writer, done } = replay(c.calls);
@@ -99,4 +99,42 @@ describe("into a project: the cases Python's twin recorded", () => {
       assert.deepEqual({ project: made.project, workspace: made.workspace, revision: made.revision }, c.result);
     });
   }
+});
+
+/** An SDLC answering each call in turn from `answers`: its status and its body. */
+function answering(answers: readonly [number, string][]): SdlcClient {
+  let next = 0;
+  return new SdlcClient('', (async () => {
+    const [status, body] = answers[next++]!;
+    // a 204 carries no body
+    return new Response(status === 204 ? null : body, { status });
+  }) as unknown as typeof fetch);
+}
+
+describe('into a project: what the cases cannot record, said as the Python twin says it', () => {
+  it('a workspace made by another ask meanwhile is there (lite answers its making 500 once it has commits)', async () => {
+    await ensureWorkspace(answering([[404, '{"message":"no such workspace"}'], [500, '{"message":"Branch already exists"}'],
+      [200, '{"workspaceId":"w"}']]), { project: 'g:a', workspace: 'w' });
+  });
+
+  it('a workspace refused and still not there is said', async () => {
+    await assert.rejects(ensureWorkspace(answering([[404, '{}'], [409, '{"message":"a workspace W differs only in case"}'],
+      [404, '{}']]), { project: 'g:a', workspace: 'w' }), /differs only in case/);
+  });
+
+  it('a save that changes nothing answers the revision read (the SDLC\'s 204, no body)', async () => {
+    const writer = { createClass: async () => ({ changes: [{ type: 'MODIFY', path: 'a::A', pureCode: 'Class a::A {}' }] }) } as
+      unknown as ModelWriter;
+    const made = await createClass({ sdlc: answering([[200, '{}'], [200, '{"id":"r1"}'], [200, '[]'], [204, '']]), writer,
+      project: 'g:a', workspace: 'w', package: 'a', class: {} as ClassAction });
+    assert.equal(made.revision, 'r1');
+  });
+
+  it('a project made stays the caller\'s when a later step fails', async () => {
+    const seen: string[] = [];
+    const sdlc = answering([[200, '[]'], [200, '{"projectId":"datacube:trades"}'], [500, '{"message":"busy"}']]);
+    await assert.rejects(createClass({ sdlc, writer: {} as ModelWriter, project: { name: 'Trades', group: 'datacube' },
+      workspace: 'datacube', package: 'trades', class: {} as ClassAction, made: (p) => seen.push(p) }), /busy/);
+    assert.deepEqual(seen, ['datacube:trades']);
+  });
 });

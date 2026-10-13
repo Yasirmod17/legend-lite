@@ -125,11 +125,13 @@ export interface ModelAnswer {
 /** legend-lite's model writer: its three routes, wherever they are answered (the tab's module, Python's native library,
  *  a legend-lite server: `serverWriter`). Each is one call, atomic, and writes nothing itself: it answers the files. */
 export interface ModelWriter {
-  createClass(project: string, pkg: string, cls: ClassAction): Promise<ModelAnswer>;
+  /** `model`: the project's files as one model text (project.ts `projectText`), which the route reads beside what it
+   *  makes. */
+  createClass(model: string, pkg: string, cls: ClassAction): Promise<ModelAnswer>;
   /** With no association, nothing is made: the answer's suggestions and joinable classes start a window. */
-  createAssociation(project: string, pkg: string, association: AssociationAction | undefined,
+  createAssociation(model: string, pkg: string, association: AssociationAction | undefined,
     classes?: readonly ClassAction[]): Promise<ModelAnswer>;
-  createDataSpace(project: string, pkg: string, dataSpace: DataSpaceAction, classes?: readonly ClassAction[],
+  createDataSpace(model: string, pkg: string, dataSpace: DataSpaceAction, classes?: readonly ClassAction[],
     associations?: readonly AssociationAction[]): Promise<ModelAnswer>;
 }
 
@@ -137,7 +139,7 @@ export interface ModelWriter {
  * A request's body, each class's relation spliced in as `toJson` wrote it (so its numbers keep their digits); the
  * grid's runtime goes in its `where`, as the route reads it.
  */
-export function modelRequestBody(lambdaJson: (query: Lambda) => string, project: string, pkg: string, parts: {
+export function modelRequestBody(lambdaJson: (query: Lambda) => string, model: string, pkg: string, parts: {
   readonly class?: ClassAction;
   readonly classes?: readonly ClassAction[];
   readonly association?: AssociationAction;
@@ -150,7 +152,8 @@ export function modelRequestBody(lambdaJson: (query: Lambda) => string, project:
       where: { ...where, runtime: source.runtime } });
     return `{"lambda":${lambdaJson(query)},${fields.slice(1)}`;
   };
-  const fields = [`"project":${JSON.stringify({ _type: 'text', code: project })}`, `"package":${JSON.stringify(pkg)}`];
+  // the route's `project` field is the project's model text
+  const fields = [`"project":${JSON.stringify({ _type: 'text', code: model })}`, `"package":${JSON.stringify(pkg)}`];
   if (parts.class) fields.push(`"class":${cls(parts.class)}`);
   if (parts.classes) fields.push(`"classes":[${parts.classes.map(cls).join(',')}]`);
   if (parts.association !== undefined) fields.push(`"association":${JSON.stringify(parts.association)}`);
@@ -162,12 +165,12 @@ export function modelRequestBody(lambdaJson: (query: Lambda) => string, project:
 /** Each route's body as every writer sends it -- the tab's module, a legend-lite server, Python's twin
  *  (python/legend_lite/model.py `writer_body`): a route's lists always there, empty when there is nothing in them. */
 export const writerBodies = {
-  createClass: (project: string, pkg: string, cls: ClassAction): string =>
-    modelRequestBody(toJson, project, pkg, { class: cls }),
-  createAssociation: (project: string, pkg: string, association: AssociationAction | undefined,
+  createClass: (model: string, pkg: string, cls: ClassAction): string =>
+    modelRequestBody(toJson, model, pkg, { class: cls }),
+  createAssociation: (model: string, pkg: string, association: AssociationAction | undefined,
     classes: readonly ClassAction[] = []): string =>
-    modelRequestBody(toJson, project, pkg, association === undefined ? { classes } : { classes, association }),
-  createDataSpace: (project: string, pkg: string, dataSpace: DataSpaceAction, classes: readonly ClassAction[] = [],
+    modelRequestBody(toJson, model, pkg, association === undefined ? { classes } : { classes, association }),
+  createDataSpace: (model: string, pkg: string, dataSpace: DataSpaceAction, classes: readonly ClassAction[] = [],
     associations: readonly AssociationAction[] = []): string =>
-    modelRequestBody(toJson, project, pkg, { classes, associations, dataSpace }),
+    modelRequestBody(toJson, model, pkg, { classes, associations, dataSpace }),
 };

@@ -295,10 +295,12 @@ py_test(
     ],
 )
 
-# INTO A PROJECT (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B4; legend_lite/model.py): the twin of model-changes/, held to
-# the same recorded cases (each call a create makes, to the SDLC and the writer, with its exact body), then a page's grids
-# made classes, an association and a data space by DataCube's request (headless) into this user's model home.
+# INTO A PROJECT (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B4; legend_lite/model.py): the twin of model-changes/, held
+# to the same recorded cases (each call a create makes, to the SDLC and the writer, with its exact body), then a page's
+# grids made classes, an association and a data space by DataCube's request (headless) into this user's model home.
 # `MODEL_CHANGES_RECORD=1 bazel run //python:model_test` records the cases again.
+_MODEL_ENV = _ENV | _HEADLESS_ENV | {"LEGEND_LITE_MODEL_CASES": "$(rlocationpaths //model-changes:cases)"}
+
 py_test(
     name = "model_test",
     size = "medium",
@@ -314,11 +316,8 @@ py_test(
         "//native:compiler",
     ],
     env = select({
-        "//tools/platforms:windows_x86_64": _ENV | _HEADLESS_ENV | {
-            "LEGEND_LITE_MODEL_CASES": "$(rlocationpaths //model-changes:cases)",
-            "PROCESSOR_ARCHITECTURE": "AMD64",
-        },
-        "//conditions:default": _ENV | _HEADLESS_ENV | {"LEGEND_LITE_MODEL_CASES": "$(rlocationpaths //model-changes:cases)"},
+        "//tools/platforms:windows_x86_64": _MODEL_ENV | {"PROCESSOR_ARCHITECTURE": "AMD64"},
+        "//conditions:default": _MODEL_ENV,
     }),
     main = "tests/main.py",
     target_compatible_with = _PLATFORMS,

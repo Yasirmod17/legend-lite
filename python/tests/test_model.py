@@ -17,7 +17,7 @@ from pathlib import Path
 import pyarrow as pa
 
 import legend_lite as ll
-from legend_lite import datacube, model
+from legend_lite import _json, datacube, model
 
 CASES = sorted(os.environ['LEGEND_LITE_MODEL_CASES'].split(os.pathsep)) if os.environ.get('LEGEND_LITE_MODEL_CASES') else []
 
@@ -127,11 +127,16 @@ def record(into: Path) -> None:
                   'project': {'name': 'Desks', 'group': 'datacube', 'description': ''}, 'workspace': 'datacube',
                   'package': 'desks', 'dataSpace': {'name': 'Desks', 'title': 'The desks'}, 'classes': [desk]})
     _recorded(cases[3], real)
+    # a class made again as it is: the writer answers no change, so nothing is saved, the revision the one read
+    cases.append({'name': 'the first class made again as it is: nothing saved, the revision the one read',
+                  'function': 'createClass', 'project': project, 'workspace': 'datacube', 'package': 'tradesByDesk',
+                  'class': trade, 'unchanged': True})
+    _recorded(cases[4], real)
     into.mkdir(parents=True, exist_ok=True)
     for old in into.glob('*.json'):
         old.unlink()
     for n, case in enumerate(cases, start=1):
-        (into / f'{n:02d}.json').write_text(json.dumps(case, indent=1, ensure_ascii=False) + '\n', encoding='utf-8')
+        (into / f'{n:02d}.json').write_text(_json.dumps(case, indent=1) + '\n', encoding='utf-8')
 
 
 def _recorded(case: dict, real: model.Sdlc, moved=None) -> model.Created:
@@ -147,20 +152,63 @@ class Replayed(unittest.TestCase):
     """Each case replayed: Python makes the same calls, in order, with the same bodies, and answers the same."""
 
     def test_the_cases_are_there(self):
-        self.assertGreaterEqual(len(CASES), 4)
+        self.assertGreaterEqual(len(CASES), 5)
 
     def test_each_case(self):
         for path in CASES:
-            case = json.loads(Path(path).read_text(encoding='utf-8'))
+            # read as the library reads JSON: a decimal keeps its digits
+            case = _json.loads(Path(path).read_text(encoding='utf-8'))
             with self.subTest(case=case['name']):
                 transcript = Transcript(case['calls'])
                 made = _run(case, transcript.sdlc(), transcript.writer())
                 transcript.done()
                 self.assertEqual({'project': made.project, 'workspace': made.workspace, 'revision': made.revision},
                                  case['result'])
+                saves = [c['status'] for c in case['calls'] if c['to'] == 'sdlc' and c['path'].endswith('/pureChanges')]
                 if case.get('moved'):
-                    saves = [c for c in case['calls'] if c['to'] == 'sdlc' and c['path'].endswith('/pureChanges')]
-                    self.assertEqual([c['status'] for c in saves], [409, 200], 'stale once, then made again and saved')
+                    self.assertEqual(saves, [409, 200], 'stale once, then made again and saved')
+                if case.get('unchanged'):
+                    self.assertEqual(saves, [], 'no change, so no save')
+                    reads = [c for c in case['calls'] if c['to'] == 'sdlc' and c['path'].endswith('/revisions/CURRENT')]
+                    self.assertEqual(made.revision, json.loads(reads[-1]['answer'])['id'], 'the revision the one read')
+
+
+class Unrecorded(unittest.TestCase):
+    """What the cases cannot record from the native library: answers a race makes, said the same as the TypeScript
+    library says them (model-changes/test/replay.test.ts)."""
+
+    def test_a_workspace_made_by_another_ask_meanwhile_is_there(self):
+        # lite's SDLC refuses a workspace that has commits already with a 500 ("Branch already exists"): read again
+        answers = iter([(404, '{"message": "no such workspace"}'), (500, '{"message": "Branch already exists"}'),
+                        (200, '{"workspaceId": "w"}')])
+        model.ensure_workspace(model.Sdlc(lambda m, p, b: next(answers)), 'g:a', 'w')
+
+    def test_a_workspace_refused_and_still_not_there_is_said(self):
+        answers = iter([(404, '{}'), (409, '{"message": "a workspace W differs only in case"}'), (404, '{}')])
+        with self.assertRaisesRegex(model.SdlcError, 'differs only in case'):
+            model.ensure_workspace(model.Sdlc(lambda m, p, b: next(answers)), 'g:a', 'w')
+
+    def test_a_save_that_changes_nothing_answers_the_revision_read(self):
+        # every change the bytes already there: the SDLC's 204, no body (another tab saved the same meanwhile)
+        answers = iter([(200, '{}'), (200, '{"id": "r1"}'), (200, '[]'), (204, '')])
+        writer = type('W', (), {'create_class': lambda self, m, p, c: {'changes': [{'type': 'MODIFY', 'path': 'a::A',
+                                                                                    'pureCode': 'Class a::A {}'}]}})()
+        made = model.create_class(model.Sdlc(lambda m, p, b: next(answers)), writer, 'g:a', 'w', 'a', {'name': 'A'})
+        self.assertEqual(made.revision, 'r1')
+
+    def test_a_project_made_stays_the_callers_when_a_later_step_fails(self):
+        seen = []
+
+        def call(method, path, body):
+            if (method, path) == ('GET', '/projects'):
+                return 200, '[]'
+            if (method, path) == ('POST', '/projects'):
+                return 200, '{"projectId": "datacube:trades"}'
+            return 500, '{"message": "busy"}'
+        with self.assertRaisesRegex(model.SdlcError, 'busy'):
+            model.create_class(model.Sdlc(call), None, model.NewProject('Trades', 'datacube'), 'datacube', 'trades',
+                               {'name': 'Trade'}, made=seen.append)
+        self.assertEqual(seen, ['datacube:trades'])
 
 
 class OnThePage(unittest.TestCase):
@@ -175,7 +223,9 @@ class OnThePage(unittest.TestCase):
         self.sdlc = model.local_sdlc()
 
     def _restore(self):
-        if self._home is not None:
+        if self._home is None:
+            os.environ.pop('LEGEND_LITE_HOME', None)
+        else:
             os.environ['LEGEND_LITE_HOME'] = self._home
 
     def files(self, ref):
@@ -204,6 +254,11 @@ class OnThePage(unittest.TestCase):
         space = page.create_data_space('TradesByDesk')
         self.assertTrue(space.endswith('TradesByDesk'), space)
         self.assertIn('DataSpace', '\n'.join(self.files(page.model).values()))
+
+    def test_the_project_made_is_named_as_asked(self):
+        page = _page(self)
+        page.grids[0].create_class('Trade', project='Desk book')
+        self.assertTrue(page.model['project'].startswith('datacube:desk-book'), page.model)
 
     def test_an_association_before_any_class_is_refused_in_words(self):
         with self.assertRaisesRegex(ValueError, 'make them first'):

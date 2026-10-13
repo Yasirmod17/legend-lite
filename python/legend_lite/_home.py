@@ -184,3 +184,9 @@ def locked(folder: Path) -> Iterator[None]:
                 yield
             finally:
                 fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+def model_home_folder() -> Path:
+    """Where this user's model home keeps its projects: a git repository in their legend-lite folder, as it is now
+    (the program's B3; Python's engine serves it, legend_lite.model writes into it)."""
+    return home() / 'projects'

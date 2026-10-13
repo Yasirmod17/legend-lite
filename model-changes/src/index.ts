@@ -3,7 +3,8 @@
 // (python/legend_lite/model.py) another, a script or another app more. Each function makes the project and its workspace
 // when they are not yet, reads the project's files as one model text, asks legend-lite's model writer for the files
 // (the host's own, or a legend-lite server's), and saves them as one revision, made again once over a newer one. The SDLC
-// is any SDLC: the host's model home, sdlc-server, a real legend-sdlc. test/cases holds this and its Python twin alike.
+// is one with lite's text routes: the page's, the model home, sdlc-server (legend-sdlc is owed: project.ts).
+// test/cases holds this and its Python twin alike.
 
 import type { SdlcClient } from '../../sdlc-client/src/client.ts';
 import { makeProject, saveFresh, type NewProject } from './project.ts';
@@ -34,7 +35,7 @@ export interface Created {
   readonly answer: ModelAnswer;
 }
 
-async function into(o: Into, message: string, make: (project: string) => Promise<ModelAnswer>): Promise<Created> {
+async function into(o: Into, message: string, make: (model: string) => Promise<ModelAnswer>): Promise<Created> {
   let project: string;
   if (typeof o.project === 'string') {
     project = o.project;
@@ -49,14 +50,14 @@ async function into(o: Into, message: string, make: (project: string) => Promise
 
 /** A class made from a relation's rows. */
 export function createClass(o: Into & { readonly class: ClassAction }): Promise<Created> {
-  return into(o, `Create a Class: ${o.class.name}`, (project) => o.writer.createClass(project, o.package, o.class));
+  return into(o, `Create a Class: ${o.class.name}`, (model) => o.writer.createClass(model, o.package, o.class));
 }
 
 /** An association between two classes of the project (or of `classes`, made with it). */
 export function createAssociation(o: Into & { readonly association: AssociationAction; readonly classes?: readonly ClassAction[] }):
   Promise<Created> {
   return into(o, 'Create an Association',
-    (project) => o.writer.createAssociation(project, o.package, o.association, o.classes));
+    (model) => o.writer.createAssociation(model, o.package, o.association, o.classes));
 }
 
 /** A data space over the project's classes, the classes and associations given made with it. */
@@ -66,7 +67,7 @@ export function createDataSpace(o: Into & {
   readonly associations?: readonly AssociationAction[];
 }): Promise<Created> {
   return into(o, `Create a Data Space: ${o.dataSpace.name}`,
-    (project) => o.writer.createDataSpace(project, o.package, o.dataSpace, o.classes, o.associations));
+    (model) => o.writer.createDataSpace(model, o.package, o.dataSpace, o.classes, o.associations));
 }
 
 /** legend-lite's model writer on a server: its routes over HTTP, as the tab's module answers them. */
@@ -89,10 +90,10 @@ export function serverWriter(baseUrl: string, fetcher: typeof fetch = globalThis
     return JSON.parse(text) as ModelAnswer;
   };
   return {
-    createClass: (project, pkg, cls) => write('createClass', writerBodies.createClass(project, pkg, cls)),
-    createAssociation: (project, pkg, association, classes) =>
-      write('createAssociation', writerBodies.createAssociation(project, pkg, association, classes)),
-    createDataSpace: (project, pkg, dataSpace, classes, associations) =>
-      write('createDataSpace', writerBodies.createDataSpace(project, pkg, dataSpace, classes, associations)),
+    createClass: (model, pkg, cls) => write('createClass', writerBodies.createClass(model, pkg, cls)),
+    createAssociation: (model, pkg, association, classes) =>
+      write('createAssociation', writerBodies.createAssociation(model, pkg, association, classes)),
+    createDataSpace: (model, pkg, dataSpace, classes, associations) =>
+      write('createDataSpace', writerBodies.createDataSpace(model, pkg, dataSpace, classes, associations)),
   };
 }

@@ -55,7 +55,7 @@ from . import _json, _planner, compiler
 from .compiler import LegendError
 from ._library import library
 from .frames import Frames, UntypedColumn
-from ._home import SavedPages, Settings, home
+from ._home import SavedPages, Settings, home, model_home_folder
 
 _API = '/api/pure/v1/'
 _EXECUTE = _API + 'execution/execute'
@@ -415,7 +415,7 @@ class Engine:
 
     def model_home_folder(self) -> Path:
         """Where the model home's projects are: a git repository in this user's folder, as it is now."""
-        return home() / 'projects'
+        return model_home_folder()
 
     def _model_home(self, method: str, path: str, query: str, body: str) -> Answer:
         """One call of the model home (B3): answered by the native library's SDLC or Depot -- the rules the page's

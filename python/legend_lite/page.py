@@ -423,11 +423,18 @@ class Grid(Tile):
                documentation: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
         """Its rows as a class's, as the window asks for them: DataCube's own request (headless ``gridClass``: its rows
         at their finest level, its table, its sample's query, the names offered), its sample read on Python's database
-        by the session's planner. Answers the writer's class action and what DataCube said."""
+        by the session's planner -- with the frames held still, so a Live frame is read once for both, unless a server
+        plans (its answer is awaited holding no lock of the frames'). Answers the writer's class action and what
+        DataCube said; a grid whose rows cannot be a class refused in DataCube's words (``ValueError``)."""
         engine, frames = self._headless()
+        local = frames.planner is None
         with frames.serving():
             asked = _json.loads(engine.call('gridClass', self._spec(frames), {'source': self.frame, 'page': self._page.name}))
-        sample = frames[self.frame].execute(asked['sample'])
+            if 'refused' in asked:
+                raise ValueError(f'{self.frame!r} cannot be a class: {asked["refused"]}')
+            sample = frames[self.frame].execute(asked['sample']) if local else None
+        if sample is None:
+            sample = frames[self.frame].execute(asked['sample'])
         cls = {'query': asked['query'], 'source': asked['source'], 'name': name or asked['names']['className'],
                **({'documentation': documentation} if documentation else {}),
                **({'columns': _column_choices(columns)} if columns else {}),
@@ -456,29 +463,23 @@ class Grid(Tile):
             path.write_bytes(content)
         return path
 
-    def _unique(self, column: str) -> bool:
-        """Whether ``column`` is unique over its rows at their finest level: DataCube's query (headless
-        ``gridDuplicate``) answers no row, run on Python's database by the session's planner."""
-        engine, frames = self._headless()
-        with frames.serving():
-            query = _json.loads(engine.call('gridDuplicate', self._spec(frames), column))
-        return frames[self.frame].execute(query).num_rows == 0
-
     def create_class(self, name: str | None = None, *, package: str | None = None,
                      columns: Mapping[str, Any] | None = None, documentation: str | None = None,
-                     sdlc: Any = None, writer: Any = None) -> str:
+                     project: str | None = None, sdlc: Any = None, writer: Any = None) -> str:
         """Its rows at their finest level (``relation``) made a class of the page's model, as DataCube's Create a Class…
         makes it (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B4): with everything it needs to run (its relation function,
         mapping, the frames' store, connection and runtime -- the place ``Python`` -- and its first rows as sample
         data), into the page's project in this user's model home, made with the page's first class. ``name``: the
         class's (suggested from the frame's name, as the window suggests it); ``package``: the page's (suggested from
         the page's name before its first class). ``columns``: by column, ``'property'`` (the default), ``'key'`` (kept
-        for an association to join on, not shown) or ``'omit'``, or ``{'as', 'name', 'documentation'}``. ``sdlc`` and
-        ``writer``: another SDLC or writer than this user's (legend_lite.model). Answers the class's path."""
+        for an association to join on, not shown) or ``'omit'``, or ``{'as', 'name', 'documentation'}``. ``project``:
+        the name of the project made with the page's first class (the page's name unless given, as the window offers
+        it). ``sdlc`` and ``writer``: another SDLC or writer than this user's (legend_lite.model). Answers the class's
+        path."""
         from . import model as models
         cls, asked = self._class(name, columns, documentation)
         made = self._page._into(package or asked['names']['package'], sdlc, writer,
-                                lambda s, w, at, made: models.create_class(s, w, *at, cls, made=made))
+                                lambda s, w, at, made: models.create_class(s, w, *at, cls, made=made), project)
         path = next((c['class'] for c in made.answer.get('classes', [])), None)
         self._page._keep(self._view['cube'], asked['table']['table'], path)
         return path or cls['name']
@@ -864,22 +865,30 @@ class Page:
         ref = self._doc.get('model')
         return _copied(ref) if ref else None
 
-    def _into(self, package: str, sdlc: Any, writer: Any, call: Any) -> Any:
+    def _names(self) -> dict[str, Any]:
+        """The page's model as DataCube's windows name it before its first class (headless ``pageModelNames``): its
+        package, its data space, its project to make and DataCube's workspace in it."""
+        return _json.loads(self._session.headless().call('pageModelNames', self.name))
+
+    def _into(self, package: str, sdlc: Any, writer: Any, call: Any, project: str | None = None) -> Any:
         """A model action into the page's project (this user's model home, unless ``sdlc`` and ``writer`` say otherwise):
-        the page's own, or one made named after the page in DataCube's group (page-model.ts ``pageProject``), the
-        page's from the moment it is made."""
+        the page's own, or one made as DataCube makes a page's (``pageModelNames``: in its group, named after the page,
+        or ``project``), the page's from the moment it is made."""
         from . import model as models
         ref = self._doc.get('model')
-        project = ref['project'] if ref else models.NewProject(self.name, 'datacube',
-                                                               'The classes of a DataCube page (Create a Class…)')
-        workspace = ref['workspace'] if ref else 'datacube'
-        package = ref['package'] if ref else package
+        if ref:
+            at = (ref['project'], ref['workspace'], ref['package'])
+        else:
+            names = self._names()
+            made_project = names['project']
+            at = (models.NewProject(project or made_project['name'], made_project['group'], made_project['description']),
+                  names['workspace'], package)
 
         def made(project_id: str) -> None:
-            self._doc['model'] = {'project': project_id, 'workspace': 'datacube', 'package': package, 'tables': {}}
+            self._doc['model'] = {'project': project_id, 'workspace': at[1], 'package': at[2], 'tables': {}}
             self._changed()
         return call(sdlc if sdlc is not None else models.local_sdlc(),
-                    writer if writer is not None else models.local_writer(), (project, workspace, package), made)
+                    writer if writer is not None else models.local_writer(), at, made)
 
     def _keep(self, cube: str, table: str, cls: str | None) -> None:
         """The page's model now keeps ``table`` and ``cls`` for the grid ``cube`` (page-model.ts ``keepTable``,
@@ -911,60 +920,77 @@ class Page:
         return next((x['association'] for x in made.answer.get('associations', [])), name or 'the association')
 
     def _facts(self, sdlc: Any, writer: Any, at: Any, ends: list[dict[str, Any]]) -> None:
-        """Each end that says neither how many nor whether its key is unique given the fact, as the window presets it:
-        for a class one of this page's grids was made, whether the column its key reads is unique over the grid's rows
-        (the writer says which column: its answer's ``joinable``). Another class's end is left for the writer to refuse
-        in words."""
+        """Each end that says neither how many nor whether its key is unique given the fact, as Create an Association…
+        presets it (model-actions.ts ``unique``): the class's key read through its relation function over the project
+        (the writer's ``joinable`` names the function and the column), DataCube's query for a value held twice
+        (headless ``classDuplicate``) planned over the project's model through its place's runtime and run on Python's
+        database -- no row, and the key is unique. An end whose facts cannot be read (the project's tables not Python's)
+        is left for the writer to refuse in words, as the window leaves it for the person."""
         from . import model as models
         open_ends = [e for e in ends if 'unique' not in e and 'multiplicity' not in e]
         if not open_ends:
             return
         text, _ = models.project_state(sdlc, at[0], at[1])
         joinable = {j['class']: j for j in writer.create_association(text, at[2], None).get('joinable', [])}
-        by_class = {cls: cube for cube, cls in (self._doc.get('model') or {}).get('classes', {}).items()}
+        frames, headless = self._session.frames, self._session.headless()
         for end in open_ends:
-            column = next((k.get('column') for k in joinable.get(end['class'], {}).get('keys', []) if k['name'] == end['on']),
-                          None)
-            grid = next((g for g in self.grids if g._view['cube'] == by_class.get(end['class'])), None)
-            if column is not None and grid is not None:
-                end['unique'] = grid._unique(column)
+            j = joinable.get(end['class'], {})
+            column = next((k.get('column') for k in j.get('keys', []) if k['name'] == end['on']), None)
+            if j.get('function') is None or column is None:
+                continue
+            query, runtime = headless.call('classDuplicate', j['function'], column), f'{at[2]}::runtime::Python'
+            # the session's planner, as the page's own grids are planned: Python's within the frames' hold, a server's
+            # answer awaited holding none of it
+            from .engine import NativePlanner
+            planner = frames.planner if frames.planner is not None else NativePlanner()
+            plan = None
+            with frames.serving():
+                held = frames.model_for(text)
+                if held is not None and planner.plane == 'local':
+                    plan = planner.read(planner.plan(query, held, runtime))
+            if held is None:
+                continue
+            if plan is None:
+                plan = planner.read(planner.plan(query, held, runtime))
+            with frames.serving():
+                end['unique'] = frames.run(plan).num_rows == 0
 
     def create_data_space(self, name: str | None = None, *, title: str | None = None, description: str | None = None,
-                          associations: Sequence[Any] = (), sdlc: Any = None, writer: Any = None) -> str:
+                          associations: Sequence[Any] = (), project: str | None = None, sdlc: Any = None,
+                          writer: Any = None) -> str:
         """The whole page in one go, as DataCube's Create a Data Space… makes it: each grid not yet a class made one
-        (named as the window suggests), the associations given (as ``create_association`` takes them: pairs of ends,
-        or ``{'name', 'ends'}``) made, and a data space over the page's classes -- one revision, the project made with
-        it when the page has none. Answers the data space's path."""
+        (named as the window suggests; a grid whose rows cannot be one left out, as the window leaves it), the
+        associations given (as ``create_association`` takes them: pairs of ends, or ``{'name', 'ends'}``) made, and a
+        data space over the page's classes -- one revision, the project made with it when the page has none (named
+        ``project``, else after the page). ``name``: the data space's (suggested from the page's name). Answers the data
+        space's path."""
         from . import model as models
         ref = self._doc.get('model')
+        names = self._names()
         taken = (ref or {}).get('classes', {})
-        classes, kept, names = [], [], None
+        classes, kept = [], []
         for grid in self.grids:
             cube = grid._view['cube']
             if cube in taken:
                 continue
             try:
                 cls, asked = grid._class()
-            except Exception as refused:
-                # a grid whose rows cannot be a class (its source no table of its own): left out, as the window leaves it
-                if 'not a table of its own' not in str(refused):
-                    raise
+            except ValueError:
                 continue
-            names = names or asked['names']
             classes.append(cls)
             kept.append((cube, asked['table']['table'], cls['name']))
-        package = ref['package'] if ref else (names['package'] if names else 'datacube')
-        name = name or (names['dataSpace'] if names else None)
-        if name is None:
-            raise ValueError("name the data space (page.create_data_space('Name')): the page has no grid to suggest one")
-        data_space = {'name': name, **({'title': title} if title else {}),
+        package = ref['package'] if ref else names['package']
+        data_space = {'name': name or names['dataSpace'], **({'title': title} if title else {}),
                       **({'description': description} if description else {})}
         joined = [x if isinstance(x, Mapping) else {'ends': [_end(x[0]), _end(x[1])]} for x in associations]
         made = self._into(package, sdlc, writer, lambda s, w, at, m: models.create_data_space(
-            s, w, *at, data_space, classes, [{**j, 'ends': [_end(e) for e in j['ends']]} for j in joined], made=m))
+            s, w, *at, data_space, classes, [{**j, 'ends': [_end(e) for e in j['ends']]} for j in joined], made=m),
+            project)
+        made_classes = [c['class'] for c in made.answer.get('classes', [])]
         for cube, table, class_name in kept:
-            self._keep(cube, table, f'{package}::domain::{class_name}')
-        return made.answer.get('dataSpace') or name
+            path = next((c for c in made_classes if c.rsplit('::', 1)[-1] == class_name), None)
+            self._keep(cube, table, path)
+        return made.answer.get('dataSpace') or data_space['name']
 
     @property
     def name(self) -> str:
@@ -1320,6 +1346,7 @@ def _check(doc: Any) -> None:
         placed += _tiles(s['layout'])
     need(sorted(placed) == sorted(v['id'] for v in views), 'every view has its place, on one sheet')
 
+
 def _column_choices(columns: Mapping[str, Any]) -> dict[str, dict[str, str]]:
     """A person's choices for the class's columns, as the window gives them (model-changes' ``ColumnChoice``)."""
     out: dict[str, dict[str, str]] = {}
@@ -1333,15 +1360,62 @@ def _column_choices(columns: Mapping[str, Any]) -> dict[str, dict[str, str]]:
 
 
 def _sample_rows(rows: Any) -> dict[str, Any]:
-    """A table's first rows as the writer's sample takes them: its columns in order, each value as JSON carries it (an
-    integer past 2**53, a decimal, a date or a time as its text, as the window sends a bigint)."""
-    def value(v: Any) -> Any:
-        if v is None or isinstance(v, (bool, str, float)):
-            return v
-        if isinstance(v, int):
-            return v if abs(v) < 2 ** 53 else str(v)
-        return v.isoformat() if hasattr(v, 'isoformat') else str(v)
-    return {'columns': list(rows.column_names), 'rows': [[value(v) for v in row.values()] for row in rows.to_pylist()]}
+    """A table's first rows as the writer's sample takes them, each value written as the window writes it (the writer
+    copies a number's text and a string into the sample as they come): an integer past 2**53, a decimal (its digits at
+    its own scale), a date, a time and a timestamp (to the microsecond, its trailing zeros dropped, no zone: as
+    engine-client's values.ts writes them) as text; a double as JavaScript writes the number; anything nested as its
+    JSON."""
+    return {'columns': list(rows.column_names),
+            'rows': [[_sample_value(v) for v in row.values()] for row in rows.to_pylist()]}
+
+
+def _sample_value(v: Any) -> Any:
+    if v is None or isinstance(v, (bool, str)):
+        return v
+    if isinstance(v, int):
+        return v if abs(v) < 2 ** 53 else str(v)
+    if isinstance(v, float):
+        return _js_number(v)
+    if isinstance(v, Decimal):
+        return format(v, 'f')
+    if isinstance(v, datetime.datetime):
+        if v.tzinfo is not None:
+            v = v.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+        return f'{v.date().isoformat()}T{_time_text(v.time())}'
+    if isinstance(v, datetime.date):
+        return v.isoformat()
+    if isinstance(v, datetime.time):
+        return _time_text(v)
+    if isinstance(v, (dict, list, tuple)):
+        return _json.dumps(v)
+    return str(v)
+
+
+def _time_text(t: datetime.time) -> str:
+    """A time of day as values.ts ``timeText`` writes it: ``HH:MM:SS``, its fraction's trailing zeros dropped."""
+    fraction = f'{t.microsecond:06d}'.rstrip('0')
+    return f'{t.hour:02d}:{t.minute:02d}:{t.second:02d}' + (f'.{fraction}' if fraction else '')
+
+
+def _js_number(v: float) -> Any:
+    """A double as JavaScript writes it (Number.prototype.toString, which JSON.stringify uses): the shortest digits
+    that read back as it -- Python's own -- laid out in fixed notation from 1e-7 up to 1e21, so ``1.0`` is ``1``. A
+    whole number answers as an int and any other as a Decimal of that text, both of which JSON writes as they are;
+    beyond that range, and for what JSON cannot carry, the float itself."""
+    if not math.isfinite(v) or v == 0:
+        return 0 if v == 0 else v
+    sign, digits, exponent = Decimal(repr(v)).normalize().as_tuple()
+    k, n = len(digits), exponent + len(digits)
+    text = ''.join(map(str, digits))
+    if k <= n <= 21:
+        return -int(text + '0' * (n - k)) if sign else int(text + '0' * (n - k))
+    if 0 < n <= 21:
+        fixed = f'{text[:n]}.{text[n:]}'
+    elif -6 < n <= 0:
+        fixed = f'0.{"0" * -n}{text}'
+    else:
+        return v
+    return Decimal(('-' if sign else '') + fixed)
 
 
 def _end(end: Any) -> dict[str, Any]:

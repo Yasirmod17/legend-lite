@@ -4,10 +4,11 @@ parameters, the same backends; model-changes/test/cases holds the two alike). Ea
 workspace when they are not yet, reads the project's files as one model text, asks legend-lite's model writer for the
 files, and saves them as one revision, made again once over a newer one.
 
-The SDLC is any SDLC: this user's model home in this process (``local_sdlc``: the native library's, the rules the
-page's in-page SDLC and sdlc-server run), sdlc-server, or a real legend-sdlc (``server_sdlc``). The writer is
-legend-lite's model writer in this process (``local_writer``: the native library) or a legend-lite server's
-(``server_writer``). A server's sign-in is not here yet (the program's G10)."""
+The SDLC is one with lite's text routes: this user's model home in this process (``local_sdlc``: the native library's,
+the rules the page's in-page SDLC and sdlc-server run), or sdlc-server (``server_sdlc``); a real legend-sdlc answers
+neither text route, and is owed over its entities (B4). The writer is legend-lite's model writer in this process
+(``local_writer``: the native library) or a legend-lite server's (``server_writer``). A server's sign-in is not here yet
+(the program's G10)."""
 
 from __future__ import annotations
 
@@ -94,7 +95,8 @@ class Sdlc:
     def pure(self, project: str, workspace: str, revision: str) -> list[dict[str, Any]]:
         return self._json('GET', f'{_base(project, workspace, revision)}/pure')
 
-    def perform_pure_changes(self, project: str, workspace: str, command: dict[str, Any]) -> dict[str, Any]:
+    def perform_pure_changes(self, project: str, workspace: str, command: dict[str, Any]) -> dict[str, Any] | None:
+        """The new revision, or None when the save changed nothing (204: every change the bytes already there)."""
         return self._json('POST', f'{_base(project, workspace)}/pureChanges', command)
 
 
@@ -118,8 +120,8 @@ def home_call(folder: Path, kind: str, method: str, path: str, body: str | None)
 def local_sdlc(folder: str | Path | None = None) -> Sdlc:
     """This user's model home, in this process: the native library's SDLC over the git repository in ``folder`` (this
     user's ``home()/projects`` when not given), under the lock every Python process takes on it."""
-    from ._home import home
-    where = Path(folder) if folder is not None else home() / 'projects'
+    from ._home import model_home_folder
+    where = Path(folder) if folder is not None else model_home_folder()
     return Sdlc(lambda method, path, body: home_call(where, 'sdlc', method, path, body))
 
 
@@ -134,26 +136,27 @@ def _http(url: str, method: str, body: str | None) -> tuple[int, str]:
 
 
 def server_sdlc(api: str) -> Sdlc:
-    """An SDLC server at its API's root (``http://host:port/sdlc/api``, or a real legend-sdlc's)."""
+    """An SDLC server with lite's text routes at its API's root (sdlc-server's ``http://host:port/sdlc/api``)."""
     root = api.rstrip('/')
     return Sdlc(lambda method, path, body: _http(root + path, method, body))
 
 
 class ModelWriter(Protocol):
     """legend-lite's model writer: its three routes, wherever they are answered (model-changes' ``ModelWriter``). Each
-    is one call, atomic, and writes nothing itself: it answers the files."""
+    is one call, atomic, and writes nothing itself: it answers the files. ``model``: the project's files as one model
+    text (``project_text``), which the route reads beside what it makes."""
 
-    def create_class(self, project: str, package: str, cls: dict[str, Any]) -> dict[str, Any]: ...
+    def create_class(self, model: str, package: str, cls: dict[str, Any]) -> dict[str, Any]: ...
 
-    def create_association(self, project: str, package: str, association: dict[str, Any] | None,
+    def create_association(self, model: str, package: str, association: dict[str, Any] | None,
                            classes: Sequence[dict[str, Any]] = ()) -> dict[str, Any]: ...
 
-    def create_data_space(self, project: str, package: str, data_space: dict[str, Any],
+    def create_data_space(self, model: str, package: str, data_space: dict[str, Any],
                           classes: Sequence[dict[str, Any]] = (),
                           associations: Sequence[dict[str, Any]] = ()) -> dict[str, Any]: ...
 
 
-def model_request_body(project: str, package: str, parts: dict[str, Any]) -> str:
+def model_request_body(model: str, package: str, parts: dict[str, Any]) -> str:
     """A route's body, each class's relation written by the protocol's own rule (its numbers keep their digits) and the
     rest as written, its runtime in its ``where`` (model-changes' ``modelRequestBody``, byte for byte)."""
     def cls(c: dict[str, Any]) -> str:
@@ -161,7 +164,8 @@ def model_request_body(project: str, package: str, parts: dict[str, Any]) -> str
         fields = _json.dumps({'source': {'_type': 'text', 'code': c['source']['model']}, **rest,
                               'where': {**c['where'], 'runtime': c['source']['runtime']}})
         return '{"lambda":' + _json.protocol(c['query']) + ',' + fields[1:]
-    fields = [f'"project":{_json.dumps({"_type": "text", "code": project})}', f'"package":{_json.dumps(package)}']
+    # the route's ``project`` field is the project's model text
+    fields = [f'"project":{_json.dumps({"_type": "text", "code": model})}', f'"package":{_json.dumps(package)}']
     if 'class' in parts:
         fields.append(f'"class":{cls(parts["class"])}')
     if 'classes' in parts:
@@ -175,19 +179,19 @@ def model_request_body(project: str, package: str, parts: dict[str, Any]) -> str
     return '{' + ','.join(fields) + '}'
 
 
-def writer_body(route: str, project: str, package: str, *args: Any) -> str:
+def writer_body(route: str, model: str, package: str, *args: Any) -> str:
     """Each route's body as every writer sends it (model-changes' ``writerBodies``): a route's lists always there, empty
     when there is nothing in them."""
     if route == 'createClass':
-        return model_request_body(project, package, {'class': args[0]})
+        return model_request_body(model, package, {'class': args[0]})
     if route == 'createAssociation':
         association, classes = args[0], list(args[1]) if len(args) > 1 else []
-        return model_request_body(project, package, {'classes': classes} if association is None
+        return model_request_body(model, package, {'classes': classes} if association is None
                                   else {'classes': classes, 'association': association})
     if route == 'createDataSpace':
         classes = list(args[1]) if len(args) > 1 else []
         associations = list(args[2]) if len(args) > 2 else []
-        return model_request_body(project, package, {'classes': classes, 'associations': associations,
+        return model_request_body(model, package, {'classes': classes, 'associations': associations,
                                                      'data_space': args[0]})
     raise ValueError(f'the model writer has no route {route!r}')
 
@@ -201,18 +205,18 @@ class _Writer:
     def _write(self, route: str, body: str) -> dict[str, Any]:
         return _json.loads(self._post(route, body))
 
-    def create_class(self, project: str, package: str, cls: dict[str, Any]) -> dict[str, Any]:
-        return self._write('createClass', writer_body('createClass', project, package, cls))
+    def create_class(self, model: str, package: str, cls: dict[str, Any]) -> dict[str, Any]:
+        return self._write('createClass', writer_body('createClass', model, package, cls))
 
-    def create_association(self, project: str, package: str, association: dict[str, Any] | None,
+    def create_association(self, model: str, package: str, association: dict[str, Any] | None,
                            classes: Sequence[dict[str, Any]] = ()) -> dict[str, Any]:
-        return self._write('createAssociation', writer_body('createAssociation', project, package, association, classes))
+        return self._write('createAssociation', writer_body('createAssociation', model, package, association, classes))
 
-    def create_data_space(self, project: str, package: str, data_space: dict[str, Any],
+    def create_data_space(self, model: str, package: str, data_space: dict[str, Any],
                           classes: Sequence[dict[str, Any]] = (),
                           associations: Sequence[dict[str, Any]] = ()) -> dict[str, Any]:
         return self._write('createDataSpace',
-                           writer_body('createDataSpace', project, package, data_space, classes, associations))
+                           writer_body('createDataSpace', model, package, data_space, classes, associations))
 
 
 def local_writer() -> ModelWriter:
@@ -231,7 +235,7 @@ def server_writer(url: str) -> ModelWriter:
 
     def post(route: str, body: str) -> str:
         status, text = _http(f'{root}/api/lite/v1/model/{route}', 'POST', body)
-        if status != 200:
+        if not 200 <= status < 300:
             raise compiler.LegendError(f"legend-lite's {route} at {root}: {_message(text)}", str(status))
         return text
     return _Writer(post)
@@ -300,8 +304,10 @@ def make_project(sdlc: Sdlc, made: NewProject) -> str:
 
 
 def ensure_workspace(sdlc: Sdlc, project: str, workspace: str) -> None:
-    """The workspace, there: made from the project line when it is not -- another ask having made it meanwhile (409) is
-    its being there. A project that is not there is said, by name."""
+    """The workspace, there: made from the project line when it is not. Its making refused, the workspace is read
+    again -- another ask may have made it meanwhile, which lite's SDLC answers with a 500 ("Branch already exists") once
+    the workspace has commits -- and the refusal said only when it is still not there (``ensureWorkspace``). A project
+    that is not there is said, by name."""
     try:
         sdlc.workspace(project, workspace)
         return
@@ -311,11 +317,12 @@ def ensure_workspace(sdlc: Sdlc, project: str, workspace: str) -> None:
     try:
         sdlc.create_workspace(project, workspace)
     except SdlcError as e:
-        if e.status == 409:
-            return
         if e.status == 404:
             raise ProjectGone(project) from None
-        raise
+        try:
+            sdlc.workspace(project, workspace)
+        except SdlcError:
+            raise e from None
 
 
 def project_state(sdlc: Sdlc, project: str, workspace: str) -> tuple[str, str]:
@@ -327,9 +334,10 @@ def project_state(sdlc: Sdlc, project: str, workspace: str) -> tuple[str, str]:
 
 def save_fresh(sdlc: Sdlc, project: str, workspace: str, message: str,
                make: Callable[[str], dict[str, Any]]) -> tuple[dict[str, Any], str]:
-    """MAKE AND SAVE, ONCE AGAIN WHEN STALE (``saveFresh``): ``make`` the changes against the project as it is, saved over
-    that revision as one; refused as stale (409), read again and made again, once -- a second refusal is said. Answers
-    what was made and the revision it was saved as."""
+    """MAKE AND SAVE, ONCE AGAIN WHEN STALE (``saveFresh``): ``make`` the changes against the project's model text as it
+    is, saved over that revision as one; refused as stale (409), read again and made again, once -- a second refusal
+    is said. Answers what was made and the revision it was saved as: the one read, when the save changed nothing (no
+    changes, or every one the bytes already there: the SDLC's 204)."""
     for attempt in range(2):
         text, revision = project_state(sdlc, project, workspace)
         made = make(text)
@@ -338,7 +346,7 @@ def save_fresh(sdlc: Sdlc, project: str, workspace: str, message: str,
         try:
             saved = sdlc.perform_pure_changes(project, workspace,
                                               {'message': message, 'changes': made['changes'], 'revisionId': revision})
-            return made, saved['id']
+            return made, saved['id'] if saved is not None else revision
         except SdlcError as e:
             if e.status != 409 or attempt > 0:
                 raise

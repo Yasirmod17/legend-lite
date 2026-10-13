@@ -21,7 +21,7 @@ import { columnFormats, heatmapColour, heatmapSetting, measureHeatmaps, renderEx
 import { FormatterCache } from '../format.ts';
 import { LitePlanner } from '../lite-planner.ts';
 import { suggestedClassName, suggestedDataSpaceName, suggestedPackage } from '../model-names.ts';
-import { classLambda, duplicateLambda, sampleLambda, storeTableOf } from '../query.ts';
+import { classLambda, sampleLambda, storeTableOf } from '../query.ts';
 import { shownColumns } from '../shown-columns.ts';
 import { sourceColumns } from '../source-columns.ts';
 import { hostCalls, hostDatabase, hostWorker } from './host.ts';
@@ -120,13 +120,14 @@ export async function gridRelation(spec: GridSpec): Promise<string> {
  * window offers (`named`: the grid's source's and the page's) -- DataCube's own
  * semantics, which Python's `grid.create_class()` asks of DataCube's code before it calls the generic library
  * (legend_lite/model.py; docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B4). JSON, each query as the protocol writes it; a
- * source that is no table of its own refused in words.
+ * source that is no table of its own refused in words (`{"refused"}`).
  */
 export async function gridClass(spec: GridSpec, named: { readonly source: string; readonly page: string }):
   Promise<string> {
   return using(spec, async ({ planner, state }) => {
     const table = storeTableOf(state.snapshot.source.query);
-    if (!table) throw new Error("its source is not a table of its own: a class is made of a table's rows");
+    // refused in words, as the window leaves such a grid out (model-actions.ts pageGrids)
+    if (!table) return JSON.stringify({ refused: "its source is not a table of its own: a class is made of a table's rows" });
     // the names the window offers before a person changes them (model-names.ts)
     const names = {
       className: suggestedClassName(named.source), package: suggestedPackage(named.page),
@@ -137,14 +138,6 @@ export async function gridClass(spec: GridSpec, named: { readonly source: string
   });
 }
 
-/**
- * The query that finds a column's first value held twice over a grid's rows at their finest level (query.ts
- * duplicateLambda): no row, and the column is unique over them -- the fact an association's how-many is preset from, as
- * Create an Association… reads it of a class still a grid's (model-actions.ts). JSON, as the protocol writes it.
- */
-export async function gridDuplicate(spec: GridSpec, column: string): Promise<string> {
-  return using(spec, async ({ state }) => toJson(duplicateLambda(classLambda(state.snapshot).body[0]!, column)));
-}
 
 /**
  * The grid exported, as its Export menu makes the file (export-render.ts, the screen's own core): what it shows, its
