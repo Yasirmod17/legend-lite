@@ -321,6 +321,39 @@ class SqlToPureTest {
     }
 
     @Test
+    void theLongTailOfTextAndNumbersIsPostgresDefinitionStepByStep() {
+        // translate: each character replaced before any that becomes it, so that no replacement is replaced again
+        assertEquals("#>{s::DB.T}#->extend(~[t:r|$r.dept->replace('c', 'd')->replace('b', 'c')->replace('a', 'b')])"
+                + "->select(~[t])", pure("select translate(dept, 'abc', 'bcd') as t from tb('s::DB.T')"));
+        assertEquals("translate(...) whose characters replace one another in a cycle is not supported yet",
+                refusal("select translate(dept, 'ab', 'ba') as t from tb('s::DB.T')").getMessage());
+        // concat_ws: each value present after a separator, the first separator taken off
+        assertEquals("#>{s::DB.T}#->extend(~[c:r|substring(if($r.firstName->isEmpty(), |'', |', ' + $r.firstName"
+                + "->toOne()) + (', ' + $r.dept), length(', ') + 1)])->select(~[c])",
+                pure("select concat_ws(', ', firstName, dept) as c from tb('s::DB.T')"));
+        // overlay: substring(s, 1, n - 1) || r || substring(s, n + m)
+        assertEquals("#>{s::DB.T}#->extend(~[o:r|$r.dept->substring(1, 1) + 'XX' + $r.dept->substring(5)])"
+                + "->select(~[o])", pure("select overlay(dept placing 'XX' from 2 for 3) as o from tb('s::DB.T')"));
+        assertEquals("unrecognized format() type specifier \"d\"",
+                refusal("select format('%d', ID) as f from tb('s::DB.T')").getMessage());
+        // width_bucket of an integer with integer bounds is Postgres's double one; with a numeric bound, the numeric
+        // one, its floor exact from the remainder
+        assertTrue(pure("select width_bucket(ID, 0, 10, 2) as w from tb('s::DB.T')").contains(
+                "floor(toFloat(2) * (($r.ID->toFloat() - toFloat(0D)) / (toFloat(10D) - toFloat(0D))))"));
+        assertTrue(pure("select width_bucket(ID, 0.0, 10, 2) as w from tb('s::DB.T')").contains(
+                "round(((($r.ID - 0.0D) * 2) - rem(($r.ID - 0.0D) * 2, 10D - 0.0D)) / (10D - 0.0D)) + 1"));
+        // a numeric's power is exact for an integer base only (Postgres rounds others to about 16 digits)
+        assertEquals("#>{s::DB.T}#->extend(~[p:r|$r.ID->toDecimal() * $r.ID->toDecimal() * $r.ID->toDecimal()])"
+                + "->select(~[p])", pure("select power(ID::numeric, 3) as p from tb('s::DB.T')"));
+        assertEquals("power(...) of numeric values other than an integer to a whole power from 0 to 16 is not"
+                + " supported yet (Postgres rounds a numeric's power to about 16 significant digits)",
+                refusal("select power(2.5, 2) as p from tb('s::DB.T')").getMessage());
+        // the remainder of numerics is exact: Pure's rem
+        assertEquals("#>{s::DB.T}#->extend(~[m:r|$r.ID->rem(2.5D)])->select(~[m])",
+                pure("select mod(ID, 2.5) as m from tb('s::DB.T')"));
+    }
+
+    @Test
     void dateArithmeticIsPostgresDaysIntervalsAndTruncation() {
         List<Col> dated = List.of(new Col("d", "StrictDate", false), new Col("ts", "DateTime", false));
         // months, then days, then seconds, as Postgres adds an interval; a date is a timestamp at midnight first
@@ -393,9 +426,13 @@ class SqlToPureTest {
                 pure("select ID ^ 2 as p from tb('s::DB.T')"));
         assertEquals("#>{s::DB.T}#->extend(~[p:r|if($r.age->isEmpty(), |[], |$r.age->toOne()->pow(2))])"
                 + "->select(~[p])", pure("select age ^ 2 as p from tb('s::DB.T')"));
-        // Postgres computes numeric ^ exactly; pow is a Float
-        assertEquals("^ on numeric values (exact in Postgres) is not supported yet",
+        // Postgres computes numeric ^ exactly (rounded to about 16 digits); pow is a Float. An integer base to a
+        // whole constant is exact: a product
+        assertEquals("^ of numeric values other than an integer to a whole power from 0 to 16 is not supported yet"
+                + " (Postgres rounds a numeric's power to about 16 significant digits)",
                 refusal("select 2.5 ^ ID from tb('s::DB.T')").getMessage());
+        assertEquals("#>{s::DB.T}#->extend(~[p:r|$r.ID->toDecimal() * $r.ID->toDecimal()])->select(~[p])",
+                pure("select ID ^ 2.0 as p from tb('s::DB.T')"));
     }
 
     @Test
