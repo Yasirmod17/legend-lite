@@ -9377,3 +9377,35 @@ The runbook is `docs/ONE_PLATFORM_PROGRAM_2026_10_12.md` (§5 G, items 4 and 12)
    - An audit: its S1, `//site:verify_test` unguarded, was fixed by `hermetic`.
 4. **For the dialect program:** `duckdb-tab.ts`'s two `SET ..._extension_repository` statements are TypeScript SQL
    for its Phase 7 (D5) list, as its IN_FLIGHT section is told.
+
+## 2026-10-13 — C5 and D5: a project's Data rows in a database of its own on every host; no SQL spelled by the tab or Python's host (the DataCube + Python line)
+
+The runbook is `docs/ONE_PLATFORM_PROGRAM_2026_10_12.md` (C5, D5). It was built on branches
+`datacube/c5-project-data` and `datacube/d5-host-operations` (stacked), rebased onto main's head and pushed as one
+fast-forward to fbd216a3f, the code commit at its head, at the user's go ("well then merge it").
+- **CI:** branch run 38454642203 (a dispatch, every lane, every platform) on cbd8a3956: 50 jobs green, the summary job
+  skipped as on a dispatch; the pushed tree differs from it by one rewrapped comment and main's IN_FLIGHT. Main's own
+  run 38460744776 on fbd216a3f: all 51 jobs green. C5's own run before D5, 38445822104, green.
+- **Local:** `//gates:local`, `//gates:warehouse` and `//gates:parser_equivalence` on the reviews' fixes: 382 tests
+  passing, 2 skipped. The lane query is empty.
+
+1. **What it is:**
+   - **C5:** a project's `###Data` rows in a database of its own inside the host's own -- the tab's DuckDB, Python's,
+     legend-lite's server -- each version its own in-memory database (ATTACH), named by what it holds, kept for the
+     page's or the process's life; Studio's tables drop and make again their one workspace database when what fills
+     it changes. A saved query opens on every host over its project's own rows. PARK-33 and PARK-35 closed.
+   - **D5:** every statement the tab and Python's host spelled is a named operation (`sql/dialect/HostOperation.java`)
+     the planner answers by the database's type (`DuckDbHostOperations`; `PostgresHostOperations`, the count); the
+     demos' rows are their models' Data (`query/demo/models/trading-data.pure`); DataCube's sample trades are made as
+     Arrow data. The guard: `//tools/guards:host_sql_test` and `//python:host_sql_test` (one rule,
+     `tools/guards/host_sql.txt`).
+2. **What proves it:** `HostOperationsTest` and the embedded-Postgres `//core:host_operations_postgres_test`;
+   `ProjectRowsTest`; engine-client's `model_data_test` (two versions at once, each its own rows); the guard, red on the
+   code before D5 in each language; `//datacube:saved_queries_test` (the trading rows' three copies equal, row for row);
+   `//datacube:sample_trades_test` (the 200,000 trades as the old statement made them); `//datacube:python_engine_test`
+   (Studio, Query and DataCube on Python over a project's own rows); every app's browser tests.
+3. **Reviews:** the Compiler Rewrite line (core, the BUILD files, `tools/guards`), Plan Gen (the boundary's
+   `projectData` and `hostOperations`), the Studio line (engine-client, Query, Studio), and an audit for each; every
+   finding taken.
+4. **Next:** D5b (the user's ruling: Snap's queries are Pure) -- the three operation fields that still carried the
+   planner's SQL back from a host go; see IN_FLIGHT.

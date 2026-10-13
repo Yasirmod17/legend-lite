@@ -250,7 +250,11 @@ with the compiler's plan/execution split**, in this order:
    planner-protocol kind `projectData`), `native/` (`lite_project_data`), engine-client, Query, Studio, DataCube,
    `python/`. Reviews: the Compiler Rewrite line (core), Plan Gen (the boundary), the Studio line (engine-client, Query,
    Studio), an audit. Then D5 (no SQL text in TypeScript or Python's host, claimed in the dialect program's section),
-   stacked on it -- **announced 2026-10-13 there (item 3)**; then F. **Step 2's second landing announced 2026-10-11 (rule 5; branch `datacube-m3`; the design's §15.6a,
+   stacked on it -- **announced 2026-10-13 there (item 3)**. **C5 and D5 landed 2026-10-13 (fbd216a3f; branch run
+   38454642203, main's 38460744776, green; GATES "C5 and D5")** -- files beyond the announced lists: `gates/BUILD.bazel`
+   (the lanes), `tools/guards/BUILD.bazel`, `python/BUILD.bazel`, `engine-client/BUILD.bazel`, `datacube/BUILD.bazel`
+   (the projects' copy, the trading copies, the new tests), `query/BUILD.bazel`, `datacube/test_imports.bzl`. Then D5b
+   (the dialect program's section, item 3); then F. **Step 2's second landing announced 2026-10-11 (rule 5; branch `datacube-m3`; the design's §15.6a,
    agreed with the user): a cross-area edit in `core/`** -- the route renamed and two more beside it,
    `/api/lite/v1/model/createClass` (was `/api/lite/v1/relational/promoteRelationToModel`), `createAssociation`,
    `createDataSpace`, one atomic writer under them. Core files: `core/src/main/java/com/legend/server/`
@@ -1156,7 +1160,22 @@ pause for the user's review after Phase 1.
      `legend_lite` module, each string literal that begins a statement refused, three sites kept with their reasons --
      not a statement type, which would run through every engine and test that runs SQL (the runbook's D5). Reviews: the
      Compiler Rewrite line (core, the BUILD files, `tools/guards/`), Plan Gen (the boundary), the Studio line
-     (engine-client, Query, Studio), an audit.
+     (engine-client, Query, Studio), an audit. **Landed 2026-10-13 (fbd216a3f; GATES "C5 and D5").**
+
+     **D5b announced 2026-10-13 (branch `datacube/d5b-pure-snap`, on main's fbd216a3f; the one-platform runbook's D5b;
+     the user's ruling: Snap's queries are Pure, not SQL).** D5 left three operation fields carrying the planner's own SQL
+     back from a host -- a source query, a copy's select list, a conversion; they go, and no host passes SQL into a
+     planner question. Core files: `sql/dialect/HostOperations.java` gains `countOf` and `copyOf` (Java's, over a
+     plan's SQL) with the `CopyFrom` it reads; `DuckDbHostOperations.java` and `PostgresHostOperations.java` write them
+     (Postgres the count only); `HostOperation.java` loses `Source.Query`, `MakeRelation`'s `selectList` and
+     `replacing`, and `Conversion`; `CatalogModel.java` loses `Database.copySelectList`; tests `HostOperationsTest`
+     (`noOperationHasAFieldThatHoldsSql`), `CatalogModelTest`, `HostOperationsPostgresTest`. Beyond core: `wasm/`
+     (`Boundary.snapHeld`, the planner-protocol kind `snap`; the table model's `rebuild` in place of its `conversions`
+     and `copySelectList`; `HostOperationsJson` refusing a field an operation does not read; the test-data answer's
+     dead `table`, `drop` and column `sql`), `native/` (`lite_snap_held`), engine-client (`snap.ts`), DataCube,
+     Query (its warehouse fixture loaded by its test, as the owner), `python/`. Not touched: `DuckDb.java`,
+     `SqlDialect.java`, `exec/Sessions.java`, `server/`. Reviews: the Compiler Rewrite line, Plan Gen (the `snap`
+     question, the table model's answer), the Studio line, an audit.
 
 ## Rules between sessions
 
