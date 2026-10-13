@@ -38,8 +38,9 @@ public final class Compiler {
     private Compiler() {
     }
 
-    /** A new C string holding {@code s} (UTF-8), the caller's to free with {@code lite_free}. */
-    private static CCharPointer answer(String s) {
+    /** A new C string holding {@code s} (UTF-8), the caller's to free with {@code lite_free}. Python's model home's
+     *  answers too ({@link ModelHome}). */
+    static CCharPointer answer(String s) {
         byte[] b = s.getBytes(StandardCharsets.UTF_8);
         CCharPointer p = UnmanagedMemory.malloc(WordFactory.unsigned(b.length + 1));
         for (int i = 0; i < b.length; i++) p.write(i, b[i]);
@@ -49,7 +50,7 @@ public final class Compiler {
     }
 
     /** A C string as UTF-8 -- named, never the platform's default charset. */
-    private static String text(CCharPointer p) {
+    static String text(CCharPointer p) {
         int n = 0;
         while (p.read(n) != 0) n++;
         return CTypeConversion.toJavaString(p, WordFactory.unsigned(n), StandardCharsets.UTF_8);

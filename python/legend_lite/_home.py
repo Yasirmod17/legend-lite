@@ -11,7 +11,14 @@ them), as the browser's storage is the person's own.
 The saved pages are the browser's records, kept as files: the page's rules (who owns a page, its times, search) are
 DataCube's own, run in the page, as they are over the browser's IndexedDB (cube-store.ts's RuleStore). Python keeps
 the records -- all, one, put, remove -- one file each, written whole or not at all, under a lock several Python
-processes share (two notebooks at once)."""
+processes share (two notebooks at once).
+
+The page's own settings (the grids' defaults, kept between visits: the browser keeps them per site) are kept here too,
+one file (``home()/settings/datacube.json``): every notebook and run of this user's shows them, where the browser's
+storage would lose them with each run's new address (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B2).
+
+And the model home (B3): the SDLC's projects, a git repository (``home()/projects``) the native library's SDLC writes
+as the model home's server writes its own, each call under the folder's lock."""
 
 from __future__ import annotations
 
@@ -114,27 +121,66 @@ class SavedPages:
             raise ValueError('not a record')
         return record
 
-    @contextlib.contextmanager
-    def _locked(self) -> Iterator[None]:
-        """The folder held for one call, across every Python process of this user (a lock file beside the records). The
-        folder and the one it is in are made private to this user when this makes them."""
-        self.folder.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        self.folder.mkdir(mode=0o700, exist_ok=True)
-        with open(self.folder / '.lock', 'a+b') as lock:
-            if sys.platform == 'win32':
-                import msvcrt
+    def _locked(self) -> contextlib.AbstractContextManager[None]:
+        return locked(self.folder)
+
+
+class Settings:
+    """DataCube's own settings, as the page keeps them between visits (``home()/settings/datacube.json``): one JSON
+    object, the page's, never read here; written whole or not at all, under the folder's lock."""
+
+    def __init__(self, folder: Path | None = None) -> None:
+        self.folder = folder if folder is not None else home() / 'settings'
+
+    def read(self) -> dict[str, Any] | None:
+        """What the page last kept, or None: none kept, or a file that is not one (said on standard error)."""
+        path = self.folder / 'datacube.json'
+        with locked(self.folder):
+            if not path.is_file():
+                return None
+            try:
+                kept = json.loads(path.read_text(encoding='utf-8'))
+            except (ValueError, OSError) as unread:
+                print(f'legend-lite: {path} is not DataCube\'s settings ({unread}); they start afresh', file=sys.stderr)
+                return None
+        return kept if isinstance(kept, dict) else None
+
+    def write(self, values: dict[str, Any]) -> None:
+        """The page's settings, kept whole: to a file beside them, then moved over them."""
+        if not isinstance(values, dict):
+            raise ValueError("DataCube's settings are one object")
+        with locked(self.folder):
+            written = tempfile.NamedTemporaryFile('w', encoding='utf-8', dir=self.folder, suffix='.part', delete=False)
+            try:
+                with written:
+                    json.dump(values, written, ensure_ascii=False)
+                os.replace(written.name, self.folder / 'datacube.json')
+            except BaseException:
+                Path(written.name).unlink(missing_ok=True)
+                raise
+
+
+@contextlib.contextmanager
+def locked(folder: Path) -> Iterator[None]:
+    """A folder of this user's held for one call, across every Python process of this user (a lock file in it). The
+    folder and the one it is in are made private to this user when this makes them."""
+    folder.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    folder.mkdir(mode=0o700, exist_ok=True)
+    with open(folder / '.lock', 'a+b') as lock:
+        if sys.platform == 'win32':
+            import msvcrt
+            lock.seek(0)
+            # blocks until the other process lets go (retried by msvcrt every second, for ten tries, then raises)
+            msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
                 lock.seek(0)
-                # blocks until the other process lets go (retried by msvcrt every second, for ten tries, then raises)
-                msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
-                try:
-                    yield
-                finally:
-                    lock.seek(0)
-                    msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
-                fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-                try:
-                    yield
-                finally:
-                    fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)

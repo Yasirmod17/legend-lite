@@ -72,13 +72,30 @@ built here and reviewed by that line (Compiler Rewrite for Bazel, Plan Gen for t
    today need the tab's own planner (`services.engine.local`), skip a grid whose rows come from a runner (every Python
    grid since PlanAndRun) and name the place `Browser` in the code. Instead: a model writer and sample rows through
    PlanAndRun from every host, the place named by the host. Then sweep the app for every other host-only check.
-2. **Python's page keeps its origin.** A fixed port per user (or the host's own settings), so what the browser keeps
-   per origin survives a run.
+   - **Built 2026-10-12.** `ModelWriting` (services.ts) given by both hosts; a grid's rows read through its PlanAndRun
+     (`rowsOf`). The sweep found the tab-only `local` engine behind three things on Python's pages, each a program step:
+     the model actions (here), saved queries (B5), a warehouse (C3).
+2. **The page's settings kept by Python, not by its address.** The app already reads and writes its settings through
+   the browser service (`readSettings`, `writeSettings`); on Python they are Python's (`settings.json`, in
+   `ll.home()/settings`, under the folder's lock), so every notebook and run of the user's shows them. Chosen over a
+   fixed port: two notebooks at once would still have two addresses. Built 2026-10-12 (the warehouse address the tab
+   remembers waits for C3, where Python's pages get a warehouse).
 3. **The SDLC and the Depot in Python's native library,** the same Java over `GitStorage` in this user's folder
    (`ll.home()/projects`), a lock held across Python processes around each call. Python serves `/sdlc/api` and
-   `/depot/api`, headless calls them in-process. The SDLC's conformance suite (`sdlc-client/test/conformance.ts`)
+   `/depot/api`; headless calls them in-process (owed: with B4, Python's own model calls). The SDLC's conformance suite (`sdlc-client/test/conformance.ts`)
    runs against the server, the browser's module and Python. Python's pages get Create a Class… and the rest.
    - Build: `GitStorage` its own target, `sdlc-server`'s rules visible to `//native` (the Studio line's file).
+   - **Built 2026-10-12.**
+     - The native library's `ModelHome.java`: `lite_sdlc_handle` and `lite_depot_handle`, the rules over `GitStorage`
+       in `ll.home()/projects`. The library grew from 52.8 to 54.3 MB on macOS.
+     - Python serves both APIs under its token, a lock across processes around each call, DELETE for the model home
+       only.
+     - The SDLC's conformance suite, 28 tests, passes against Python (`//datacube:python_model_home_test`), as it does
+       against the page's module and the server.
+     - Python's pages get a model home service; no Studio link until E.
+     - Create a Class… runs on Python's page end to end (`python_engine_test`).
+     - A page-sent model is planned only when every table it declares is one Python serves (the user's option (c);
+       `Frames.model_for`).
 4. **Python's own `grid.create_class`, `page.create_association`, `page.create_data_space`,** back from
    `datacube/python-model-parked` on this home, as the cores of the same actions (one-app design §8). The page
    document records the revision a page is pinned to (owed: `PageModelRef`).
@@ -123,12 +140,18 @@ engine. Needs B3 and B5.
 2. Python's results streamed back in chunks.
 3. One DuckDB 1.5 release everywhere, the corpus tests' included (today 1.5.4 in the tab, 1.5.5 in Python).
 4. Text encodings: UTF-16, gzipped files, Latin-1 read as Latin-1.
-5. Iceberg files on Python (the user's call: the extension adds 13 to 22 MB per wheel).
+5. Iceberg files on Python. **Decided 2026-10-12 (the user): ship the extension** -- DuckDB 1.5.5's iceberg and the avro
+   it reads manifests with, pinned and carried in the wheel as httpfs is (9 to 18 MB and 2 to 8 MB gzipped per
+   platform) -- with the rule that every data file an Iceberg table's metadata names is remote too (R4). With G1 in the
+   next pull request, "Python parity".
 6. A connection per page on Python (optional: today one shared connection, a feature).
 7. A page plan's `sourceUrl('file:...')` refused (optional hardening; accepted as is, §15.4).
 8. The upload's SQL into the dialect (D9, with the dialect program).
 9. One result-typing table for the Java, TypeScript and Python executors (the Plan Gen line's phase 3).
 10. Sign-in where a store is shared (§2's last point).
+11. The model home's lock in the repository itself (the Studio line's review of B3): Python holds a lock across its
+    processes around each SDLC call, but `GitStorage` and `sdlc-server` take none. Before a second kind of process opens
+    the same repository (E: Studio from Python could), the lock moves into the repository.
 
 ### H. Publishing
 
