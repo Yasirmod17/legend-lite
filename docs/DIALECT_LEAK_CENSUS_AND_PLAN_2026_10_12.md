@@ -18,9 +18,10 @@ its way to main (listed in the evidence folder's README).**
    Since then the dialects have grown: ClickHouse's session table and Variant carriers, and Postgres' printf, maps,
    string distances and jsonb decoding. One new leak to file is the ClickHouse session URL (`sessionJdbcUrl`) in
    `testing/`, a P5/P6 item.
-4. **The user decides, before P1:** D1 to D8 (§6), and the base-renderer shape (P1b: the base keeps grammar only,
-   and every vocabulary point is abstract). The recommendations are written; none had been ratified when this was
-   written.
+4. **Decided by the user, 2026-10-13:** D1 to D8 and the base-renderer shape (P1b), each as §6 now records it.
+   Several changed from the recommendations first written here: D2 (a rule by the declared database), D5 (all client
+   SQL through the platform), D6 (only the orphan scripts and tools go), D8 (fold) and P1b (an exhaustive switch in
+   every concrete dialect, families included).
 
 **The proof for every pure move: a whole-lane SQL diff, not only the goldens.**
 - Run each lane with `--jvmopt=-Dlegend.diagnostics=dump-sql` before the move and after it, and copy each target's
@@ -296,7 +297,8 @@ Size: about 300 lines of tests.
   dialect classes, following the `CatalogRules` pattern. The record types stay shared.
   - The seven rows derived from `DUCKDB.fnNames()` are written out as explicit lists. A one-off check at the move
     asserts each expanded set equals the derived one.
-  - `MySql` keeps inheriting MariaDB's rows, as the family member it is.
+  - `MySql`'s rows are its own (P1b: every concrete dialect decides every point, families included); where they
+    equal MariaDB's they say so by delegating explicitly.
   - About 750 lines move; none are added.
 - **1b. A neutral base renderer.**
   - The ~25 DuckDB arms move into `DuckDb`.
@@ -305,13 +307,30 @@ Size: about 300 lines of tests.
   - Base arms throw `DialectCapability`, as `listCall` already does.
   - Every other dialect that inherits an arm today gets it explicitly or refuses it; see **decision D1**. First, an
     inventory of arm × dialect, read from the code and the PCT pins.
-  - **The proposed shape (2026-10-12, awaiting the user's yes): the base keeps grammar only, and every vocabulary
-    point becomes abstract.** No default spells any database's choice. javac then makes each dialect decide, which
-    turns D1 into compile errors rather than eleven judgment calls.
-    - Spellings shared by several databases become helpers that a dialect calls by name.
-    - Real families keep inheriting: MySql from MariaDb, H2Modern from H2, and the EngineStyle chain.
-    - The measurement behind this, and why fully separate dialects were not chosen, is in the evidence folder's
-      README ("The base-renderer question").
+  - **The shape (decided by the user, 2026-10-13): an exhaustive switch per concrete dialect.**
+    - Every vocabulary point is a switch expression over a closed enum, with no `default` arm, in every concrete
+      dialect class: the functions (`SqlFn`, 175), the aggregates (`SqlAgg.Fn`), the scalar type names and the
+      date-format parts. Adding a constant breaks the build in every dialect until each spells it or refuses it by
+      name. Each dialect's switch is its complete table: what that database does with every function, in one place.
+    - **Families included** (the user's call): `MySql`, `H2Modern` and the EngineStyle chain carry their own
+      switches. A point the same as the parent's is one grouped arm delegating explicitly
+      (`case A, B, C -> super.call(...)`), so a new constant asks "the same as the parent?" in every member too. The
+      rule then has no exceptions.
+    - **The base holds no spellings**: grammar only (SELECT, FROM, JOIN, WITH, window frames), and neutral helpers a
+      dialect calls by name (`fn("name", args)`, infix, cast). Grammar outside ANSI (QUALIFY, ASOF, LATERAL's forms) is
+      refused in the base and opted into by each dialect. A borderline point (`IS DISTINCT FROM`, which MySQL spells
+      `<=>`) goes in the switch.
+    - **Helpers implement, the switch decides**: a spelling several databases share is a named helper each calls in
+      its own arm (the list strategies, the JSON-list family), never an inherited default.
+    - **Enforced, not convention**: a guard requires each concrete dialect to declare its vocabulary switches itself,
+      as switch expressions, with no `default ->`; the `Spellings` map (not checked by javac) folds into the switches.
+    - **A capability matrix from the code**: every function rendered on every dialect, recorded as spelled, emulated
+      or refused by name, as a generated table per database (and which arms no test reaches).
+    - **Order**: first the switches reproduce exactly the SQL each dialect writes today, inherited DuckDB spellings
+      included, written out (a pure move, proven by the whole-lane SQL diff); then D1 copies or refuses each inherited
+      spelling as its own measured step.
+    - The limit: exhaustiveness proves a decision was made, not that it is right; the lanes prove that.
+    - The measurement behind the base-renderer question is in the evidence folder's README.
 - **1c. Raw SQL into each dialect.** One hook, `SqlDialect.fromEngineH2(String) → List<String>`, replaces
   `RawSqlBoundary.Target`, `rawTarget()`, `rawH2IsNative()` and the shared `RawSqlAdapt` pass:
   - H2 returns the text unchanged;
@@ -320,7 +339,11 @@ Size: about 300 lines of tests.
     written since d973b08);
   - the other eight refuse by name.
 
-  A neutral H2-statement lexer stays shared. `RawSqlLedgerTest` and `DialectBoundaryTest.RAW_H2_CALLERS` are re-pinned
+  Which text is translated (decision D2): raw text is in the language of the database its connection DECLARES, and
+  is translated only when it runs on another one. An H2 test connection run on DuckDB is translated; `executeInDb` on a
+  connection that declares Snowflake passes its text to Snowflake untouched, as legend-engine does. The DDL Java
+  writes for CSV test data (`Ddl.setUpDataSqlsText`, H2's spelling today) stops being text: the dialect renders it
+  from the IR. A neutral H2-statement lexer stays shared. `RawSqlLedgerTest` and `DialectBoundaryTest.RAW_H2_CALLERS` are re-pinned
   with a dated note. See **decision D2** on where raw text comes from.
 - **1d. Odds and ends.**
   - `CatalogModel`'s `* REPLACE` moves to `DuckDb`.
@@ -471,17 +494,25 @@ work (tasks #29 and #30), rather than only delaying it.
 - **Warehouse** (decision D4). It is *mixed-engine*: DuckDB plus Postgres catalogs attached through DuckDB's postgres
   extension. It is also barred from depending on core (`//tools/deps:warehouse_closure_test`). Its Postgres knowledge
   (SQL, libpq DSN, URL, error text, password prompt, engine name) is gathered into one warehouse-owned class behind its
-  existing `Attachment` registry. Defects 7 and 8 get tests.
+  existing `Attachment` registry. Defects 7 and 8 get tests. On the backlog (the user, 2026-10-13): revisit whether
+  the warehouse can use core's dialects once the platform can carry it.
 - **datacube and engine-client** (decision D5). Fix the paths that can reach a non-DuckDB engine:
   - the `snap.ts:205` preflight count, which runs on a warehouse catalog that may be Postgres, is planned like any
     query;
   - the query demo's seed.
 
-  The five TypeScript copies of identifier quoting become one helper. SQL that only ever runs on the tab's own DuckDB
-  stays: it is that engine's setup, like a connector's.
-- **Dead code** (decision D6): `experiments/` (it is in `.bazelignore`), `docs/parked/InDbVerdict.java`,
-  `tools/spikes` and the probe harnesses under `docs/` hold 255 of the 1,002 TEST-LEAK sites, and no target builds
+  **All client SQL goes through the platform** (decision D5): no SQL text in TypeScript, a rule a guard can check.
+  The tab's DuckDB-only operations (`remote.ts`'s `INSTALL httpfs` and `CREATE SECRET`, `upload.ts`'s and
+  `model-data.ts`'s file reads, `duckdb.ts`'s and `snap.ts`'s local DDL) become named operations of the DuckDB dialect
+  (`readFile`, `installExtension`, `createSecret`), which every other dialect refuses by name. The five TypeScript
+  copies of identifier quoting go with them.
+- **Dead code** (decision D6, measured 2026-10-13): they hold 255 of the 1,002 TEST-LEAK sites, and no target builds
   them.
+  - **Deleted:** the orphan tools (`tools/{spikes,wrongrows,untangle,metamodel-census}`, `tools/reference/join.py`,
+    `tools/native-axes.py`, `tools/upstream-drift.py`: 27 files, about 14,000 lines) and the orphan scripts (31
+    `scripts/corpus/` modules and 9 others: 40 files, about 10,300 lines).
+  - **Kept:** `experiments/` (kept by decision, 2026-10-02, `.bazelignore`) and the code under `docs/` (the harnesses
+    that produced each folder's evidence, `docs/parked/` included). The leak ratchet skips them by path.
 
 ### Order and size
 
@@ -498,16 +529,20 @@ work (tasks #29 and #30), rather than only delaying it.
 
 ## 6. Decisions for review
 
-| # | question | recommendation |
+Decided by the user, 2026-10-13. The recommendation each row first carried is kept where the decision differs.
+
+| # | question | decision |
 |---|---|---|
-| **D1** | A dialect that silently inherits a DuckDB arm from the base renderer today: copy the arm into it, or make it refuse? | Copy it where that dialect's PCT lanes prove the spelling works there. Refuse with a named `DialectCapability` everywhere else (H2's GUID, TIME_BUCKET and MAP_EMPTY, for example). Behaviour changes only for statements that already produce wrong text. |
-| **D2** | Raw SQL comes from two places: legend-engine-style **H2 text** (corpus test data, `testDataSetupSqls`) and a user's **native** SQL (`executeInDb`). Today both are rewritten as H2 text. | Record the origin on `RawSql`. Run `fromEngineH2` only on engine-H2 text; pass native SQL through untouched. Measure the corpus before and after. |
-| **D3** | The IR's *meanings* are DuckDB's in places: its typing rules, LIST_SLICE's end, H2's scan order, strftime codes. Is that a leak? | Keep the meanings as the platform's written contract; every dialect already emulates them. Replace only the DuckDB *strings* inside the IR (`"to_days"`, strftime codes, json_type and typeof names) with typed values. |
-| **D4** | Warehouse: share core's dialect, or keep its own per-engine classes? | Keep the closure rule and gather its Postgres knowledge into one owner behind `Attachment`. Revisit if it gains a third engine. |
-| **D5** | TypeScript apps: must every SQL go through the planner? | No for tab-only DuckDB setup. Yes for anything that can reach a server engine. |
-| **D6** | Delete the dead trees? | Yes. The evidence they produced (results files, notes) stays in `docs/`. |
-| **D7** | Land phase by phase on the branch, each green, then pause for review after P1 (the most visible restructuring)? | Yes. |
-| **D8** | Which case does a store's bare name have on Postgres? The engine emits it unquoted, so Postgres folds it to lower case; the corpus's setup text assumes that. Main's `#SQL{...}#` Postgres fixture and DataCube's `infer.test.ts` assume the opposite: the name is kept as declared and quoted. Folding was tried and reverted on 2026-10-12 (neema2/legend-lite#30's CI). | Decide it once, as the dialect's own rule (P1). The two kinds of test then follow whichever rule is chosen. Folding matches the engine and the corpus; keeping case matches `#SQL{...}#`. If folding returns, the PR's independent review named two prerequisites: `CatalogModel.ident` must quote a mixed-case catalog name (or a Postgres table `"Orders"` is read as `orders`), and a star-expanded column's label must take the spelling its references take (`Stars.java:54`). |
+| **D1** | A dialect that silently inherits a DuckDB arm from the base renderer today: copy the arm into it, or make it refuse? | **Agreed.** Copy it where that dialect's PCT lanes prove the spelling works there. Refuse with a named `DialectCapability` everywhere else (H2's GUID, TIME_BUCKET and MAP_EMPTY, for example). Behaviour changes only for statements that already produce wrong text. |
+| **D2** | Raw SQL comes from two places: legend-engine-style **H2 text** (corpus test data, `testDataSetupSqls`) and a user's **native** SQL (`executeInDb`). Today both are rewritten as H2 text. | **Decided: by the declared database.** Raw text is in the language of the database its connection declares; it is translated only when it runs on another (an H2 test connection on DuckDB), and passes untouched otherwise (`executeInDb` on a Snowflake connection, as legend-engine does). The DDL for CSV test data is rendered from the IR. Measure the corpus before and after. (First recommended: record the origin on `RawSql`.) |
+| **D3** | The IR's *meanings* are DuckDB's in places: its typing rules, LIST_SLICE's end, H2's scan order, strftime codes. Is that a leak? | **Agreed.** Keep the meanings as the platform's written contract; every dialect already emulates them. Replace only the DuckDB *strings* inside the IR (`"to_days"`, strftime codes, json_type and typeof names) with typed values. |
+| **D4** | Warehouse: share core's dialect, or keep its own per-engine classes? | **Agreed for now.** Keep the closure rule and gather its Postgres knowledge into one owner behind `Attachment`. On the backlog: revisit whether the warehouse can use core's dialects once the platform can carry it. |
+| **D5** | TypeScript apps: must every SQL go through the planner? | **Decided: yes, all of it.** The tab's DuckDB-only operations become named operations of the DuckDB dialect, refused by the others; a guard bans SQL text in TypeScript. (First recommended: no for tab-only setup, which `snap.ts`'s count on a warehouse catalog had already disproved.) |
+| **D6** | Delete the dead trees? | **Decided: only the orphan tools and scripts** (about 24,000 lines, listed in Phase 7). `experiments/` stays (its own decision of 2026-10-02) and so does the code under `docs/`, the harnesses behind each folder's evidence. |
+| **D7** | Land phase by phase on the branch, each green, then pause for review after P1 (the most visible restructuring)? | **Agreed.** |
+| **D8** | Which case does a store's bare name have on Postgres? The engine emits it unquoted, so Postgres folds it to lower case; the corpus's setup text assumes that. Main's `#SQL{...}#` Postgres fixture and DataCube's `infer.test.ts` assume the opposite: the name is kept as declared and quoted. Folding was tried and reverted on 2026-10-12 (neema2/legend-lite#30's CI). | **Decided: fold**, as legend-engine does (more correct for a drop-in replacement: most Postgres tables are created unquoted). Decide it once, as the dialect's own rule (P1). The two kinds of test then follow whichever rule is chosen. Folding matches the engine and the corpus; keeping case matches `#SQL{...}#`. If folding returns, the PR's independent review named two prerequisites: `CatalogModel.ident` must quote a mixed-case catalog name (or a Postgres table `"Orders"` is read as `orders`), and a star-expanded column's label must take the spelling its references take (`Stars.java:54`). |
+| **P1b** | The base renderer's shape. | **Decided: an exhaustive switch per concrete dialect, families included**, a base with no spellings, a guard that enforces it, and a capability matrix generated from the code (Phase 1b). |
+
 
 ## 7. The misses (leaks the patterns could not see; each slice's reviewers found them by reading)
 
