@@ -9315,3 +9315,27 @@ date").
    - **The wheel** carries the apps' shared modules more than once (52 MB): one shared `vendor/` is a small design.
    - **G2 and G4** (rows streamed back from Python; a picked file read by its encoding) are built on
      `datacube/python-parity-2`, next.
+
+## 2026-10-13 — One `//tools/teavm:api`: TeaVM's compile-time annotations in one library (the Compiler Rewrite line)
+
+A Bazel-only tidy-up: the four identical neverlink libraries (`//wasm:teavm_api`, `//sdlc-server:teavm_api`,
+`//query-store:teavm_api`, `//warehouse:teavm_api`; TeaVM's `core` and `jso` exported, nothing linked) are one,
+`//tools/teavm:api`, beside the TeaVM compile they all use (`docs/build-inventory/area7_report.md`, wiring cleanup 7);
+each module's entry library (`//wasm:tab`, `//wasm:conformance`, `//sdlc-server:page_boundary`,
+`//query-store:page_entry`, `//warehouse:sqlapi_page_entry`) depends on it instead. Visible to exactly those four
+packages, the `maven_teavm` pool's users that build a module (`tools/deps/pools.bzl`; the roster unchanged, its
+sdlc-server comment no longer naming a `:teavm_api`), so the annotations reach no package the roster does not name. No
+behaviour change: the same two jars on the same compile classpaths, nothing on a runtime classpath (neverlink). Branch
+`build/one-teavm-api`, one commit over main 24e15866f, 248e1f5ab on the branch (the run's commit), landed as the same
+change over this docs commit; no announcement went first (no `core/` file, no behaviour). The audit
+(`docs/build-inventory/program/evidence/one-teavm-api/AUDIT.md`): ready, no blocker, no should-fix; four wording nits
+taken, two into the files and two into the commit message, the commit amended to 248e1f5ab. The DataCube line
+(query-store's and warehouse's owner) and the Studio line (sdlc-server's) approved their parts. The library, its five
+dependents and the five modules (`//wasm:planner`, `//wasm:conformance_module`, `//sdlc-server:page`,
+`//query-store:page`, `//warehouse:sqlapi_page`) build; `//gates:local` 353 pass, 2 skipped (the two guards incompatible
+on this Mac), after a first run on 482019f7c in which the 19 Chromium verify tests failed on DuckDB-WASM's fetch of the
+ICU extension from the public CDN (the tab's own run-time fetch since 73d717ee4, reported to the DataCube line) and a
+rerun of those 19 passed; the lane query empty; CI: run 38406686025 on the lanes the change reaches (`core`, `checks`,
+`parser_equivalence`, `warehouse`, `datacube`, `ui`, `sdlc`: the lanes holding a test in the library's reverse
+dependencies, by `bazel query`), every platform, green first time on all 26 jobs (the summary job a dispatched run
+skips).
