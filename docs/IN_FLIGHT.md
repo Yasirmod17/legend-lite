@@ -217,7 +217,18 @@ with the compiler's plan/execution split**, in this order:
    `config.json` each pointing at Python, `ll.query()`, `ll.studio()`, the token exchanged for a cookie on the first
    load, `/api/server/v1/currentUser` and `/api/lite/v1/*`), `python/BUILD.bazel` (the two sites in the wheel), and what
    Query's and Studio's clients need to carry it. Reviews: the Studio line (its apps' configuration), the Compiler
-   Rewrite line (the wheel), an audit. **Step 2's second landing announced 2026-10-11 (rule 5; branch `datacube-m3`; the design's §15.6a,
+   Rewrite line (the wheel), an audit. PR 6 built and approved there (files beyond the announcement: `core/.../server/
+   PureV1Api.java`'s refusal text and a `ParkedWorkLedgerTest` row, PARK-35: a project's queries run only in a tab).
+   **PR 5 announced 2026-10-13 (same branch): C3, warehouse tables on Python's pages.** Files: `warehouse/` -- the
+   one binding's JSON surface `sqlapi/SqlApiCalls.java` beside `NativeBinding` (which gains the key sign-in and the
+   poll), `ApiJson`'s readers checked by kind, `CatalogColumn`'s structured fields, a page module
+   `//warehouse:sqlapi_page`, a recorded corpus, `warehouse/BUILD.bazel`; `native/` (`lite_warehouse_call`,
+   `lite_warehouse_read`); `engine-client/src/warehouse.ts` (the tab's driver over that binding, its hand spelling of
+   the API gone) and `engine-client/src/snap.ts` (a host's snap beside the page's); the callers in
+   `query/demo/main.ts` and `query/BUILD.bazel` (the module at `vendor/warehouse/`); `python/` (`legend_lite/warehouse.py`,
+   the twin driver; Python signs in, writes and holds a table's model, runs its plans Live and snaps it into its
+   DuckDB); `datacube/` (a table opened through its host). Reviews: the Compiler Rewrite line (the warehouse's and the
+   native library's BUILD), the Studio line (Query, engine-client), an audit. **Step 2's second landing announced 2026-10-11 (rule 5; branch `datacube-m3`; the design's §15.6a,
    agreed with the user): a cross-area edit in `core/`** -- the route renamed and two more beside it,
    `/api/lite/v1/model/createClass` (was `/api/lite/v1/relational/promoteRelationToModel`), `createAssociation`,
    `createDataSpace`, one atomic writer under them. Core files: `core/src/main/java/com/legend/server/`
