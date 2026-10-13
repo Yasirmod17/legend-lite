@@ -376,10 +376,14 @@ class _Session:
         if not (open_cubes or apps) or _stays():
             return
         if not self.waits():
-            print('the script ended, and its DataCube with it (no cube was opened in a browser)', flush=True)
+            # an app's link only printed (never opened here) ends with the script, as it was asked
+            if open_cubes:
+                print('the script ended, and its DataCube with it (no cube was opened in a browser)', flush=True)
             return
+        names = (['DataCube'] if open_cubes else []) + [f'Legend {app.capitalize()}' for app in apps]
         links = '\n  '.join([c.url for c in open_cubes] + [f'Legend {app.capitalize()}: {url}' for app, url in apps.items()])
-        print(f'DataCube is still open at\n  {links}\npress Ctrl-C to finish', flush=True)
+        print(f'{" and ".join(names)} {"is" if len(names) == 1 else "are"} still open at\n  {links}\npress Ctrl-C to finish',
+              flush=True)
         try:
             while True:
                 time.sleep(1)

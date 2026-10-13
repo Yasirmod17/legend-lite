@@ -546,6 +546,42 @@ Python's DuckDB.
 **Reviews.** The warehouse's BUILD and the native library's are Bazel (Compiler Rewrite); `engine-client/` is shared;
 an audit.
 
+**The steps, settled 2026-10-13 (by this line, the user away: listed for them at landing).**
+1. **The binding's one surface.** `warehouse/.../sqlapi/SqlApiCalls.java`, beside `NativeBinding` and over it, on
+   //base and //json only (the warehouse's closure: Compiler Rewrite):
+   - `call(op, args)`: the next HTTP call, as `{method, path, headers, body}`, for `login`, `loginKey`, `refresh`,
+     `submit`, `fetchChunk`, `cancel`, `closeStatement`, `history` and `objects` (every catalog's).
+   - `read(op, status, body)`: what an answer says. A token; the objects; the history; and for `submit` (and each
+     poll), the next step: poll (its call), done (the result's counts) or failed. A refusal is `{"error": {code,
+     message}}`, marked `expired` when a call that carried a token was answered 401: what the drivers raise as an
+     expired session, so no driver reads a status itself.
+   - What stays the driver's: the HTTP, the Arrow bytes (a chunk's body is handed back as it came; only a failed
+     chunk's answer is read), the clock, aborting.
+   - Moved into it from the TypeScript: the key sign-in (`ApiJson.loginKey`), the catalog's structured columns
+     (`CatalogColumn`'s logical type, precision, scale and not-null, which the server writes and the Java reader
+     dropped), an interactive statement's settings (a 10-second poll, 100,000 rows a chunk, 5 minutes), and each
+     read's checks by `instanceof` (WebAssembly traps on a failed cast).
+2. **In every build.** The native library: `lite_warehouse_call`, `lite_warehouse_read` (`native/.../WarehouseCalls`).
+   The tab: `//warehouse:sqlapi_page`, its own small module (as the saved queries' is), at `vendor/warehouse/` in
+   DataCube's and Query's sites; `//warehouse:sqlapi_wasm`'s compile check stays.
+3. **One corpus.** `warehouse/src/test/resources/sqlapi-corpus.json`: recorded exchanges (sign-in by password, by
+   key, refused; the objects; a statement polled, its Arrow chunks read, closed; a failed one; a token expired
+   mid-statement; a refresh; the history). The Java test holds the binding to it. Each driver replays it, the
+   corpus answering each call, and must make exactly the recorded calls.
+4. **The drivers.** `engine-client/src/warehouse.ts` keeps its API (`signIn`, `signInWithKey`, `listObjects`,
+   `connect`, `WarehouseEngine`), each now taking the loaded binding; its hand spelling of the API goes.
+   `legend_lite/warehouse.py` is its twin over `urllib` and the library.
+5. **Python's page.**
+   - `pythonServices` gives a `warehouse` service: Python signs in (the person running Python is the person at the
+     page) and lists the objects; the token never reaches the page.
+   - Opening a table: Python writes its model (`lite_table_model`, the catalog's database type and DuckDB's for
+     the snap) and holds it. A plan over it runs where its runtime says: the live runtime's on the warehouse,
+     through the binding, as Python's session, its Arrow chunks the rows; the snap runtime's on Python's DuckDB.
+   - Snap: the page sends the pull query (Pure); Python plans it with the live runtime, runs it on the warehouse,
+     and loads the chunks into its DuckDB as the table. Release drops it. The cube's Snap gains a host's kind beside
+     the page's own (`SnapManager` over the page's engines): the same states, the copy planned and run by Python.
+   - `sources.ts` opens a warehouse table on Python's page through that service, not through `services.engine.local`.
+
 #### C4. The small copies
 
 - One table of the site's file types, which Python reads.
@@ -636,17 +672,19 @@ engine, as `ll.show()` opens DataCube.
 - **What the cookie costs, and its guard (E's audit).** SameSite is by host, not by port, so a page of any other server
   on 127.0.0.1 sends the cookie too. The cookie therefore admits a call only when the browser marks it the page's own
   (`Sec-Fetch-Site: same-origin`), or, a browser that marks none, when its `Origin` is the engine's. A form or a
-  `no-cors` fetch from another port is refused (`AppsServed`; in Chromium, the evidence walk's last check: 401). The header is read by hand: it carries every local
+  `no-cors` fetch from another port is refused (`AppsServed`; in Chromium, the evidence walk's last
+  check: 401). The header is read by hand: it carries every local
   server's cookies, and `http.cookies` drops the whole header at the first value it cannot read. What stays: while the
   browser runs, the token goes in that header to every server on 127.0.0.1 the browser visits, and any of them can
   overwrite the cookie (the app then answers 401 until the link is opened again). It also passes once in an address,
   into the browser's history. It dies with the process. A token the apps' own clients carry, as DataCube's does,
   would end this; it goes to the user with E's landing.
+- **Where the link is clicked.** Strict holds where it is clicked on another site (Jupyter's output, at
+  `localhost:8888`; the Studio line's question, measured): the cookie is stored from the cross-site load, the page's
+  files need none, and the page's own calls are same-site, so they carry it.
 - **The session keeps the web server for an app.** An app's tab says nothing when it closes, so once `ll.query()` or
   `ll.studio()` is called, the web server stays while the process lives (closing the last cube no longer stops it),
-  and a plain script's end waits for the app as for a cube. Strict holds where the link is clicked on another site (Jupyter's output, at `localhost:8888`; the Studio
-  line's question, measured): the cookie is stored from the cross-site load, the page's files need none, and the
-  page's own calls are same-site, so they carry it.
+  and a plain script's end waits for the app as for a cube (a link only printed, `browser=False`, ends with it).
 - **The routes.** `/api/server/v1/currentUser` answers this user (`"this user"`, as the stores name it), and POST
   `/api/lite/v1/*` goes to the planner's pure/v1, which answers it as legend-lite's server does (`PureV1Api.route`).
   Execute as JSON landed with C1 and C2; saved queries with B5.
@@ -655,10 +693,10 @@ engine, as `ll.show()` opens DataCube.
 - **Measured.** `python/tests/test_engine.py` `AppsServed` (each app's files, the trade, the configs, the cookie's
   checks, lite's routes); `//python:wheel_test` (from the installed wheel: both apps served, traded, configured,
   answering with the cookie alone; Studio's demo projects shipped; no DuckDB-WASM). And by hand in Chromium, from the
-  installed wheel on a fresh home (`docs/one-platform/evidence/e-apps-on-python.mjs`): Studio's "Load demo projects"
-  publishes the four projects into Python's repository (292 ms), the link clicked on a page of another site; a published project opens and compiles, 0 errors;
-  Query lists the four from Python's Depot, opens `trading` at HEAD, and builds a query on `Party`. No page error, no
-  failed call but the run's.
+  installed wheel on a fresh home (`docs/one-platform/evidence/e-apps-on-python.mjs`), the link clicked on a page of
+  another site: Studio's "Load demo projects" publishes the four projects into Python's repository (293 ms); a
+  published project opens and compiles, 0 errors; Query lists the four from Python's Depot, opens `trading` at HEAD,
+  and builds a query on `Party`; another port's POST is refused. No page error, no failed call but the run's.
 - **The one call that fails: running a project's query (PARK-35).** A project's rows are its `###Data` elements', which
   only a browser tab loads, into its own DuckDB. Python refuses a model its frames did not write (500, "a project's
   queries run only in a browser tab for now"). legend-lite's server has the same gap: it opens the runtime's own

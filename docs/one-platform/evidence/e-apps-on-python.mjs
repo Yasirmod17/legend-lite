@@ -72,7 +72,7 @@ const elsewhere = http.createServer((_, r) => { r.setHeader('Content-Type', 'tex
 await new Promise((ok) => elsewhere.listen(0, '127.0.0.1', ok));
 const another = await page.context().newPage();
 const answered = [];
-another.on('response', (r) => answered.push(r.status()));
+another.on('response', (r) => { if (new URL(r.url()).pathname === '/api/pure/v1/query') answered.push(r.status()); });
 await another.goto(`http://127.0.0.1:${elsewhere.address().port}/`);
 await another.evaluate((o) => fetch(`${o}/api/pure/v1/query`, { method: 'POST', mode: 'no-cors', credentials: 'include',
   headers: { 'Content-Type': 'text/plain' }, body: '{}' }), origin);
