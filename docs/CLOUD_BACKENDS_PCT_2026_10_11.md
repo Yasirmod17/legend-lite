@@ -174,7 +174,8 @@ Measured 2026-10-11 in a Claude Code cloud container (4 cores, 15 GB, network ac
   - `@legend_pure_src` and `@legend_engine_src`: `git clone --depth 1 --branch legend-pure-5.99.0` (and
     `legend-engine-4.145.0`), with `third_party/legend_*_src.BUILD` copied in as `BUILD.bazel` and an empty
     `REPO.bazel`, then `--override_repository=legend_pure_src=<dir>` (and `legend_engine_src`).
-- The Postgres lane cannot run there: the container runs as root and `initdb` refuses root. The DuckDB lane passes
+- The Postgres lane: the container runs as root and `initdb` refuses root, so run it as an unprivileged user, with
+  `tools/postgres/as_unprivileged.sh` (`docs/GATES.md`, since 2026-10-11). The DuckDB lane passes
   (`//pct:pct_duckdb_essential`, 45 s).
 - Maven Central rate-limits the shared address now and then (HTTP 429): retry.
 - The cloud lanes' test JVMs need the container's egress proxy and its CA: Bazel's test environment drops
@@ -906,45 +907,8 @@ Channel B then: 333 / 3 / 1, 137 / 0 / 0, 461 / 7 / 0, 202 / 0 / 0, 93 / 0 / 0.
 - an outer join whose ON reads both sides outside an equality (1): refused under `join_use_nulls`, which the missing
   side's NULLs need for the whole statement.
 
-`testEqualNonPrimitive` now fails as it does on DuckDB ("Assert failed"), so it moved to the platform's pins.
-
-## 21. Postgres: its own pins burned down (2026-10-12)
-
-The same drill as ClickHouse's (§19.1), on the lane that predates this document (Postgres 16.15, embedded; run as an
-unprivileged user in a root container, `docs/GATES.md`). **109 pins become 61; Postgres's own 75 become 27**, the other
-34 the platform's. Channel B: 315 / 2 / 0, 132 / 3 / 0, 464 / 3 / 1, 203 / 1 / 0, 87 / 0 / 0. Every fix is in
-`Postgres.java`; `docs/PCT_PIN_WORKAROUNDS_2026_10_12.md` has the table, cause by cause:
-
-- printf unrolled, as Snowflake's (13), with DuckDB's `%g` date part as `to_char`'s `MS`;
-- the empty collection spelled as DuckDB answers over a NULL list (21): Postgres types every array, so an untyped NULL
-  cannot be unnested or reduced;
-- a Boolean list's extremes as `bool_or`/`bool_and` (2), splitPart over `string_to_array` (4), hashCode from MD5 (1);
-- a struct decoded from the driver's jsonb object (7), after which seven instance tests fail as they do on DuckDB.
-
-Then, at the user's ask, the jsonb collections (12): a map is its entries in order, a `jsonb[]` of `{"key", "value"}`
-(BigQuery's shape, which the executor decodes to a map; the census delivers a map as an ARRAY of entries for every
-dialect now, by its declared type, not by a database's name); a fold or a reduction into a list of scalars walks a
-native array; the LIST aggregate is `array_agg`. On the way, the raise: a STABLE cast, which the planner pre-evaluates
-where it estimates (an argument of `unnest`), so an untaken raise fired at plan time; it carries an empty volatile
-term now. **109 pins become 49; the own 15**: extension functions (5, a decision), an IR typing gap (3), jsonb's key
-order (3, kept: Variants stay jsonb, the user's call, since `json` has no equality and the switch would touch every
-Variant path), Postgres's limits (2), two not yet examined. Channel B: 326 / 2 / 0,
-132 / 3 / 0, 465 / 2 / 0, 204 / 1 / 0, 87 / 0 / 0. The census ceiling for
-Postgres rose by the by-design class (a struct as jsonb), Essential 13 -> 14 and Grammar 5 -> 6, as tests that stopped
-at their first struct now run their later statements (`PctCensusGate`, dated).
-
-Then, at the user's ask, 6 more: **109 pins become 43; the own 9**. Levenshtein and Jaro-Winkler are recursive walks in
-plain SQL, not extension functions (fuzzystrmatch's Levenshtein stops at 255 characters, and no extension has a
-Jaro-Winkler); both equal DuckDB's on 1,585 ASCII pairs, by characters where DuckDB counts bytes. A quoted literal is
-cast before `to_jsonb`. (A Variant cell delivered as its text in `normalize` passed one more, then broke main's Postgres
-parity harness at the merge, so it waits for a Postgres `DriverCells`, the plan's P5.) One typing gap was
-the shared lowering's (AGENTS.md invariant 1), so every lane was re-measured: the ordered list aggregate (a mixed sort's)
-is typed as the LIST reducer types it, a list of its value's type, where it had been VARCHAR whatever it aggregated, and
-Postgres spells it `array_agg`. The other, a comparator dedup's CASE typed Unknown, stays pinned: the shared carrier pass
-strips the LITERAL label from the list branch and not from the reduction's stamps, and the workaround tried (an identity
-transform) is a new list emission in the lowering, which the carrier-purity ratchet bans; the fix is a semantic dedup
-node. Kept as well: SHA-1 (no release has a core `sha1`, 18.6 and devel checked; `pgcrypto` has it), jsonb's key order
-(3) and Postgres's limits (2). Channel B: 329 / 1 / 0, 132 / 3 / 0, 465 / 2 / 0, 204 / 1 / 0, 91 / 0 / 0.
+`testEqualNonPrimitive` now fails as it does on DuckDB ("Assert failed"): it was already counted among the platform's
+pins, and only its pinned message changed.
 
 ## 20. The coverage map, and the corpus on every database (2026-10-12)
 
@@ -996,7 +960,7 @@ What it does not do yet, and what a cloud's 50-300 ms round trip makes decisive 
   - `DuckWorkspaces.java:198-248`: fixture asides, as attached catalogs plus `search_path`.
   - `PureTestRunner.java:433-458`: inline-CSV tests take a private workspace that re-runs every setup.
 - **The fixture re-seed:** `BLOCK_COMPILER_HOMEWORK_2026_09_21.md:119-127` measures it. The clone design (seed once,
-  `COPY FROM DATABASE`) is at `:611` of that file and in GATES; it was never built.
+  `COPY FROM DATABASE`) is at `:119-121` of that file (`:611` mentions it) and in GATES; it was never built.
 - **One script per effect segment:** `BodyCompiler.java:53-150` (DuckDB brackets each in `BEGIN..COMMIT`).
 - **The fused verdict:** `VerdictBatch.java:227-331`.
 - **Effectful tests:** autocommit is off; commit on pass; on fail, roll back and truncate the ledger
@@ -1008,7 +972,7 @@ What it does not do yet, and what a cloud's 50-300 ms round trip makes decisive 
   - `DuckWorkspaces`;
   - `ReplayOracle.java:492-498` (`duplicate()`);
   - `CsvSeed.adaptRaw:252-255`;
-  - the overlay's hard-coded DuckDB and H2 (`MinimalCorpus.java:305-307`).
+  - the overlay's hard-coded DuckDB and H2 (`databaseType()`, `MinimalCorpus.java:498-503`).
 
   The census of `docs/dialect-leak-census-2026-10-12/` (slice C1) designs that harness's interface.
 - **Numbers:**
@@ -1038,3 +1002,41 @@ slices burn down. Two things it took first:
     table with quoted mixed-case names, and DataCube's `infer.test.ts`.
   - *Where it stands.* Postgres spells a store's names as before, and the 77 are to be re-measured. Which case a bare
     store name has on Postgres is an open decision. It is listed in docs/DIALECT_LEAK_CENSUS_AND_PLAN_2026_10_12.md.
+
+## 21. Postgres: its own pins burned down (2026-10-12)
+
+The same drill as ClickHouse's (§19.1), on the lane that predates this document (Postgres 16.15, embedded; run as an
+unprivileged user in a root container, `docs/GATES.md`). **109 pins become 61; Postgres's own 75 become 27**, the other
+34 the platform's. Channel B: 315 / 2 / 0, 132 / 3 / 0, 464 / 3 / 1, 203 / 1 / 0, 87 / 0 / 0. Every fix is in
+`Postgres.java`; `docs/PCT_PIN_WORKAROUNDS_2026_10_12.md` has the table, cause by cause:
+
+- printf unrolled, as Snowflake's (13), with DuckDB's `%g` date part as `to_char`'s `MS`;
+- the empty collection spelled as DuckDB answers over a NULL list (21): Postgres types every array, so an untyped NULL
+  cannot be unnested or reduced;
+- a Boolean list's extremes as `bool_or`/`bool_and` (2), splitPart over `string_to_array` (4), hashCode from MD5 (1);
+- a struct decoded from the driver's jsonb object (7), after which seven instance tests fail as they do on DuckDB.
+
+Then, at the user's ask, the jsonb collections (12): a map is its entries in order, a `jsonb[]` of `{"key", "value"}`
+(BigQuery's shape, which the executor decodes to a map; the census delivers a map as an ARRAY of entries for every
+dialect now, by its declared type, not by a database's name); a fold or a reduction into a list of scalars walks a
+native array; the LIST aggregate is `array_agg`. On the way, the raise: a STABLE cast, which the planner pre-evaluates
+where it estimates (an argument of `unnest`), so an untaken raise fired at plan time; it carries an empty volatile
+term now. **109 pins become 49; the own 15**: extension functions (5, a decision), an IR typing gap (3), jsonb's key
+order (3, kept: Variants stay jsonb, the user's call, since `json` has no equality and the switch would touch every
+Variant path), Postgres's limits (2), two not yet examined. Channel B: 326 / 2 / 0,
+132 / 3 / 0, 465 / 2 / 0, 204 / 1 / 0, 87 / 0 / 0. The census ceiling for
+Postgres rose by the by-design class (a struct as jsonb), Essential 13 -> 14 and Grammar 5 -> 6, as tests that stopped
+at their first struct now run their later statements (`PctCensusGate`, dated).
+
+Then, at the user's ask, 6 more: **109 pins become 43; the own 9**. Levenshtein and Jaro-Winkler are recursive walks in
+plain SQL, not extension functions (fuzzystrmatch's Levenshtein stops at 255 characters, and no extension has a
+Jaro-Winkler); both equal DuckDB's on 1,585 ASCII pairs, by characters where DuckDB counts bytes. A quoted literal is
+cast before `to_jsonb`. (A Variant cell delivered as its text in `normalize` passed one more, then broke main's Postgres
+parity harness at the merge, so it waits for a Postgres `DriverCells`, the plan's P5.) One typing gap was
+the shared lowering's (AGENTS.md invariant 1), so every lane was re-measured: the ordered list aggregate (a mixed sort's)
+is typed as the LIST reducer types it, a list of its value's type, where it had been VARCHAR whatever it aggregated, and
+Postgres spells it `array_agg`. The other, a comparator dedup's CASE typed Unknown, stays pinned: the shared carrier pass
+strips the LITERAL label from the list branch and not from the reduction's stamps, and the workaround tried (an identity
+transform) is a new list emission in the lowering, which the carrier-purity ratchet bans; the fix is a semantic dedup
+node. Kept as well: SHA-1 (no release has a core `sha1`, 18.6 and devel checked; `pgcrypto` has it), jsonb's key order
+(3) and Postgres's limits (2). Channel B: 329 / 1 / 0, 132 / 3 / 0, 465 / 2 / 0, 204 / 1 / 0, 91 / 0 / 0.

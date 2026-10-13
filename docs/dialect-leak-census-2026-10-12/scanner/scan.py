@@ -1,6 +1,6 @@
 """THE DIALECT-LEAK CENSUS: every tracked source file, lexed into code / comments / string literals, every hit of
-every leak pattern recorded (no sampling). Output: hits.tsv (zone, module, file, line, category, pattern, snippet).
-usage: python3 -I scan.py <repo root> <out dir>"""
+every leak pattern recorded (no sampling): the census's first pass (code patterns). Output: hits.tsv (zone, module, file, line, category, match,
+source). usage: python3 -I scan.py <repo root> <out dir>"""
 import os
 import re
 import subprocess

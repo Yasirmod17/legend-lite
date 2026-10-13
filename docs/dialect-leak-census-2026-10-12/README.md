@@ -70,9 +70,13 @@ re-run the scanner before acting on one.
    - Each reviewer also hunted for **misses**: leaks no pattern could see.
 
 To re-run: `python3 -I scanner/scan.py <repo root> <out dir>`, then `scanner/scan2.py` with the same arguments. They
-write `hits.tsv` and `hits2.tsv`, one row per site with zone, file, line, pattern and the source line. Classify a
-slice against `GUIDE.md`. The per-site tables of 2026-10-12 are not kept: they are reproducible, and the reports
-below carry every finding.
+write `hits.tsv` and `hits2.tsv`, one row per site with the columns zone, module, file, line, category, match and
+source. At 7afb645 they give 21,608 + 6,348 = 27,956 hits in 1,007 files (re-checked 2026-10-13).
+
+Then build each slice's input by hand, as the census did; that step was not scripted, and its working files were not
+kept. `GUIDE.md` expects `parts/<PART>.tsv`: the rows of one slice's files (the slices are the nine reports below,
+by zone and module), with an `id` column added, unique per row. Classify each part against `GUIDE.md`. The per-site
+tables of 2026-10-12 are not kept; the reports below carry every finding.
 
 ## The nine slice reports (`slices/`)
 
@@ -142,6 +146,10 @@ silo's guarantee, that nothing is inherited by accident, without the copies. It 
 errors, and it belongs in Phase 1 (1b).
 
 ## Limits of the method (what a re-run should know)
+
+- **The scanners scan themselves.** Run on a head that has this folder, they also count their own patterns:
+  `scanner/scan.py` (64 hits) and `scanner/scan2.py` (118) at ff5ec11. Drop `docs/dialect-leak-census-2026-10-12/`
+  from the hits before classifying.
 
 - **Not read by the scanner:** comments; regex literals in TypeScript; BUILD and `.bzl` files (the per-database
   driver-jar lists live there, and the lane lists in `spec/BUILD.bazel` and `core/BUILD.bazel`); YAML, JSON and
