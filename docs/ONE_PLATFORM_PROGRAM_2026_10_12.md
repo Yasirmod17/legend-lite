@@ -140,7 +140,10 @@ engine. Needs B3 and B5.
 2. Python's results streamed back in chunks.
 3. One DuckDB 1.5 release everywhere, the corpus tests' included (today 1.5.4 in the tab, 1.5.5 in Python).
 4. Text encodings: UTF-16, gzipped files, Latin-1 read as Latin-1.
-5. Iceberg files on Python (the user's call: the extension adds 13 to 22 MB per wheel).
+5. Iceberg files on Python. **Decided 2026-10-12 (the user): ship the extension** -- DuckDB 1.5.5's iceberg and the avro
+   it reads manifests with, pinned and carried in the wheel as httpfs is (9 to 18 MB and 2 to 8 MB gzipped per
+   platform) -- with the rule that every data file an Iceberg table's metadata names is remote too (R4). With G1 in the
+   next pull request, "Python parity".
 6. A connection per page on Python (optional: today one shared connection, a feature).
 7. A page plan's `sourceUrl('file:...')` refused (optional hardening; accepted as is, §15.4).
 8. The upload's SQL into the dialect (D9, with the dialect program).
