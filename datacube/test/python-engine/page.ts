@@ -35,7 +35,9 @@ import { sourceColumns } from '../../src/source-columns.ts';
 import { TreeState } from '../../src/tree.ts';
 import { LitePlanner } from '../../src/lite-planner.ts';
 import { CASES, queries } from '../wasm-differential/cases.ts';
-import { askedOffers, pythonDatabase, pythonRunner, type PythonLink } from '../../src/services/python-host.ts';
+import { askedOffers, askedSettings, pythonDatabase, pythonRunner, pythonServices, type PythonLink } from '../../src/services/python-host.ts';
+import { browserBasics } from '../../src/services/browser-basics.ts';
+import type { Services } from '../../src/app/services.ts';
 import { ingestFile } from '../../src/upload.ts';
 import { setUpSession } from '../../src/services/browser.ts';
 
@@ -279,6 +281,28 @@ async function run(): Promise<void> {
       Date.parse(`${String((await r.run(q, snapshot)).rows.columns[0]!.values[0])}Z`);
     const [here, there] = [await at(tab), await at(python)];
     equal(Math.abs(here - there) < 60_000, true, `now() in the tab ${new Date(here).toISOString()}, on Python ${new Date(there).toISOString()}:`);
+  });
+
+  // THE PAGE'S SETTINGS, KEPT BY PYTHON (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B2): written by the page's browser
+  // service to Python, which keeps them in this user's folder; the next page Python opens reads them -- as another run
+  // or another notebook would, where the browser's storage is the address's, and Python's address is new each run
+  await check('the page\'s settings are kept by Python, for the next page it opens', async () => {
+    const link: PythonLink = { baseUrl: location.origin, fetch: (i, init) => fetch(i, init), authorization: served.authorization };
+    const offers = await askedOffers(link);
+    const open = async (): Promise<Services> => {
+      const kept = await askedSettings(link);
+      return pythonServices({ link, shows: { frame: 'trades' }, offers, ...(kept ? { settings: kept } : {}),
+        watch: () => () => undefined, browser: browserBasics });
+    };
+    const first = await open();
+    first.browser.writeSettings({ 'dataCube.grid.rowBuffer': 30 });
+    equal(first.browser.readSettings()?.['dataCube.grid.rowBuffer'], 30, 'this page\'s reading of what it wrote:');
+    const until = performance.now() + 5000;
+    while ((await askedSettings(link))?.['dataCube.grid.rowBuffer'] !== 30) {
+      if (performance.now() > until) throw new CheckFailed('Python did not keep the page\'s settings');
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    equal((await open()).browser.readSettings()?.['dataCube.grid.rowBuffer'], 30, 'the next page\'s:');
   });
 
   await check('a query\'s types, parse and print: the same compiler\'s answers', async () => {

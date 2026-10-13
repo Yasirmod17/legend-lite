@@ -757,8 +757,9 @@ As it stands (measured 2026-10-12):
   - a DuckDB Variant is a `JsonNode`, its JSON text;
   - StrictTime has no case (`exec/Executor.java`).
   This was told to the Plan Gen line, 2026-10-12.
-- **A Variant is not yet one value.** A Variant stored as a STRUCT or a LIST (a nested JSON file's column) comes back
-  as JSON text only when the planner's SQL projects it (`CAST(t0.customer AS JSON)`). Under `SELECT *` (the bare
+- **A Variant is one value: its JSON text (since 2026-10-12, 47349d82a).** Until then, a Variant stored as a STRUCT or
+  a LIST (a nested JSON file's column) came back as JSON text only when the planner's SQL projected it
+  (`CAST(t0.customer AS JSON)`). Under `SELECT *` (the bare
   source, a limit, a filter, a sort) the database answers the STRUCT. The tab's reader renders that as JSON
   (`toScalar`), which until 2026-10-12 quoted a nested integer (`{"tier":"2"}`, now `{"tier":2}`). Python's own
   results give a dict.
@@ -766,7 +767,9 @@ As it stands (measured 2026-10-12):
   - The Compiler Rewrite line took it (2026-10-12): the variant storage census's V2 hook (DuckDB's `columnRef`
     renders a stored Variant as `CAST(col AS JSON)`) never fires for a star frame, which names no column. So at the
     statement's egress, a star frame whose outputs include a stored Variant lists them by name. No other SQL changes.
-  - It lands after PR #31.
+  - Landed 2026-10-12 after PR #31 (47349d82a; GATES "A stored Variant column leaves the statement as JSON, whatever
+    the shape of the query"): every shape now answers JSON (bare source, limit, filter, sort, distinct, select,
+    extend, join, concatenate), and `frames_test` pins it for Python's own results.
 
 Where this moves to (the Plan Gen line, 2026-10-12: "it's the right layer, it's already designed, and I wouldn't wait
 for drift"): the plan already describes each result column as `ExecutionPlan.TdsResult`'s `TdsColumn(name, type,

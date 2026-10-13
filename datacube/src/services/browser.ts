@@ -15,13 +15,16 @@ import type { Planner } from '../cube.ts';
 import { BrowserRecords, MemoryRecords, RuleStore, openCubeDatabase, persistStorage, type CubeStore } from '../cube-store.ts';
 import { FileHandles } from '../file-handles.ts';
 import type { TableModels } from '../infer.ts';
+import { writesModels, type ModelWriter } from '../model-writer.ts';
 import type { ModelOptions } from '../planner.ts';
+import { PlanThenRun } from '../runner.ts';
 import { forgetUpload, ingestFile, mountRemoteView } from '../upload.ts';
 import { browserBasics, tabTitle } from './browser-basics.ts';
 import type {
   ConfiguredProject,
   DatabaseService,
   ModelHomeService,
+  ModelWriting,
   PageService,
   PlaneService,
   QueryService,
@@ -86,6 +89,8 @@ export async function browserServices(o: BrowserServicesOptions): Promise<Servic
       // planned here and run here: a planner over the source's own model, on this tab's DuckDB
       rows: (model, runtime, how) => ({ planner: o.planner.models.another(model, runtime, how), engine: o.duckdb.engine }),
       database: tabDatabase(o.duckdb, o.planner.tables),
+      // the model actions: the tab's module writes (beside whichever planner the page chose), the tab's DuckDB answers
+      ...(writesModels(o.planner.tables) ? { modelWriting: tabModelWriting(o.planner.tables, o.duckdb.engine) } : {}),
       local: {
         planner: o.planner.planner,
         another: (model, runtime, how) => o.planner.models.another(model, runtime, how),
@@ -106,6 +111,11 @@ export async function browserServices(o: BrowserServicesOptions): Promise<Servic
       title: tabTitle(),
     },
   };
+}
+
+/** The model actions in this tab: the module's writer, a project's facts planned by it and run on the tab's DuckDB. */
+function tabModelWriting(writer: ModelWriter, engine: DuckDbEngine): ModelWriting {
+  return { place: 'Browser', writer, rows: (model, runtime) => new PlanThenRun(writer.withModel(model, runtime), engine) };
 }
 
 /** DuckDB in this tab: every grid's rows, and where a file, a remote file or a Snap goes. */

@@ -167,8 +167,13 @@ with the compiler's plan/execution split**, in this order:
    `GitStorage` in `ll.home()/projects`, as `SdlcPage` and `SdlcServer` wire them); `python/` (the engine serves
    `/sdlc/api` and `/depot/api` under its token and a lock held across processes; a page-sent model planned only when
    every table it declares is one Python serves); `datacube/` (Python's pages' model home service). No edit in
-   `sdlc-server/src`, `depot-server/src` or `core/`. Python's `create_class`, `create_association` and `create_data_space` wait for its step 3 (parked on
-   branch `datacube/python-model-parked`). **Step 2's second landing announced 2026-10-11 (rule 5; branch `datacube-m3`; the design's §15.6a,
+   `sdlc-server/src`, `depot-server/src` or `core/`. **B1 to B3 landed 2026-10-13 (8bd1eaf9e, PR #36; its run
+   38342569828 green on all 51 checks after one re-run of a runner's filesystem error; GATES "The program's B1 to
+   B3")** -- files touched beyond the announced list: `sdlc-client/BUILD.bazel` (`:conformance`, a js_library its own
+   two tests now use too) and `gates/BUILD.bazel` (the new test's lane). Python's `create_class`, `create_association`
+   and `create_data_space` are B4: twin TypeScript and Python libraries (the program's §5 B4; first shapes parked on
+   branch `datacube/python-model-parked`). **The program is now a runbook** (rewritten 2026-10-13): every step's design,
+   files, proof and reviews, and the order of the pull requests (§6), the next being G1 + G5. **Step 2's second landing announced 2026-10-11 (rule 5; branch `datacube-m3`; the design's §15.6a,
    agreed with the user): a cross-area edit in `core/`** -- the route renamed and two more beside it,
    `/api/lite/v1/model/createClass` (was `/api/lite/v1/relational/promoteRelationToModel`), `createAssociation`,
    `createDataSpace`, one atomic writer under them. Core files: `core/src/main/java/com/legend/server/`

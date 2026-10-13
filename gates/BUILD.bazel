@@ -178,6 +178,8 @@ test_suite(
         "//python:wheel_test",
         # DataCube against Python's engine, in the pinned Chromium (the compiler's library in its runfiles)
         "//datacube:python_engine_test",
+        # Python's model home (the native library's SDLC) held to the one SDLC suite
+        "//datacube:python_model_home_test",
         # DataCube's own non-screen tests in V8 inside Python: the native library's planner, Python's DuckDB, no
         # WebAssembly (docs/DATACUBE_HEADLESS_PYTHON_DESIGN_2026_10_11.md §6; not in //gates:local: run it by name)
         "//datacube:headless_test",

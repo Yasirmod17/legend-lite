@@ -246,9 +246,33 @@ class PlanAndRunRoutes(Served):
         kept = self.df[self.df.qty > 5]
         self.assertEqual(rows.to_pylist(), [{'desk': d, 'q': q} for d, q in kept.groupby('desk')['qty'].sum().sort_index().items()])
 
-    def test_a_model_it_does_not_serve_is_refused_and_nothing_runs(self):
-        status, headers, body = self.plan_and_run(GROUP, model=self.table.model + '\n')
+    def plan_and_run_over(self, model, query):
+        return self.post('/plan-and-run.json', json.dumps({
+            'lambda': json.dumps(ll.parse(query)), 'model': model, 'runtime': self.table.runtime}))
+
+    def test_a_model_the_page_writes_over_the_tables_it_serves_is_planned(self):
+        # a page's project, say: its own Database, over the frame's table -- every table one Python serves (option (c))
+        project = self.table.model.replace('trades::DB', 'proj::store::DB')
+        status, headers, body = self.plan_and_run_over(project, '|#>{proj::store::DB.trades}#->select(~[desk])')
+        self.assertEqual((status, headers['Content-Type']), (200, 'application/vnd.apache.arrow.stream'), body[:300])
+        self.assertEqual(pyarrow.ipc.open_stream(pa.py_buffer(body)).read_all().num_rows, len(self.df))
+        # the frame let go of: its table no longer served, the project no longer read
+        self.frames.unregister('trades')
+        status, _, body = self.plan_and_run_over(project, '|#>{proj::store::DB.trades}#->select(~[desk])')
+        self.assertTrue(json.loads(body)['plan'].startswith('ERR\nMODEL\n'), body)
+
+    def test_a_model_that_declares_a_table_it_does_not_serve_is_refused_and_nothing_runs(self):
+        # a table of this database Python never showed the page (a person's own): never read, whatever the model says
+        self.frames.connection.execute("CREATE TABLE salaries AS SELECT 'Ada' AS name, 100 AS amount")
+        self.addCleanup(self.frames.connection.execute, 'DROP TABLE IF EXISTS salaries')
+        model = self.table.model.replace('    Table trades', '    Table salaries\n    (\n        name VARCHAR(10),\n'
+                                         '        amount BIGINT\n    )\n    Table trades', 1)
+        self.assertIn('Table salaries', model)
+        status, headers, body = self.plan_and_run_over(model, '|#>{trades::DB.salaries}#->select(~[name])')
         self.assertEqual((status, headers['Content-Type']), (200, 'application/json'))
+        self.assertTrue(json.loads(body)['plan'].startswith('ERR\nMODEL\n'), body)
+        # nor one that does not read as a model at all
+        status, _, body = self.plan_and_run_over('not a model', '|1')
         self.assertTrue(json.loads(body)['plan'].startswith('ERR\nMODEL\n'), body)
 
     def test_sql_the_database_refuses_is_answered_with_its_plan(self):
@@ -291,6 +315,84 @@ class PlanAndRunRoutes(Served):
             except urllib.error.HTTPError as e:
                 status = e.code
             self.assertNotEqual(status, 200, path)
+
+
+class SettingsKept(Served):
+    """The page's own settings, kept by Python in this user's folder (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B2): what
+    the browser keeps per address, and Python's address is new each run."""
+
+    def get(self, path):
+        request = urllib.request.Request(self.server.url + path, headers={'Authorization': self.server.authorization})
+        try:
+            with urllib.request.urlopen(request, timeout=30) as r:
+                return r.status, r.read()
+        except urllib.error.HTTPError as e:
+            return e.code, e.read()
+
+    def test_kept_whole_and_read_back_by_the_next_page(self):
+        from unittest import mock
+        home = tempfile.TemporaryDirectory()
+        self.addCleanup(home.cleanup)
+        with mock.patch.dict(os.environ, {'LEGEND_LITE_HOME': home.name}):
+            self.assertEqual(self.get('/settings.json'), (200, b'null'), 'none kept yet')
+            values = {'dataCube.grid.rowBuffer': 30, 'dataCube.debugger.enableDebugMode': True}
+            self.assertEqual(self.post('/settings.json', json.dumps(values))[0], 204)
+            self.assertEqual(json.loads(self.get('/settings.json')[1]), values)
+            self.assertEqual(json.loads(Path(home.name, 'settings', 'datacube.json').read_text()), values)
+            # a write is whole: the next replaces it
+            self.assertEqual(self.post('/settings.json', json.dumps({'dataCube.grid.rowBuffer': 40}))[0], 204)
+            self.assertEqual(json.loads(self.get('/settings.json')[1]), {'dataCube.grid.rowBuffer': 40})
+
+    def test_only_an_object_and_only_with_the_token(self):
+        for body in ('not json', '[1]', '"x"'):
+            self.assertEqual(self.post('/settings.json', body)[0], 400, body)
+        self.assertEqual(self.post('/settings.json', '{}', headers={'Authorization': 'Bearer nope'})[0], 401)
+        request = urllib.request.Request(self.server.url + '/settings.json')
+        with self.assertRaises(urllib.error.HTTPError) as refused:
+            urllib.request.urlopen(request, timeout=30)
+        self.assertEqual(refused.exception.code, 401)
+
+
+class ModelHomeServed(Served):
+    """Python's model home (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B3): the native library's SDLC and Depot, served at
+    /sdlc/api and /depot/api with the engine's token, over a git repository in this user's folder. The routes' answers
+    are the SDLC suite's (//datacube:python_model_home_test); here, how the engine serves them."""
+
+    def call(self, method, path, body=None, authorization=None):
+        sent = {'Authorization': self.server.authorization if authorization is None else authorization}
+        if body is not None:
+            sent['Content-Type'] = 'application/json'
+        request = urllib.request.Request(self.server.url + path, None if body is None else body.encode('utf-8'), sent,
+                                         method=method)
+        try:
+            with urllib.request.urlopen(request, timeout=30) as r:
+                return r.status, r.read()
+        except urllib.error.HTTPError as e:
+            return e.code, e.read()
+
+    def test_a_project_made_and_read_back_in_a_git_repository_of_this_users(self):
+        from unittest import mock
+        home = tempfile.TemporaryDirectory()
+        self.addCleanup(home.cleanup)
+        with mock.patch.dict(os.environ, {'LEGEND_LITE_HOME': home.name}):
+            said = json.loads(self.server.engine.answer('GET', '/services.json', '', None).body)
+            # home() resolves the folder it is given (macOS's /var is /private/var)
+            self.assertEqual(said['modelHome'], {'where': str(Path(home.name, 'projects').resolve())})
+            status, body = self.call('POST', '/sdlc/api/projects', json.dumps({
+                'name': 'Python home', 'description': '', 'groupId': 'org.example', 'artifactId': 'python-home'}))
+            self.assertIn(status, (200, 201), body[:300])
+            project = json.loads(body)['projectId']
+            status, body = self.call('GET', f'/sdlc/api/projects/{project}')
+            self.assertEqual(status, 200, body[:300])
+            self.assertEqual(json.loads(body)['name'], 'Python home')
+            # git's own layout: what `git --git-dir` reads, and `git push` sends anywhere
+            self.assertTrue(Path(home.name, 'projects', 'HEAD').is_file())
+            self.assertTrue(Path(home.name, 'projects', 'refs', 'heads').is_dir())
+
+    def test_with_the_token_only_and_delete_for_the_model_home_only(self):
+        self.assertEqual(self.call('GET', '/sdlc/api/projects', authorization='Bearer nope')[0], 401)
+        self.assertEqual(self.call('GET', '/depot/api/projects', authorization='Bearer nope')[0], 401)
+        self.assertEqual(self.call('DELETE', '/settings.json')[0], 405)
 
 
 class SavedPagesKept(unittest.TestCase):

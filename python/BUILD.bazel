@@ -311,11 +311,16 @@ py_test(
 py_binary(
     name = "repl",
     srcs = ["repl.py"],
+    # what the wheel carries beside the package, by their runfiles paths: DataCube's headless bundle (a page's files,
+    # examples and remote files read by DataCube's own code; grid.view(), to_pandas()) and DuckDB's httpfs as the wheel
+    # lays it out -- so the repl answers as `pip install 'legend-lite[datacube]'` does
     data = [
+        ":wheel_duckdb",
         "//datacube:dist",
+        "//datacube:headless_bundle",
         "//native:compiler",
     ],
-    env = {
+    env = _HEADLESS_ENV | {
         "LEGEND_LITE_LIBRARY": "$(rlocationpath //native:compiler)",
         "LEGEND_LITE_SITE": "$(rlocationpath //datacube:dist)",
         "PYTHONDONTWRITEBYTECODE": "1",
@@ -324,6 +329,7 @@ py_binary(
     main = "repl.py",
     target_compatible_with = _PLATFORMS,
     deps = [
+        ":headless",
         ":legend_lite",
         "@pypi//pandas",
         "@pypi//polars",
@@ -540,7 +546,8 @@ py_test(
 )
 
 # the REPL built in a lane, so it does not rot unseen (as //tools/metrics:tools_build_test keeps its tool): everything
-# it builds is built for engine_test and python_engine_test anyway, bar its own wrapper
+# it builds is built for engine_test, python_engine_test and headless_test (the bundle, the extensions) anyway, bar its
+# own wrapper
 build_test(
     name = "tools_build_test",
     targets = [":repl"],

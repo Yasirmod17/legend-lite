@@ -22,7 +22,8 @@ import type { InferredModel, TableModels } from '../infer.ts';
 import type { PageDocument } from '../page-document.ts';
 import type { ModelOptions } from '../planner.ts';
 import type { S3Credentials } from '../remote.ts';
-import type { QueryRunner } from '../runner.ts';
+import type { ModelWriter } from '../model-writer.ts';
+import type { PlanAndRun } from '../runner.ts';
 import type { CubeSnapshot } from '../snapshot.ts';
 import type { UploadResult } from '../upload.ts';
 
@@ -77,7 +78,22 @@ export interface PlaneService {
  */
 export type GridRows =
   | { readonly planner: Planner; readonly engine: QueryEngine; readonly runner?: undefined }
-  | { readonly runner: QueryRunner; readonly planner?: undefined; readonly engine?: undefined };
+  | { readonly runner: PlanAndRun; readonly planner?: undefined; readonly engine?: undefined };
+
+/**
+ * WHAT THE MODEL ACTIONS NEED OF A HOST (Create a Class…, Create an Association…, Create a Data Space…;
+ * docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B1): legend-lite's model writer and the host's database -- never the page's own
+ * planner or engine, so every host that gives this (and a model home) gets them. A grid's own rows come from where its
+ * rows always do (its PlanAndRun); a project's from `rows`.
+ */
+export interface ModelWriting {
+  /** The name a class's model gives the host's database (its store, connection and runtime): `Browser`, `Python`. */
+  readonly place: string;
+  /** legend-lite's model writer: the tab's module (beside whichever planner the page chose), Python's native library. */
+  readonly writer: ModelWriter;
+  /** A project's queries planned by the writer over its files and run on the host's database: a class's facts. */
+  rows(model: string, runtime: string): PlanAndRun;
+}
 
 /** Where queries are planned and run, and where data comes in. */
 export interface EngineService {
@@ -88,6 +104,8 @@ export interface EngineService {
   rows(model: string, runtime: string, how?: ModelOptions): GridRows;
   /** Where data comes in. */
   readonly database: DatabaseService;
+  /** What the model actions need (`ModelWriting`); absent, they are not offered (§3.4). */
+  readonly modelWriting?: ModelWriting;
   /**
    * THE PAGE'S OWN PLANNER AND DATABASE, where the page plans and runs SQL itself (the tab): what only that shape has
    * (§4.5) -- the sample's planner and the one a saved query's text is read by, the model writer of a warehouse table,
@@ -213,8 +231,9 @@ export interface QueryService {
 export interface ModelHomeService {
   /** The SDLC and its Depot, connected the first time they are asked for. */
   connect(): Promise<ModelHome>;
-  /** Studio, opened on a project's workspace, where the host serves it. */
-  studio(project: string, workspace: string): string;
+  /** Studio, opened on a project's workspace, where the host serves it; absent where none is (Python's, until it serves
+   *  Studio: docs/ONE_PLATFORM_PROGRAM_2026_10_12.md E). */
+  studio?(project: string, workspace: string): string;
 }
 
 // ------------------------------------------------------------------------------------------------------ the warehouse
