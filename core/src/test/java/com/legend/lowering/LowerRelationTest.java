@@ -756,13 +756,7 @@ class LowerRelationTest {
     @Test
     @DisplayName("a whole stored Variant reads as JSON whatever the storage: VARCHAR text, JSON, a native STRUCT")
     void wholeVariantReadsAsJsonInEveryStorage() throws SQLException {
-        try (var st = conn.createStatement()) {
-            st.execute("CREATE TABLE T_VS (ID INTEGER NOT NULL, V VARCHAR)");
-            st.execute("INSERT INTO T_VS VALUES (1, '{\"a\":1,\"b\":\"x\"}'), (2, '{\"a\":1,\"b\":\"x\"}'),"
-                    + " (3, '{\"a\":2,\"b\":null}')");
-            st.execute("CREATE TABLE T_VJ AS SELECT ID, CAST(V AS JSON) AS V FROM T_VS");
-            st.execute("CREATE TABLE T_VN AS SELECT ID, CAST(V AS STRUCT(a INTEGER, b VARCHAR)) AS V FROM T_VS");
-        }
+        createVariantStorages();
         List<List<String>> answers = new ArrayList<>();
         for (String table : List.of("T_VS", "T_VJ", "T_VN")) {
             String model = "###Relational\nDatabase test::DB ( Table " + table
@@ -779,6 +773,75 @@ class LowerRelationTest {
         }
         assertEquals(List.of("1|{\"a\":1,\"b\":\"x\"}", "2|{\"a\":1,\"b\":\"x\"}", "3|{\"a\":2,\"b\":null}",
                 "{\"a\":1,\"b\":\"x\"}|2", "{\"a\":2,\"b\":null}|1"), answers.get(0));
+        assertEquals(answers.get(0), answers.get(1), "JSON storage");
+        assertEquals(answers.get(0), answers.get(2), "native STRUCT storage");
+    }
+
+    /** One Variant column held three ways: JSON text in a VARCHAR, DuckDB JSON, a native STRUCT. */
+    private void createVariantStorages() throws SQLException {
+        try (var st = conn.createStatement()) {
+            st.execute("CREATE TABLE T_VS (ID INTEGER NOT NULL, V VARCHAR)");
+            st.execute("INSERT INTO T_VS VALUES (1, '{\"a\":1,\"b\":\"x\"}'), (2, '{\"a\":1,\"b\":\"x\"}'),"
+                    + " (3, '{\"a\":2,\"b\":null}')");
+            st.execute("CREATE TABLE T_VJ AS SELECT ID, CAST(V AS JSON) AS V FROM T_VS");
+            st.execute("CREATE TABLE T_VN AS SELECT ID, CAST(V AS STRUCT(a INTEGER, b VARCHAR)) AS V FROM T_VS");
+        }
+    }
+
+    /** The type the database itself reports for {@code column} of {@code sql}'s result: what a result decoder sees. */
+    private String columnTypeName(String sql, String column) throws SQLException {
+        try (Statement st = conn.createStatement();
+                ResultSet rs = st.executeQuery("SELECT * FROM (" + sql + ") AS q LIMIT 0")) {
+            var md = rs.getMetaData();
+            for (int i = 1; i <= md.getColumnCount(); i++) {
+                if (md.getColumnLabel(i).equals(column)) {
+                    return md.getColumnTypeName(i);
+                }
+            }
+            throw new AssertionError("no column " + column + " in: " + sql);
+        }
+    }
+
+    @Test
+    @DisplayName("a whole stored Variant reads as JSON whatever the shape of the query: bare, limit, filter, sort,"
+            + " distinct, select, extend, join, a sorted join, concatenate")
+    void wholeVariantReadsAsJsonInEveryShape() throws SQLException {
+        createVariantStorages();
+        // the shapes the DataCube line probed (2026-10-12; docs/VARIANT_STORAGE_CENSUS_2026_09_27.md, the addendum)
+        // and the audit's: a star frame kept to the statement's end (bare, limit, filter, sort, distinct), a listing
+        // select, extend's star projection, a join's star over two sides (plain and sorted), a UNION of star frames
+        List<String> shapes = List.of("", "->sort(~ID->ascending())->limit(2)", "->filter(x | $x.ID > 1)",
+                "->sort(~ID->descending())", "->distinct()", "->select(~[ID, V])", "->extend(~X : x | 1)",
+                "->join(#>{test::DB.T_PERSON}#, JoinKind.INNER, {a, p | $a.ID <= $p.AGE})",
+                "->join(#>{test::DB.T_PERSON}#, JoinKind.INNER, {a, p | $a.ID <= $p.AGE})->sort(~ID->ascending())",
+                "->concatenate(#>{test::DB." + "%s" + "}#)");
+        List<List<List<String>>> answers = new ArrayList<>();
+        for (String table : List.of("T_VS", "T_VJ", "T_VN")) {
+            String model = "###Relational\nDatabase test::DB ( Table " + table + " (ID INTEGER NOT NULL, V SEMISTRUCTURED)"
+                    + " Table T_PERSON (NAME VARCHAR(100) NOT NULL, AGE INTEGER NOT NULL, FIRM VARCHAR(50)) )\n";
+            List<List<String>> byShape = new ArrayList<>();
+            for (String shapeOf : shapes) {
+                String shape = shapeOf.formatted(table);
+                boolean join = shape.startsWith("->join");
+                String sql = new DuckDb().render(new Lowerer(PlatformRegistrations.catalogTable())
+                        .lower(Compiler.query(Compiler.compileModel(model), "#>{test::DB." + table + "}#" + shape)
+                                .expression()));
+                // the whole value is read as JSON under its own name, in every shape; a UNION's in each branch
+                assertTrue(sql.contains("CAST(t0.V AS JSON) AS V"), table + shape + ": " + sql);
+                if (shape.startsWith("->concatenate")) {
+                    assertTrue(sql.contains("CAST(t1.V AS JSON) AS V"), table + shape + ": " + sql);
+                }
+                // and the statement's own column type agrees with the read, whatever the storage
+                assertEquals("JSON", columnTypeName(sql, "V"), table + shape + ": " + sql);
+                byShape.add(exec("SELECT ID, CAST(V AS VARCHAR) FROM (" + sql + ") AS q ORDER BY ID"
+                        + (join ? ", NAME" : "")));
+            }
+            answers.add(byShape);
+        }
+        assertEquals(List.of("1|{\"a\":1,\"b\":\"x\"}", "2|{\"a\":1,\"b\":\"x\"}", "3|{\"a\":2,\"b\":null}"),
+                answers.get(0).get(0), "bare");
+        assertEquals(List.of("1|{\"a\":1,\"b\":\"x\"}", "2|{\"a\":1,\"b\":\"x\"}"), answers.get(0).get(1),
+                "limit");
         assertEquals(answers.get(0), answers.get(1), "JSON storage");
         assertEquals(answers.get(0), answers.get(2), "native STRUCT storage");
     }
