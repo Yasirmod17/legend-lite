@@ -9079,14 +9079,15 @@ Variant output in every shape) and asked for the statement's own column type to 
 before landing, the core change byte-identical (the two patches compared line for line), and the judges, the render
 census, the local gate and one CI run re-run on the rebased tree. CI: run 38327604817 on the rebased branch, green on
 all 50 jobs first time (the summary job a dispatched run skips); the first run, 38310588988 on the commit before the
-rebase, green on all 50 too (every lane, every platform; `core` is where the test runs, and the module in `wasm` and
-DataCube's tests plan through the same renderer). `//gates:local` green (348 pass, 2 skipped:
-`//tools/guards:classpath_test` and `markdown_inputs_test`, which depend on the MariaDB lane, incompatible on this Mac
-tests); the lane query empty; the judges against baselines built from main 36b72ee13: every result file the same (0 of
-23 differ; `docs/build-inventory/program/evidence/variant-star-egress/judges_compare.txt`); the render census: 55,016
-entries, 41 differ, every one in the core lane's own unit tests: the new test's renders, and seven `extend` shapes over
-a table holding a Variant column now listing their columns, each with its successor (`render_census_compare.txt` beside
-it; the audit is `AUDIT.md` there).
+rebase, green on all 50 too; main's own push run on the landing, 38331688457, green (every lane, every platform; `core`
+is where the test runs, and the module in `wasm` and DataCube's tests plan through the same renderer). `//gates:local`
+green (348 pass, 2 skipped: `//tools/guards:classpath_test` and `markdown_inputs_test`, which depend on the MariaDB
+lane, incompatible on this Mac tests); the lane query empty; the judges against baselines built from main 36b72ee13:
+every result file the same (0 of 23 differ;
+`docs/build-inventory/program/evidence/variant-star-egress/judges_compare.txt`); the render census: 55,016 entries, 41
+differ, every one in the core lane's own unit tests: the new test's renders, and seven `extend` shapes over a table
+holding a Variant column now listing their columns, each with its successor (`render_census_compare.txt` beside it; the
+audit is `AUDIT.md` there).
 
 1. **The cause.** V2 of the census reads a stored Variant column as JSON through the DuckDB dialect's `columnRef`
    hook, `CAST(col AS JSON)` on a column REFERENCE. A star renders none: a star frame (`SELECT *`, which a bare
@@ -9120,3 +9121,24 @@ it; the audit is `AUDIT.md` there).
 5. **Not chased.** `Fold.declaredKindEnvelope`'s Float rule still rides a star frame through unchanged (its own
    2026-09-17 reason: a wire already DOUBLE); it is a different rule and untouched. The tab's reader's JSON rendering
    of a STRUCT that reaches it by another route (the DataCube line's `toScalar` fix) stands on its own.
+
+## 2026-10-12 — One `DUCKDB_PLATFORMS`: DuckDB's spelling of our platform names, in one place (the Compiler Rewrite line)
+
+A Bazel-only tidy-up after the DataCube line's PR #31: its httpfs extension (step 2b) brought a second hand-spelled copy
+of the mapping from our platform names (`//tools/platforms`) to the names DuckDB publishes its extensions under --
+`python/BUILD.bazel`'s `_DUCKDB_PLATFORMS` beside `warehouse/defs.bzl`'s five literal `POSTGRES_EXTENSION` labels. Now
+one constant, `DUCKDB_PLATFORMS` in `tools/platforms/defs.bzl`, read by both: the five httpfs `java_run` targets and the
+`platform_select` behind `//python:wheel_duckdb`, and the postgres extension's select. No behaviour change: the same
+five repositories (`MODULE.bazel`'s `duckdb_*_extension_<name>`) on the same five platforms, the same
+`target_compatible_with`. Left alone on purpose: the JDBC jar's library names (`warehouse/BUILD.bazel`, both macOS
+builds `osx_universal`), Chromium's, esbuild's and actionlint's own names, and `MODULE.bazel`'s two pin tables, which
+cannot load a `.bzl` file and so spell the five names by hand (the constant's comment says they must keep listing
+these). Branch `build/duckdb-platforms`, one commit over main 47349d82a; no announcement went first (no `core/` file, no
+behaviour). The audit (`docs/build-inventory/program/evidence/duckdb-platforms/AUDIT.md`): no blocker; two 122-column
+lines rewrapped and its nit on the pin tables taken into the comment. The DataCube line (python's owner) approved
+`python/BUILD.bazel`'s part; the warehouse's part has no live owner session, the audit read it. `//python:wheel_duckdb`
+and `//warehouse:postgres_extension` build here and the five httpfs targets keep their names; `//gates:local` 348 pass,
+2 skipped (the two guards incompatible on this Mac); the lane query empty; CI: run 38332350300 on the lanes the change
+reaches (`checks`, `datacube`, `warehouse`: the python tests sit in the warehouse lane, DataCube's engine test carries
+the wheel's extensions, `checks` holds the guards over `tools/`), every platform, green first time on every job (14 of
+15, the summary job a dispatched run skips).

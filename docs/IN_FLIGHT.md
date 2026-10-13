@@ -771,10 +771,16 @@ judges, the render census, the corpora and the local gate; one full CI on the br
 DataCube line's PR #31 is in. The Plan Gen line agreed: lowering only, and result typing assumes JSON for a Variant
 output in every shape. **Landed 2026-10-12 (rebased onto main 36b72ee13 after PRs #31 and #33, the code byte-identical;
 run 38327604817, 50 jobs green first time, the summary job skipped on a dispatched run, the first run 38310588988 before
-the rebase green too; `//gates:local` 348 pass, 2 skipped (two guards incompatible on this Mac) tests; GATES entry "A
-stored Variant column leaves the statement as JSON, whatever the shape of the query")** -- the audit widened the pass
-from star frames to every root-level star (`extend`'s `SELECT t0.*, x`, a UNION's branches, a WITH's body) and the test
-from six shapes to ten; files touched beyond the announced list: none.
+the rebase green too, main's own run on the landing 38331688457 green; `//gates:local` 348 pass, 2 skipped (two guards
+incompatible on this Mac) tests; GATES entry "A stored Variant column leaves the statement as JSON, whatever the shape
+of the query")** -- the audit widened the pass from star frames to every root-level star (`extend`'s `SELECT t0.*, x`, a
+UNION's branches, a WITH's body) and the test from six shapes to ten; files touched beyond the announced list: none.
+
+**Landed 2026-10-12 -- one `DUCKDB_PLATFORMS` (branch `build/duckdb-platforms`; run 38332350300; GATES entry "One
+`DUCKDB_PLATFORMS`: DuckDB's spelling of our platform names, in one place"):** a Bazel-only tidy-up after PR #31: the
+mapping from our platform names to DuckDB's extension names, spelled by hand in `python/BUILD.bazel` and
+`warehouse/defs.bzl`, is one constant in `tools/platforms/defs.bzl`; the same five repositories on the same five
+platforms. Audited; the DataCube line approved python's part. No announcement went first: no `core/` file, no behaviour.
 
 **Announced 2026-10-12 -- the semi-structured step: jsonb, LATERAL, set-returning functions** (the user's ask: JSON
 and Variant are what lite's DuckDB users do; branch `claude/loving-euler-gjta59`, three commits over main c03ac6b; the
