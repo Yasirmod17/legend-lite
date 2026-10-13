@@ -107,10 +107,12 @@ async function boot(): Promise<void> {
       data = tab.data;     // a project opened by name brings its own test data, made here when opened (AppContext.activate)
       user = exec.user;
     } else {
+      // the warehouse's API as the one binding speaks it (vendor/warehouse/: docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C3),
+      // fetched while the person types
+      const loading = loadWarehouseBinding(new URL('./vendor/warehouse/', location.href).href);
       const creds = await askSignIn(root, exec.url);
       starting('Signing in');
-      // the warehouse's API as the one binding speaks it (vendor/warehouse/: docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C3)
-      const binding = await loadWarehouseBinding(new URL('./vendor/warehouse/', location.href).href);
+      const binding = await loading;
       const session = await signIn(binding, exec.url, creds.user, creds.password);
       runner = new WarehouseEngine(binding, session, exec.catalog ?? 'main');
       user = session.principal;
