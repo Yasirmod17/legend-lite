@@ -11,7 +11,7 @@
 import { startDuckDbInTab } from '../../engine-client/src/duckdb-tab.ts';
 import { TestData, type DataSink } from '../../engine-client/src/model-data.ts';
 import type { QueryEngine } from '../../engine-client/src/engine.ts';
-import { signIn, WarehouseEngine } from '../../engine-client/src/warehouse.ts';
+import { loadWarehouseBinding, signIn, WarehouseEngine } from '../../engine-client/src/warehouse.ts';
 import { connectModelHome } from '../../depot-client/src/model-home.ts';
 import { loadByName, versionsOf } from '../src/app/by-name.ts';
 import { AppContext, gavOf, type AppConfig, type CubeRows, type LoadedProject } from '../src/app/context.ts';
@@ -109,8 +109,10 @@ async function boot(): Promise<void> {
     } else {
       const creds = await askSignIn(root, exec.url);
       starting('Signing in');
-      const session = await signIn(exec.url, creds.user, creds.password);
-      runner = new WarehouseEngine(session, exec.catalog ?? 'main');
+      // the warehouse's API as the one binding speaks it (vendor/warehouse/: docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C3)
+      const binding = await loadWarehouseBinding(new URL('./vendor/warehouse/', location.href).href);
+      const session = await signIn(binding, exec.url, creds.user, creds.password);
+      runner = new WarehouseEngine(binding, session, exec.catalog ?? 'main');
       user = session.principal;
     }
     if (exec.seed?.length) {

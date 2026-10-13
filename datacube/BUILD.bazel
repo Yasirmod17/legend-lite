@@ -166,6 +166,7 @@ _NEXT_LINK_VERSION = "p2"
 _NEXT_LINK_FILE = "src/share/link-%s.ts" % _NEXT_LINK_VERSION
 
 _EXTRA_ENV = {
+    "warehouse-session-http": {"SQLAPI_PAGE": "$(rlocationpath //warehouse:sqlapi_page_dir)"},
     "bundle-budget": {
         "BUNDLE": "$(rlocationpath :demo/bundle.js)",
         "ENGINE_BUNDLE": "$(rlocationpath :demo/bundle-engine.js)",
@@ -193,7 +194,12 @@ _DUCKDB_USERS = ["duckdb", "group-derived", "model-join", "saved-queries", "sort
 
 # What a test reads from disk beyond src/: the guardrails scan the demo
 # entry points too (they ship), so they are declared, not assumed.
+# The tests that load the warehouse's binding (//warehouse:sqlapi_page: docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C3), a
+# WebAssembly module of its own: its flag, never the planner's
+_BINDING_TESTS = ["warehouse-session-http"]
+
 _EXTRA_DATA = {
+    "warehouse-session-http": ["//warehouse:sqlapi_page_dir"],
     # the page's own bundle and its lazy chunks, measured against their budget (plan F7)
     "bundle-budget": [
         ":bundle_bundle",
@@ -289,6 +295,7 @@ _WASM_TESTS = [
     env = _EXTRA_ENV.get(t[len("test/"):-len(".test.ts")], {}) | ({
         "SOURCES": " ".join(["$(rlocationpaths %s)" % f for f in _SCANNED[t[len("test/"):-len(".test.ts")]]]),
     } if t[len("test/"):-len(".test.ts")] in _SCANNED else {}),
+    node_options = ["--experimental-wasm-exnref"] if t[len("test/"):-len(".test.ts")] in _BINDING_TESTS else [],
     wasm = t[len("test/"):-len(".test.ts")] in _WASM_TESTS,
 ) for t in _TESTS]
 
@@ -1314,6 +1321,7 @@ copy_to_directory(
         "//legend-art:fonts",
         "//query-store:page",
         "//sdlc-server:page",
+        "//warehouse:sqlapi_page",
         "//wasm:planner",
     ],
     out = "demo/vendor",
@@ -1336,6 +1344,9 @@ copy_to_directory(
         # the saved queries' rules, compiled to WebAssembly (the program's B5)
         "query-store/page/classes.wasm",
         "query-store/page/wasm-gc-module-runtime.js",
+        # the warehouse's API as the one binding speaks it (the program's C3)
+        "warehouse/sqlapi_page/classes.wasm",
+        "warehouse/sqlapi_page/wasm-gc-module-runtime.js",
     ],
     replace_prefixes = {
         "legend-art/fonts/": "fonts/",
@@ -1343,6 +1354,7 @@ copy_to_directory(
         "wasm/planner/": "",
         "sdlc-server/page/": "sdlc/",
         "query-store/page/": "queries/",
+        "warehouse/sqlapi_page/": "warehouse/",
     },
 )
 

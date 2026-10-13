@@ -33,6 +33,11 @@ public final class NativeBinding implements SqlApiBinding {
     }
 
     @Override
+    public HttpCall loginWithKey(String key) {
+        return new HttpCall("POST", "/sql/v1/login", Map.of("Content-Type", "application/json"), ApiJson.loginKey(key));
+    }
+
+    @Override
     public HttpCall refresh(String token) {
         return new HttpCall("POST", "/sql/v1/token/refresh", Map.of("Authorization", "Bearer " + token), "");
     }
@@ -55,9 +60,7 @@ public final class NativeBinding implements SqlApiBinding {
         }
         Status s = ApiJson.parseStatus(result.body());
         return switch (s.state()) {
-            case QUEUED, RUNNING -> new Poll(s.statementId(), new HttpCall("GET",
-                    "/sql/v1/statements/" + s.statementId() + "?waitMs=" + pollWaitMs,
-                    json(token), null));
+            case QUEUED, RUNNING -> new Poll(s.statementId(), poll(s.statementId(), token));
             case SUCCEEDED -> new Done(s);
             case FAILED, CANCELLED -> {
                 ApiError e = s.error();
@@ -67,6 +70,11 @@ public final class NativeBinding implements SqlApiBinding {
                         : e, s.statementId());
             }
         };
+    }
+
+    @Override
+    public HttpCall poll(String statementId, String token) {
+        return new HttpCall("GET", "/sql/v1/statements/" + statementId + "?waitMs=" + pollWaitMs, json(token), null);
     }
 
     @Override

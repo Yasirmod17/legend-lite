@@ -25,7 +25,14 @@ import { startDuckDbInTab } from '../../../engine-client/src/duckdb-tab.ts';
 import type { DuckDbEngine } from '../../../engine-client/src/duckdb.ts';
 import type { ResultTable } from '../../../engine-client/src/result.ts';
 import { SnapManager } from '../../../engine-client/src/snap.ts';
-import { listObjects, SessionExpired, sessionExpired, signIn, WarehouseEngine } from '../../../engine-client/src/warehouse.ts';
+import {
+  listObjects,
+  loadWarehouseBinding,
+  SessionExpired,
+  sessionExpired,
+  signIn,
+  WarehouseEngine,
+} from '../../../engine-client/src/warehouse.ts';
 import { accessor, from } from '../../../pure-protocol/src/index.ts';
 import { levelLambda } from '../../src/query.ts';
 import { PlanThenRun } from '../../src/runner.ts';
@@ -143,9 +150,11 @@ async function check(name: string, body: () => Promise<void>): Promise<void> {
 
 async function run(): Promise<void> {
   window.__liveSnapStage = 'signing in, writing the tables';
-  const alice = await signIn(base, 'alice', 'alice-pw');
+  // the warehouse's API as the one binding speaks it, from the site's vendor/ (as DataCube and Query load it)
+  const binding = await loadWarehouseBinding(new URL('vendor/warehouse/', location.href).href);
+  const alice = await signIn(binding, base, 'alice', 'alice-pw');
   for (const sql of DDL) await asOwner(sql, alice.token);
-  const live = new WarehouseEngine(await signIn(base, 'rita', 'rita-pw'));
+  const live = new WarehouseEngine(binding, await signIn(binding, base, 'rita', 'rita-pw'));
   // the tab's own DuckDB, in its worker, from the site's vendor/ (as Query and Studio start theirs)
   window.__liveSnapStage = 'starting the tab\'s DuckDB';
   const worker = new URL('planner-worker.js', location.href).href;
@@ -192,7 +201,7 @@ async function run(): Promise<void> {
   });
 
   await check('a person\'s path: the catalog, a model from it, the same answer on both engines', async () => {
-    const objects = await listObjects({ baseUrl: base, token: (await signIn(base, 'rita', 'rita-pw')).token,
+    const objects = await listObjects(binding, { baseUrl: base, token: (await signIn(binding, base, 'rita', 'rita-pw')).token,
       principal: 'rita', expiresAt: '' });
     deepEqual(objects.map((o) => `${o.schema}.${o.name}`), ['main.TRADES'], 'the reader sees exactly what it was granted:');
     const trades = objects[0]!;
@@ -245,7 +254,7 @@ async function run(): Promise<void> {
 
   await check('a token the warehouse no longer honours is SessionExpired, and signing in again goes on as the same user', async () => {
     // What a restarted warehouse does to an open cube: its token is refused.
-    const stale = new WarehouseEngine({ baseUrl: base, token: 'cml0YXwx.bm90LWEtcmVhbC1zaWduYXR1cmU', principal: 'rita', expiresAt: '' });
+    const stale = new WarehouseEngine(binding, { baseUrl: base, token: 'cml0YXwx.bm90LWEtcmVhbC1zaWduYXR1cmU', principal: 'rita', expiresAt: '' });
     const refused = await stale.run('SELECT 1 AS one', 0).catch((e: unknown) => e);
     const expired = sessionExpired(refused);
     ok(expired instanceof SessionExpired, `not a SessionExpired: ${String(refused)}`);
@@ -259,8 +268,8 @@ async function run(): Promise<void> {
   });
 
   await check('the token refreshes: on asking, and by itself before it expires', async () => {
-    const s = await signIn(base, 'rita', 'rita-pw');
-    const engine = new WarehouseEngine(s);
+    const s = await signIn(binding, base, 'rita', 'rita-pw');
+    const engine = new WarehouseEngine(binding, s);
     await engine.refreshToken();
     ok(Date.parse(engine.expiresAt) >= Date.parse(s.expiresAt), 'a refreshed token lives at least as long');
     const out = await engine.run('SELECT 1 AS one', 0);
@@ -271,7 +280,7 @@ async function run(): Promise<void> {
     const t0 = Date.now();
     const timers: { fn: () => void; ms: number }[] = [];
     const clock = { now: () => t0, setTimeout: (fn: () => void, ms: number) => timers.push({ fn, ms }), clearTimeout: () => {} };
-    const soon = new WarehouseEngine({ ...s, expiresAt: new Date(t0 + 1_500).toISOString() }, 'main', clock);
+    const soon = new WarehouseEngine(binding, { ...s, expiresAt: new Date(t0 + 1_500).toISOString() }, 'main', clock);
     const before = soon.expiresAt;
     equal(timers.at(-1)?.ms, 1_200, 'the refresh is scheduled at 80% of the token\'s life:');
     timers.at(-1)!.fn();

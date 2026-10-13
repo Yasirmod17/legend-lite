@@ -32,6 +32,8 @@ _ARITY = {
     'lite_execute_json_plan': 2, 'lite_execute_json_answer': 2, 'lite_warm_model': 1,
     # the site's media types, the one table every host serving a site answers with (C4)
     'lite_site_types': 0,
+    # the warehouse's SQL API, as the one binding speaks it (C3)
+    'lite_warehouse_call': 2, 'lite_warehouse_read': 3,
     # Python's model home (native/.../ModelHome.java): a repository's folder, then a request's method, target and body
     'lite_sdlc_handle': 4, 'lite_depot_handle': 4, 'lite_saved_queries': 6, 'lite_saved_cubes': 6,
 }

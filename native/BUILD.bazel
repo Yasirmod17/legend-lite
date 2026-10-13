@@ -33,6 +33,8 @@ legend_java_library(
         "//sdlc-server:rules",
         "//sdlc-server/grammar",
         "//site:types",
+        # the warehouse's SQL API as the one binding speaks it (WarehouseCalls: the program's C3)
+        "//warehouse:sqlapi",
         "//wasm:boundary",
     ],
 )

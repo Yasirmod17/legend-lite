@@ -349,14 +349,20 @@ py_test(
         "tests/test_engine.py",
         "tests/test_page.py",
         "tests/test_show.py",
+        "tests/test_warehouse.py",
     ],
     args = [
         "test_engine",
         "test_page",
         "test_show",
+        "test_warehouse",
     ],
-    data = ["//native:compiler"],
-    env = _ENV,
+    data = [
+        "//native:compiler",
+        "//warehouse:sqlapi_corpus",
+    ],
+    # the warehouse's driver (legend_lite/warehouse.py), held to the one corpus its binding is (C3)
+    env = _ENV | {"LEGEND_LITE_SQLAPI_CORPUS": "$(rlocationpath //warehouse:sqlapi_corpus)"},
     main = "tests/main.py",
     target_compatible_with = _PLATFORMS,
     deps = [

@@ -89,6 +89,7 @@ copy_to_directory(
         "//legend-art:styles",
         "//query-store:page",
         "//sdlc-server:page",
+        "//warehouse:sqlapi_page",
         "//wasm:planner",
     ],
     out = "demo/vendor",
@@ -104,6 +105,9 @@ copy_to_directory(
         # the saved queries' rules, compiled to WebAssembly (the program's B5)
         "query-store/page/classes.wasm",
         "query-store/page/wasm-gc-module-runtime.js",
+        # the warehouse's API as the one binding speaks it (the program's C3)
+        "warehouse/sqlapi_page/classes.wasm",
+        "warehouse/sqlapi_page/wasm-gc-module-runtime.js",
         "**/dist/duckdb-mvp.wasm",
         "**/dist/duckdb-eh.wasm",
         "**/dist/duckdb-browser-mvp.worker.js",
@@ -123,6 +127,7 @@ copy_to_directory(
         "wasm/planner/": "",
         "sdlc-server/page/": "sdlc/",
         "query-store/page/": "queries/",
+        "warehouse/sqlapi_page/": "warehouse/",
         "**/dist/": "",
         "legend-art/fonts/": "fonts/",
         "legend-art/src/": "legend-art/",

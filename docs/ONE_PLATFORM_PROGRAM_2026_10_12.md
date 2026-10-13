@@ -582,6 +582,33 @@ an audit.
      the page's own (`SnapManager` over the page's engines): the same states, the copy planned and run by Python.
    - `sources.ts` opens a warehouse table on Python's page through that service, not through `services.engine.local`.
 
+**Built 2026-10-13, steps 1 to 4 (branch `datacube/python-parity`):**
+- **The surface.** `SqlApiCalls` (`call`, `read`) over `NativeBinding`, which gains `loginWithKey` and `poll`.
+  `ApiJson`'s answer readers check each value's kind (`notTheApis`): an answer that is not the API's is a refusal,
+  `INTERNAL`, never a trap. `CatalogColumn` carries the catalog's structured fields, and `ApiJson.objects` writes
+  them. `SqlApiCallsTest` holds the binding to the corpus, and to its refusals (wrong arguments, values of the wrong
+  kind, a proxy's page, a 401 that is an expired session only where a token was carried).
+- **Changed from ruling 7's words** (docs/SERVER_PROGRAM_2026_09_26.md §2c: "into the WebAssembly module beside the
+  planner"): the binding is its own module, `//warehouse:sqlapi_page` (110 KB, its runtime 34 KB), at
+  `vendor/warehouse/` in DataCube's and Query's sites. The planner runs in a worker, so every HTTP step of a statement
+  would be a round trip to it, and a page reading a warehouse would need the planner started. The ruling's point --
+  the same Java in the tab and on the server -- stands.
+- **The native library:** `WarehouseCalls` (`lite_warehouse_call`, `lite_warehouse_read`), on `//warehouse:sqlapi`.
+  The warehouse's closure is unchanged: the native library reaches the binding, never the reverse.
+- **The corpus:** nine scenarios (`//warehouse:sqlapi_corpus`, a copy in the output tree, as a node test takes another
+  package's file only from there). `//engine-client:warehouse_corpus_test` replays it through the tab's driver over the
+  module, and `python/tests/test_warehouse.py` (in `//python:engine_test`) through Python's over the native library;
+  each makes exactly the recorded calls.
+- **The drivers.** `engine-client/src/warehouse.ts`: `WarehouseBinding`, `loadWarehouseBinding`; `signIn`,
+  `signInWithKey`, `listObjects` and `connect` take the binding first, and `WarehouseEngine` takes it in its
+  constructor. Its hand spelling of the API (paths, bodies, the poll's and the chunk's settings, the reading of a
+  status) is gone. DataCube's browser services load the binding at the first sign-in; Query's warehouse plane
+  (`query/demo/main.ts`) before its sign-in. `legend_lite/warehouse.py` is the twin (`sign_in`, `sign_in_with_key`,
+  `list_objects`, `connect`, `Warehouse`), refreshing its token in its last fifth at the next call (the tab refreshes
+  at 80% on a timer: one rule, each host's clock).
+- `datacube/test/warehouse-session.test.ts`, which runs headless too (no WebAssembly), hands the engine a binding it
+  never calls; the HTTP half loads the module.
+
 #### C4. The small copies
 
 - One table of the site's file types, which Python reads.

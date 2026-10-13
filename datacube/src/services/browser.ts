@@ -10,7 +10,14 @@ import type { AsyncDuckDB } from '../../../engine-client/src/duckdb-wasm.ts';
 import type { DuckDbEngine } from '../../../engine-client/src/duckdb.ts';
 import { setUpSession } from '../../../engine-client/src/engine.ts';
 import type { SeedSource } from '../../../engine-client/src/model-data.ts';
-import { connect, listObjects, signInWithKey, WarehouseEngine } from '../../../engine-client/src/warehouse.ts';
+import {
+  connect,
+  listObjects,
+  loadWarehouseBinding,
+  signInWithKey,
+  WarehouseEngine,
+  type WarehouseBinding,
+} from '../../../engine-client/src/warehouse.ts';
 import type { QueriesModule, QueryReader } from '../../../query-store/src/index.ts';
 import type { Planner } from '../cube.ts';
 import {
@@ -106,7 +113,7 @@ export async function browserServices(o: BrowserServicesOptions): Promise<Servic
     pages: browserPages(storeRules),
     queries: queryService(config, storeRules),
     ...(modelHome ? { modelHome } : {}),
-    warehouse: warehouseService(config),
+    warehouse: warehouseService(config, o.location),
     browser: {
       ...browserBasics,
       address: () => o.location.href,
@@ -213,7 +220,18 @@ function depotHome(depot: { readonly sdlc: string; readonly vendor: string }, lo
  *  to -- a convenience kept in this browser only; storage may be refused. */
 const REMEMBERED = 'datacube.warehouse.url';
 
-function warehouseService(config: TabConfig): WarehouseService {
+function warehouseService(config: TabConfig, location: { readonly href: string }): WarehouseService {
+  // THE WAREHOUSE'S API: the one binding (vendor/warehouse/, docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C3), fetched at
+  // the first sign-in (a load that failed is tried again at the next); a table is opened only once signed in, so its
+  // live engine finds it loaded
+  let binding: WarehouseBinding | undefined;
+  let loading: Promise<WarehouseBinding> | undefined;
+  const loaded = (): Promise<WarehouseBinding> => (loading ??= loadWarehouseBinding(new URL('./vendor/warehouse/', location.href).href)
+    .then((b) => (binding = b))
+    .catch((e: unknown) => {
+      loading = undefined;
+      throw e;
+    }));
   return {
     offered: () => {
       if (config.warehouse) return config.warehouse;
@@ -230,12 +248,16 @@ function warehouseService(config: TabConfig): WarehouseService {
         // storage refused: not remembered, nothing else changes
       }
     },
-    connect: (url, user, password) => connect(url, user, password),
+    connect: async (url, user, password) => connect(await loaded(), url, user, password),
     signInWithKey: async (key) => {
       if (!config.warehouse) throw new Error('this page was not served by a warehouse: its config.json names none');
-      const session = await signInWithKey(config.warehouse, key);
-      return { session, objects: await listObjects(session) };
+      const b = await loaded();
+      const session = await signInWithKey(b, config.warehouse, key);
+      return { session, objects: await listObjects(b, session) };
     },
-    live: (session, catalog) => new WarehouseEngine(session, catalog),
+    live: (session, catalog) => {
+      if (binding === undefined) throw new Error('the warehouse is read once signed in: sign in first');
+      return new WarehouseEngine(binding, session, catalog);
+    },
   };
 }
