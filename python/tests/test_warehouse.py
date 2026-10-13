@@ -119,6 +119,44 @@ class Addresses(unittest.TestCase):
             with self.assertRaisesRegex(warehouse.WarehouseError, 'cannot reach the warehouse at https://wh.example'):
                 warehouse.sign_in(BASE, 'u', 'p')
 
+    def test_a_redirect_is_refused_never_followed(self):
+        # urllib's own handler would carry the bearer token to wherever a redirect points: the driver's opener follows
+        # none (a real request through it, not a replay)
+        import http.server
+        import threading
+        reached = []
+
+        class Elsewhere(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                reached.append(self.headers.get('Authorization'))
+                self.send_response(200)
+                self.end_headers()
+
+            def log_message(self, *_):
+                pass
+
+        elsewhere = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Elsewhere)
+        target = f'http://127.0.0.1:{elsewhere.server_address[1]}/sql/v1/objects'
+
+        class Redirecting(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(302)
+                self.send_header('Location', target)
+                self.end_headers()
+
+            def log_message(self, *_):
+                pass
+
+        here = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Redirecting)
+        for server in (elsewhere, here):
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            self.addCleanup(server.server_close)
+            self.addCleanup(server.shutdown)
+        session = warehouse.Session(f'http://127.0.0.1:{here.server_address[1]}', 'secret-token', 'rita', '2099-01-01T00:00:00Z')
+        with self.assertRaisesRegex(warehouse.WarehouseError, 'could not list the tables — INTERNAL: HTTP 302'):
+            warehouse.list_objects(session)
+        self.assertEqual(reached, [], 'the redirect was not followed: the token went nowhere else')
+
     def test_another_users_session_is_refused(self):
         w = warehouse.Warehouse(session('t'))
         with self.assertRaisesRegex(warehouse.WarehouseError, 'read as rita'):

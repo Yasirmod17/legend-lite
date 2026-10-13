@@ -390,6 +390,9 @@ export interface HostSnapTarget {
 export class HostSnaps implements Snaps {
   readonly #target: HostSnapTarget;
   #state: PlaneState = { mode: 'live' };
+  /** A snap asked for and not answered yet: a grid closed meanwhile lets its copy go once it is made (`close`). */
+  #pending: Promise<unknown> | undefined;
+  #closed = false;
 
   constructor(target: HostSnapTarget) {
     this.#target = target;
@@ -409,7 +412,19 @@ export class HostSnaps implements Snaps {
 
   /** Freeze `pull` there and switch to snapped. */
   async snap(pull: Lambda, label?: string): Promise<SnapInfo> {
-    const frozen = await this.#target.snap(pull);
+    const asked = this.#target.snap(pull);
+    this.#pending = asked;
+    let frozen: Awaited<typeof asked>;
+    try {
+      frozen = await asked;
+    } finally {
+      this.#pending = undefined;
+    }
+    if (this.#closed) {
+      // the grid closed while the copy was made: it holds none
+      await this.#target.release();
+      throw new Error('the grid was closed while its snap was made');
+    }
     const takenAt = new Date();
     const snap: SnapInfo = {
       ...(frozen.pulledBy ? { pulledBy: frozen.pulledBy } : {}),
@@ -443,6 +458,12 @@ export class HostSnaps implements Snaps {
 
   async discard(_snap: SnapInfo): Promise<void> {
     await this.#target.release();
+  }
+
+  /** The grid is gone: the copy it holds let go, and one a snap in flight makes let go once it is made. */
+  async close(): Promise<void> {
+    this.#closed = true;
+    if (this.#pending === undefined) await this.release();
   }
 }
 

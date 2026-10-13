@@ -436,6 +436,8 @@ class _WarehouseTable:
         self.warehouse = where
         self.catalog = catalog
         self.holders = 0
+        # what the copy holds (its count and the pull's receipt), answered to a grid that snaps it while it is there
+        self.frozen: dict[str, Any] | None = None
         # the schema the copy made in the frames' DuckDB, dropped with the copy when it was the copy's alone
         self.made_schema = False
         # the copy's changes, one at a time: a release while a snap copies waits for it, never lost
@@ -989,16 +991,19 @@ class Engine:
         the pull, Pure (its source's every column), planned with the table's live runtime and counted where the rows
         are against the same limit, its Arrow chunks copied into the frames' DuckDB under the table's own name (the
         model's conversions applied, as the tab's copy applies them), read from then on through the snap runtime; the
-        grid that snapped holds the copy. ``{"op": "release", "model"}``: that grid lets it go, and the copy is dropped
-        when no grid holds it. Never a frame's or a file's table, nor one this engine did not make; one change of the
-        copy at a time."""
+        grid that snapped holds the copy, and a grid that snaps it while it is there holds the same copy, as it is (one
+        copy per table, as the tab's is one per tab: a second pull would change the first grid's rows under it).
+        ``{"op": "release", "model"}``: that grid lets it go, and the copy is dropped when no grid holds it. Never a
+        frame's or a file's table, nor one this engine did not make; one change of the copy at a time."""
         model = asked.get('model')
         with self._warehouse_lock:
             table = self._warehouse_tables.get(model) if isinstance(model, str) else None
         if table is None:
             return _said(404, 'this engine has no warehouse table of that model open')
         with table.copying:
-            database = self.frames.connection.execute('SELECT current_database()').fetchone()[0]
+            with self.frames.holding():
+                # the shared connection, under its lock as every other use of it
+                database = self.frames.connection.execute('SELECT current_database()').fetchone()[0]
             # the copy by its whole name: a schema the warehouse names (temp, an attached database's) never reaches
             # another catalog's table
             target = f'{_quoted_name(database)}.{_quoted_name(table.schema)}.{_quoted_name(table.name)}'
@@ -1010,6 +1015,10 @@ class Engine:
                 return Answer(200, 'application/json', b'{}')
             if not isinstance(asked.get('pull'), str):
                 return _said(400, 'a snap is {"model", "pull"}, the pull its lambda as JSON')
+            if table.snapped and table.frozen is not None:
+                # held by another grid already: this one holds the same copy, as it is
+                table.holders += 1
+                return Answer(200, 'application/json', json.dumps(table.frozen).encode('utf-8'))
             on = _on_planner_threads(self.planner)
             planned = on(self.planner.plan, asked['pull'], table.held, table.runtime)
             try:
@@ -1046,18 +1055,22 @@ class Engine:
                         f"{c['sql']} AS {_quoted_name(c['column'])}" for c in conversions) + ')'
                     connection.execute(f'CREATE OR REPLACE TABLE {target} AS SELECT {select} FROM {landing}')
                 except duckdb.Error as refused:
+                    # nothing left of a copy that failed: no table, and no schema it made
+                    self._drop_copy(table, database, target)
                     return _said(422, f'the snap could not be copied into this Python\'s DuckDB: {refused}')
                 finally:
                     connection.unregister(landing)
                 table.holders += 1
-        said = {'rowCount': rows, 'pulledBy': {
-            'plane': 'warehouse', 'where': receipt.get('where', ''), 'as': receipt.get('as', ''),
-            **({'statementId': receipt['statementId']} if 'statementId' in receipt else {}),
-            **({'serverRows': receipt['serverRows']} if 'serverRows' in receipt else {})}}
+                table.frozen = {'rowCount': rows, 'pulledBy': {
+                    'plane': 'warehouse', 'where': receipt.get('where', ''), 'as': receipt.get('as', ''),
+                    **({'statementId': receipt['statementId']} if 'statementId' in receipt else {}),
+                    **({'serverRows': receipt['serverRows']} if 'serverRows' in receipt else {})}}
+                said = table.frozen
         return Answer(200, 'application/json', json.dumps(said).encode('utf-8'))
 
     def _drop_copy(self, table: _WarehouseTable, database: str, target: str) -> None:
         """A table's copy dropped, and the schema it made when nothing else is in it now."""
+        table.frozen = None
         self.frames.connection.execute(f'DROP TABLE IF EXISTS {target}')
         if table.made_schema:
             left = self.frames.connection.execute(

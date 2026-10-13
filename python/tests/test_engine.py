@@ -922,7 +922,7 @@ class WarehouseOnPython(unittest.TestCase):
         from legend_lite import warehouse
         self.warehouse = warehouse
         outer = self
-        self.count, self.expired, self.principal = 3, False, 'rita'
+        self.count, self.expired, self.principal, self.pulls = 3, False, 'rita', 0
 
         class Reader:
             def __init__(self, session, catalog='main', clock=None):
@@ -944,6 +944,7 @@ class WarehouseOnPython(unittest.TestCase):
                     raise warehouse.SessionExpired(outer.URL, self.principal)
                 if on_receipt is not None:
                     on_receipt({'statementId': 's1', 'serverRows': 3, 'as': self.principal, 'where': 'the warehouse at wh'})
+                outer.pulls += 1
                 rows = (pa.table({'n': pa.array([outer.count], pa.int64())}) if sql.startswith('SELECT count(*)')
                         else pa.table({'desk': ['FX', 'EQ', 'FX'], 'qty': pa.array([10, 5, 3], pa.int32())}))
                 sink = pa.BufferOutputStream()
@@ -1022,10 +1023,13 @@ class WarehouseOnPython(unittest.TestCase):
         m = self.opened()
         refused = self.plan_and_run(m, m['snapRuntime'])
         self.assertIn('or snapped, through its copy', json.loads(refused.body)['plan'])
-        for _ in range(2):  # two grids snap it
-            status, body = self.call({'op': 'snap', 'model': m['model'], 'pull': self.query(m)})
-            self.assertEqual(status, 200, body)
-        self.assertEqual(json.loads(body)['rowCount'], 3)
+        status, first = self.call({'op': 'snap', 'model': m['model'], 'pull': self.query(m)})
+        self.assertEqual(status, 200, first)
+        pulled = self.pulls
+        # a second grid holds the same copy, as it is: nothing pulled again, the first grid's rows unchanged
+        status, second = self.call({'op': 'snap', 'model': m['model'], 'pull': self.query(m)})
+        self.assertEqual((status, self.pulls, json.loads(second)), (200, pulled, json.loads(first)))
+        self.assertEqual(json.loads(second)['rowCount'], 3)
         a = self.plan_and_run(m, m['snapRuntime'])
         self.assertEqual(a.status, 200, a.body)
         self.assertEqual(pyarrow.ipc.open_stream(a.body).read_all().num_rows, 3)
@@ -1037,6 +1041,16 @@ class WarehouseOnPython(unittest.TestCase):
             "SELECT count(*) FROM duckdb_tables() WHERE table_name = 'POSITIONS'").fetchone()[0]
         made = self.frames.connection.execute("SELECT count(*) FROM duckdb_schemas() WHERE schema_name = 'trading'").fetchone()[0]
         self.assertEqual((gone, made), (0, 0), 'the copy and the schema it made are dropped')
+
+    def test_a_copy_that_fails_leaves_nothing(self):
+        m = self.opened()
+        # a conversion DuckDB refuses: the copy fails after its schema is made
+        self.engine._warehouse_tables[m['model']].written['conversions'] = [{'column': 'qty', 'sql': 'no_such_function(qty)'}]
+        status, body = self.call({'op': 'snap', 'model': m['model'], 'pull': self.query(m)})
+        self.assertEqual(status, 422, body)
+        self.assertIn('could not be copied', body.decode())
+        made = self.frames.connection.execute("SELECT count(*) FROM duckdb_schemas() WHERE schema_name = 'trading'").fetchone()[0]
+        self.assertEqual(made, 0, 'no schema left of the copy that failed')
 
     def test_the_snap_limit_in_the_tabs_words(self):
         m = self.opened()

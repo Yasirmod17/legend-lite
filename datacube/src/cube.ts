@@ -663,6 +663,11 @@ export class CubeController {
     });
   }
 
+  /** The cube is gone: a copy its host keeps let go (one being made too, once it is); the tab's goes with the tab. */
+  async close(): Promise<void> {
+    if (this.#snaps instanceof HostSnaps) await this.#snaps.close();
+  }
+
   /** Back to live; the owner re-runs the state, as after a snap. */
   async release(): Promise<void> {
     await this.#snaps.release();

@@ -699,9 +699,13 @@ an audit.
   token nears its end, for the next table opened.
 - **One person per open table:** a table open as one person is refused to another, until Python restarts.
 - **The copy:** one per table, as the tab's is one per tab, held by the grids that snapped it (`holders`) and dropped
-  when the last lets go. A grid that closes while snapped lets go of it. A release while a snap copies waits for it.
-  Not cleared: a page closed without closing its grids leaves the copy until Python exits; in Python's own DuckDB
-  (in memory) it goes with the process.
+  when the last lets go.
+  - A grid that snaps it while it is there holds the same copy, as it is: nothing is pulled again, so the first grid's
+    rows never change under it (the re-check).
+  - A grid that closes lets go of it, and of one a snap in flight makes, once it is made (`HostSnaps.close`).
+  - A release while a snap copies waits for it. A copy that fails leaves no table and no schema behind.
+  - Not cleared: a page closed without closing its grids leaves the copy until Python exits; in Python's own DuckDB
+    (in memory) it goes with the process.
 - **Where the rows are, said:** a Live read's receipt is the warehouse's (`legend.receipt`: where, as whom, its
   statement and count); a read of the copy says Python's copy, and that nothing went to the warehouse. The picker
   says Snap copies into Python's database.
@@ -714,7 +718,9 @@ an audit.
   - the snap limit in the tab's words;
   - an expired session as 401 on plan-and-run, snap and table.
 
-**The full local run's fixes (`//gates:local` and `//gates:warehouse` on the stack merged with main, 2026-10-13):**
+**The full local run's fixes (`//gates:local` and `//gates:warehouse` on the stack merged with main, 2026-10-13: 375
+tests, 369 passed, 4 failed, and 2 skipped -- `//tools/guards:classpath_test` and `markdown_inputs_test`, incompatible
+with macOS):**
 - The grid page was 521 bytes over its budget: the warehouse's driver is now fetched at the first sign-in
   (`services/browser.ts`), and the expired-session error is a module of its own (`engine-client/src/
   warehouse-session.ts`) that the app reads without the driver.

@@ -2821,8 +2821,8 @@ export class CubeApp {
     for (const editor of this.#columnEditors.values()) editor.dispose();
     this.#columnEditors.clear();
     this.#grid.destroy();
-    // a copy its host keeps is let go with the grid that snapped it (the tab's goes with the tab)
-    if (this.#options.hostSnap !== undefined && this.#controller.snaps.isSnapped) void this.#controller.release().catch(() => undefined);
+    // a copy its host keeps is let go with the grid that snapped it, one being made too (the tab's goes with the tab)
+    void this.#controller.close().catch(() => undefined);
   }
 
   // -- Ad Hoc Analysis mode -------------------------------------------------

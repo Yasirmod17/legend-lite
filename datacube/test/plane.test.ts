@@ -388,6 +388,27 @@ describe('a snap its host makes (Python\'s page: docs/ONE_PLATFORM_PROGRAM_2026_
     assert.deepEqual(h.live.pure, [], 'the live runner answers nothing on the copy');
   });
 
+  it('lets its copy go when the cube closes, one being made too, once it is', async () => {
+    let finish: (v: { rowCount: number }) => void = () => undefined;
+    let released = 0;
+    const c = new CubeController(new PlanThenRun(new RecordingPlanner(), new RecordingEngine()), {
+      hostSnap: {
+        table: 'TRADES', source: accessor('trades::DB', 'TRADES'), store: 'Python',
+        runner: new PlanThenRun(new RecordingPlanner(), new RecordingEngine()),
+        snap: () => new Promise((done) => { finish = done; }),
+        release: async () => { released += 1; },
+      },
+    });
+    await c.run(at(SNAPSHOT));
+    const snapping = c.snap(SNAPSHOT, 'test');
+    await c.close();
+    assert.equal(released, 0, 'nothing to let go before the copy is made');
+    finish({ rowCount: 7 });
+    await assert.rejects(snapping, /closed while its snap was made/);
+    assert.equal(released, 1, 'the copy made after the cube closed is let go');
+    assert.equal(c.snaps.isSnapped, false);
+  });
+
   it('lets the copy go only once live has answered', async () => {
     const h = hosted();
     await h.c.run(at(SNAPSHOT));

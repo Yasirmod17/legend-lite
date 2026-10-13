@@ -77,7 +77,7 @@ export function receiptLines(r: Receipt): string[] {
       + (from ? `, pulled from ${from.where}${from.as ? ` as ${from.as}` : ''}`
         + (from.statementId ? ` (statement ${from.statementId})` : '') : '')
       + (r.copy.store === undefined ? '. Nothing was sent to a server for this query.'
-        : `. Nothing was sent to the warehouse for this query.`));
+        : '. Nothing was sent to the warehouse for this query.'));
   } else if (r.plane === 'tab') {
     lines.push(r.reading && r.reading.length > 0
       ? 'Nothing was sent to a query server; the file itself was fetched.'
