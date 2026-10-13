@@ -55,7 +55,7 @@ from . import _json, _planner, compiler
 from .compiler import LegendError
 from ._library import library
 from .frames import Frames, UntypedColumn
-from ._home import SavedPages, Settings, home, locked
+from ._home import SavedPages, Settings, home
 
 _API = '/api/pure/v1/'
 _EXECUTE = _API + 'execution/execute'
@@ -426,18 +426,15 @@ class Engine:
         sdlc = path.startswith(_SDLC_API)
         root = _SDLC_API if sdlc else _DEPOT_API
         target = '/' + path[len(root):] + (f'?{query}' if query else '')
-        folder = self.model_home_folder()
+        from .model import home_call
         try:
-            with locked(folder):
-                said = _workers().submit(library().call, 'lite_sdlc_handle' if sdlc else 'lite_depot_handle', str(folder),
-                                         method, target, body).result()
+            status, answered = home_call(self.model_home_folder(), 'sdlc' if sdlc else 'depot', method, target, body)
+        except OSError as refused:
+            # the library's own refusal, in its words
+            return _said(500, str(refused))
         except Exception as failure:
             traceback.print_exc()
             return _said(500, f'{type(failure).__name__}: {failure}')
-        tag, _, rest = said.partition('\n')
-        if tag != 'OK':
-            return _said(500, rest.partition('\n')[2] or rest)
-        status, _, answered = rest.partition('\n')
         if not answered:
             return Answer(int(status), 'text/plain; charset=utf-8', b'')
         return Answer(int(status), 'application/json', answered.encode('utf-8'))

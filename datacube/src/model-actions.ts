@@ -9,7 +9,8 @@ import type { Lambda, ValueSpecification } from '../../pure-protocol/src/index.t
 import type { SdlcClient } from '../../sdlc-client/src/client.ts';
 import type { PlanAndRun } from './runner.ts';
 import type { CubeSnapshot } from './snapshot.ts';
-import { PageModel, saveFresh, type PageModelRef } from './page-model.ts';
+import { createAssociation, createDataSpace, projectState } from '../../model-changes/src/index.ts';
+import { PageModel, type PageModelRef } from './page-model.ts';
 import type { ClassAction, GridSource, ModelAnswer, ModelWriter } from './model-writer.ts';
 import { suggestedClassName, suggestedDataSpaceName, suggestedPackage } from './model-names.ts';
 import { associationDialog } from './ui/association-dialog.ts';
@@ -131,9 +132,9 @@ function after(model: PageModel, o: ModelActionsOf): PageModelRef | undefined {
  */
 export async function createAssociationOf(o: ModelActionsOf, first?: string): Promise<PageModelRef | undefined> {
   if (!o.model) throw new NotYet('An association relates two of the page\'s classes: make them first (Create a Class…, or Create a Data Space… for the whole page).');
-  const model = new PageModel(o.client, o.model);
+  const model = new PageModel(o.model);
   const pkg = o.model.package;
-  const state = await model.state();
+  const state = await projectState(o.client, o.model);
   const start = await o.writer.createAssociation(state.text, pkg, undefined);
   if (start.joinable.length < 2) throw new NotYet('An association relates two classes, and the page\'s project has one: make another first.');
   const facts = projectRows(o, state.text, pkg);
@@ -151,7 +152,8 @@ export async function createAssociationOf(o: ModelActionsOf, first?: string): Pr
       },
       preview: (a) => o.writer.createAssociation(state.text, pkg, a),
       create: async (a): Promise<CreatedClass> => {
-        const made = await saveFresh(model, 'Create an Association', (project) => o.writer.createAssociation(project, pkg, a));
+        const made = (await createAssociation({ sdlc: o.client, writer: o.writer, ...model.into(o.pageName, pkg), association: a }))
+          .answer;
         const kept = await o.persist();
         const at = model.ref!;
         return {
@@ -173,9 +175,9 @@ export async function createAssociationOf(o: ModelActionsOf, first?: string): Pr
  * associations it suggests offered, all one revision (the project made with it, when the page has none yet).
  */
 export async function createDataSpaceOf(o: ModelActionsOf): Promise<PageModelRef | undefined> {
-  const model = new PageModel(o.client, o.model);
+  const model = new PageModel(o.model);
   const pkg = o.model?.package ?? suggestedPackage(o.pageName);
-  const state = o.model ? await model.state() : { text: '', revision: '' };
+  const state = o.model ? await projectState(o.client, o.model) : { text: '', revision: '' };
   // each grid not yet a class, as a class action: its first rows read once
   const samples = new Map<string, Awaited<ReturnType<typeof sampleOf>>>();
   for (const g of o.grids) {
@@ -227,18 +229,22 @@ export async function createDataSpaceOf(o: ModelActionsOf): Promise<PageModelRef
         return answer;
       },
       create: async (choice): Promise<CreatedClass> => {
-        const ref = await model.ensure(choice.projectName ?? o.pageName, pkg);
-        const made = await saveFresh(model, `Create a Data Space: ${choice.name}`,
-          (project) => o.writer.createDataSpace(project, ref.package, dataSpaceOf(choice), actions(choice), choice.associations));
+        const into = model.into(choice.projectName ?? o.pageName, pkg);
+        const done = await createDataSpace({
+          sdlc: o.client, writer: o.writer, ...into,
+          dataSpace: dataSpaceOf(choice), classes: actions(choice),
+          ...(choice.associations ? { associations: choice.associations } : {}),
+        });
+        const made = done.answer;
         // each grid made a class keeps its table and its class
         for (const m of choice.made) {
           const g = o.grids.find((x) => x.id === m.id);
           if (!g || 'refused' in g.made) continue;
           model.keepTable(g.id, g.made.table.table);
-          model.keepClass(g.id, `${ref.package}::domain::${m.className}`);
+          model.keepClass(g.id, `${into.package}::domain::${m.className}`);
         }
         const kept = await o.persist();
-        const at = model.ref ?? ref;
+        const at = model.ref ?? { project: done.project, workspace: done.workspace };
         return {
           className: made.dataSpace ?? choice.name,
           where: `the project ${at.project} (workspace ${at.workspace}), in ${o.where}`,

@@ -12,13 +12,14 @@
 
 import { DuckDbEngine } from '../../../engine-client/src/duckdb.ts';
 import type { Scalar } from '../../../engine-client/src/result.ts';
-import { fromJson, type ValueSpecification } from '../../../pure-protocol/src/index.ts';
+import { fromJson, toJson, type ValueSpecification } from '../../../pure-protocol/src/index.ts';
 import { CubeController, type CubeView } from '../cube.ts';
 import { fold, type CubeState } from '../cube-state.ts';
 import { openCube, readCube, type OpenedCube } from '../cube-document.ts';
 import { STALE } from '../epoch.ts';
 import { LitePlanner } from '../lite-planner.ts';
-import { classLambda } from '../query.ts';
+import { suggestedClassName, suggestedDataSpaceName, suggestedPackage } from '../model-names.ts';
+import { classLambda, duplicateLambda, sampleLambda, storeTableOf } from '../query.ts';
 import { shownColumns } from '../shown-columns.ts';
 import { sourceColumns } from '../source-columns.ts';
 import { hostCalls, hostDatabase, hostWorker } from './host.ts';
@@ -107,4 +108,37 @@ export async function gridView(spec: GridSpec): Promise<string> {
 /** The grid's rows at their finest level as Pure, as Create a Class makes its class of them (classLambda). */
 export async function gridRelation(spec: GridSpec): Promise<string> {
   return using(spec, async ({ planner, state }) => planner.compose(classLambda(state.snapshot), 'STANDARD'));
+}
+
+/**
+ * A grid's rows as a class's, as Create a Class… asks for one (model-actions.ts `pageGrids`): its rows at their finest
+ * level (classLambda), the table its source reads (storeTableOf), the query of that table's first rows (sampleLambda,
+ * which Python runs on its own database for the class's sample), the source they are read from, and the names the
+ * window offers (`named`: the grid's source's and the page's) -- DataCube's own
+ * semantics, which Python's `grid.create_class()` asks of DataCube's code before it calls the generic library
+ * (legend_lite/model.py; docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B4). JSON, each query as the protocol writes it; a
+ * source that is no table of its own refused in words.
+ */
+export async function gridClass(spec: GridSpec, named: { readonly source: string; readonly page: string }):
+  Promise<string> {
+  return using(spec, async ({ planner, state }) => {
+    const table = storeTableOf(state.snapshot.source.query);
+    if (!table) throw new Error("its source is not a table of its own: a class is made of a table's rows");
+    // the names the window offers before a person changes them (model-names.ts)
+    const names = {
+      className: suggestedClassName(named.source), package: suggestedPackage(named.page),
+      dataSpace: suggestedDataSpaceName(named.page),
+    };
+    return `{"query":${toJson(classLambda(state.snapshot))},"sample":${toJson(sampleLambda(state.snapshot.source.query))},`
+      + `"table":${JSON.stringify(table)},"source":${JSON.stringify(planner.source())},"names":${JSON.stringify(names)}}`;
+  });
+}
+
+/**
+ * The query that finds a column's first value held twice over a grid's rows at their finest level (query.ts
+ * duplicateLambda): no row, and the column is unique over them -- the fact an association's how-many is preset from, as
+ * Create an Association… reads it of a class still a grid's (model-actions.ts). JSON, as the protocol writes it.
+ */
+export async function gridDuplicate(spec: GridSpec, column: string): Promise<string> {
+  return using(spec, async ({ state }) => toJson(duplicateLambda(classLambda(state.snapshot).body[0]!, column)));
 }

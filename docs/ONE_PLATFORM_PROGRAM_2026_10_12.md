@@ -255,6 +255,25 @@ Python libraries are twins, the same in every column.
 - The parked branch `datacube/python-model-parked` (606298656) has their first shapes and 13 tests. Its held model and
   page document version 5 are withdrawn; its tests of a page "whose classes are in a model home" invert.
 
+**Built 2026-10-13 (branch `datacube/python-parity`):**
+- `model-changes/`, the TypeScript library: `createClass`, `createAssociation`, `createDataSpace` (`{ sdlc, writer,
+  project, workspace, package, ... }`, `project` an id or a `NewProject` to make, `made` told its id at once), the
+  project's handling (`makeProject`, `ensureWorkspace`, `projectState`, `saveFresh`), the writer's wire moved out of
+  DataCube (`wire.ts`, `writerBodies`: each route's body as every writer sends it), and `serverWriter` for a legend-lite
+  server. `python/legend_lite/model.py` is its twin: the same functions, `local_sdlc`/`server_sdlc`,
+  `local_writer`/`server_writer`.
+- **Held alike by transcripts:** `model-changes/test/cases` records every call a create makes, to the SDLC and to the
+  writer, with its exact body and answer, recorded by Python against the native library from a real page's grids
+  (`MODEL_CHANGES_RECORD=1 bazel run //python:model_test`); `//python:model_test` and `//model-changes:replay_test`
+  each replay them, byte for byte, including a stale save made again once (a real 409).
+- DataCube: `page-model.ts` keeps only the page's record (`PageModel.into`, `keepTable`, `keepClass`); the windows call
+  the library. Its headless code gives Python a grid as a class (`gridClass`: the relation, the table, the sample's
+  query, the names the window offers) and the duplicate-key query (`gridDuplicate`).
+- Python: `grid.create_class(name, package=, columns=, documentation=)`, `page.create_association(a, b, name=)` (an
+  end's how-many preset from whether its key is unique over its grid's rows, as the window presets it),
+  `page.create_data_space(name, title=, description=, associations=)`, and `page.model`.
+- Still owed: the revision the page is pinned to (model design §6).
+
 **Files.** The new TypeScript package and its BUILD, `datacube/src/{create-class,model-actions,page-model}.ts`,
 `python/legend_lite/{model.py,page.py}`, the corpus folder and its two tests, and `gates/BUILD.bazel` for the tests'
 lanes.

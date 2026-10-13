@@ -1635,7 +1635,6 @@ TEST_IMPORTS = {
         "src/json-shape.ts",
         "src/lite-planner.ts",
         "src/model-writer.ts",
-        "src/page-model.ts",
         "src/plan.ts",
         "src/planner-protocol.ts",
         "src/planner.ts",

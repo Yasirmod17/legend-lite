@@ -176,6 +176,8 @@ test_suite(
         "//python:tools_build_test",
         # a server planning for Python's pages, against a legend-lite server it starts (legend_lite/upstream.py; G1)
         "//python:upstream_test",
+        # a class, an association or a data space into a project: the twin of model-changes/, its cases replayed (B4)
+        "//python:model_test",
         # the wheel as a developer installs it: a fresh environment, offline, nothing from the repository
         "//python:wheel_test",
         # DataCube against Python's engine, in the pinned Chromium (the compiler's library in its runfiles)
@@ -246,6 +248,8 @@ test_suite(
         "//sdlc-server:git_repository_test",
         "//sdlc-client:tests",
         "//depot-client:tests",
+        # a class, an association or a data space made in a project: the library replayed against its cases (B4)
+        "//model-changes:tests",
     ],
 )
 

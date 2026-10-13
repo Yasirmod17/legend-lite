@@ -55,6 +55,8 @@ py_library(
         "legend_lite/frames.py",
         # a DataCube page built in Python (docs/DATACUBE_PYTHON_PAGES_DESIGN_2026_10_09.md)
         "legend_lite/page.py",
+        # a class, an association or a data space made in a project: the twin of model-changes/ (B4)
+        "legend_lite/model.py",
         # a server planning for Python's pages (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md G1)
         "legend_lite/upstream.py",
     ],
@@ -288,6 +290,40 @@ py_test(
     main = "tests/main.py",
     target_compatible_with = _PLATFORMS,
     deps = [
+        ":legend_lite",
+        "@rules_python//python/runfiles",
+    ],
+)
+
+# INTO A PROJECT (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B4; legend_lite/model.py): the twin of model-changes/, held to
+# the same recorded cases (each call a create makes, to the SDLC and the writer, with its exact body), then a page's grids
+# made classes, an association and a data space by DataCube's request (headless) into this user's model home.
+# `MODEL_CHANGES_RECORD=1 bazel run //python:model_test` records the cases again.
+py_test(
+    name = "model_test",
+    size = "medium",
+    srcs = [
+        "tests/main.py",
+        "tests/test_model.py",
+    ],
+    args = ["test_model"],
+    data = [
+        ":wheel_duckdb",
+        "//datacube:headless_bundle",
+        "//model-changes:cases",
+        "//native:compiler",
+    ],
+    env = select({
+        "//tools/platforms:windows_x86_64": _ENV | _HEADLESS_ENV | {
+            "LEGEND_LITE_MODEL_CASES": "$(rlocationpaths //model-changes:cases)",
+            "PROCESSOR_ARCHITECTURE": "AMD64",
+        },
+        "//conditions:default": _ENV | _HEADLESS_ENV | {"LEGEND_LITE_MODEL_CASES": "$(rlocationpaths //model-changes:cases)"},
+    }),
+    main = "tests/main.py",
+    target_compatible_with = _PLATFORMS,
+    deps = [
+        ":headless",
         ":legend_lite",
         "@rules_python//python/runfiles",
     ],

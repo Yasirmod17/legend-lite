@@ -28,7 +28,8 @@ import { element, fn, fromJson, lambda, readLambda, readValueSpecification, toJs
 import type { Planner } from './cube.ts';
 import type { CatalogColumn, InferOptions, InferredModel, TableModels } from './infer.ts';
 import { PlanError, type ModelOptions } from './planner.ts';
-import { modelRequestBody, type AssociationAction, type ClassAction, type DataSpaceAction, type GridSource, type ModelAnswer, type ModelWriter } from './model-writer.ts';
+import { writerBodies } from '../../model-changes/src/wire.ts';
+import type { AssociationAction, ClassAction, DataSpaceAction, GridSource, ModelAnswer, ModelWriter } from './model-writer.ts';
 import type { PrintStyle } from '../../engine-client/src/pure-v1.ts';
 import { relationColumns, type Plan, type PlanColumn } from '../../engine-client/src/relation-type.ts';
 import type { SeedTable, TableSeed } from '../../engine-client/src/model-data.ts';
@@ -527,18 +528,17 @@ export class LitePlanner implements Planner, TableModels, ModelWriter {
    * too (demo/planners.ts).
    */
   createClass(project: string, pkg: string, cls: ClassAction): Promise<ModelAnswer> {
-    return this.#writeModel('createClass', modelRequestBody(toJson, project, pkg, { class: cls }));
+    return this.#writeModel('createClass', writerBodies.createClass(project, pkg, cls));
   }
 
   createAssociation(project: string, pkg: string, association: AssociationAction | undefined,
     classes: readonly ClassAction[] = []): Promise<ModelAnswer> {
-    return this.#writeModel('createAssociation', modelRequestBody(toJson, project, pkg,
-      association === undefined ? { classes } : { classes, association }));
+    return this.#writeModel('createAssociation', writerBodies.createAssociation(project, pkg, association, classes));
   }
 
   createDataSpace(project: string, pkg: string, dataSpace: DataSpaceAction, classes: readonly ClassAction[] = [],
     associations: readonly AssociationAction[] = []): Promise<ModelAnswer> {
-    return this.#writeModel('createDataSpace', modelRequestBody(toJson, project, pkg, { classes, associations, dataSpace }));
+    return this.#writeModel('createDataSpace', writerBodies.createDataSpace(project, pkg, dataSpace, classes, associations));
   }
 
   async #writeModel(route: string, body: string): Promise<ModelAnswer> {

@@ -8,7 +8,8 @@ import { describe, it } from 'node:test';
 import { accessor, toJson } from '../../pure-protocol/src/index.ts';
 import { SdlcError, type SdlcClient } from '../../sdlc-client/src/client.ts';
 import type { PureChange } from '../../sdlc-client/src/wire.ts';
-import { PageModel, artifactIdOf, projectText, saveFresh } from '../src/page-model.ts';
+import { artifactIdOf, createClass, makeProject, projectState, projectText, saveFresh, type ModelWriter } from '../../model-changes/src/index.ts';
+import { PageModel, pageProject } from '../src/page-model.ts';
 import { writesModels } from '../src/model-writer.ts';
 import { pageGrids } from '../src/model-actions.ts';
 import { PlanAndRun } from '../src/runner.ts';
@@ -40,7 +41,7 @@ describe('the names DataCube offers', () => {
   it('a project from the page: the SDLC\'s artifact id rule', () => {
     assert.equal(artifactIdOf('Trades by desk'), 'trades-by-desk');
     assert.equal(artifactIdOf('2024 Trades'), 'trades');
-    assert.equal(artifactIdOf('!!!'), 'page');
+    assert.equal(artifactIdOf('!!!'), 'project');
   });
 });
 
@@ -168,13 +169,24 @@ class FakeSdlc {
   }
 }
 
-describe("the page's model, in the model home", () => {
+/** A writer that makes one class file per call, of the class asked for (the routes' answers are model-route.test.ts's). */
+const WRITER = {
+  createClass: async (_project: string, pkg: string, cls: { name: string }) => ({
+    changes: [{ type: 'CREATE', path: `${pkg}::domain::${cls.name}`, pureCode: `Class ${pkg}::domain::${cls.name} {}` }],
+    classes: [{ class: `${pkg}::domain::${cls.name}` }], associations: [], suggestions: [], joinable: [], notes: [],
+  }),
+} as unknown as ModelWriter;
+
+describe("the page's model, in the model home (through the library: model-changes/)", () => {
   it('its project made with its first class, named after the page; a name taken numbered', async () => {
     const sdlc = new FakeSdlc();
-    const model = new PageModel(sdlc.client());
-    const ref = await model.ensure('Trades', 'trades');
-    assert.deepEqual(ref, { project: 'datacube:trades-2', workspace: 'datacube', package: 'trades', tables: {} });
-    assert.equal(await model.ensure('Other', 'other'), ref, 'made once');
+    assert.equal(await makeProject(sdlc.client(), pageProject('Trades')), 'datacube:trades-2');
+    const model = new PageModel();
+    const done = await createClass({ sdlc: sdlc.client(), writer: WRITER, ...model.into('Trades', 'trades'),
+      class: { name: 'Trade' } as never });
+    assert.deepEqual(model.ref, { project: 'datacube:trades-3', workspace: 'datacube', package: 'trades', tables: {} });
+    assert.equal(done.project, 'datacube:trades-3');
+    assert.equal(model.into('Other', 'other').project, 'datacube:trades-3', 'made once');
     model.keepTable('g1', 'trades_2');
     assert.deepEqual(model.ref?.tables, { g1: 'trades_2' });
   });
@@ -187,45 +199,47 @@ describe("the page's model, in the model home", () => {
       if (refuse) { refuse = false; throw new SdlcError('busy', 500); }
       return client.createWorkspace(p, w);
     } } as unknown as SdlcClient;
-    const model = new PageModel(made);
+    const model = new PageModel();
     sdlc.workspace = false;
-    await assert.rejects(model.ensure('Trades', 'trades'), /busy/);
+    await assert.rejects(createClass({ sdlc: made, writer: WRITER, ...model.into('Trades', 'trades'),
+      class: { name: 'Trade' } as never }), /busy/);
     assert.equal(model.ref?.project, 'datacube:trades-2', 'the project made is the page\'s');
-    assert.equal((await model.ensure('Trades', 'trades')).project, 'datacube:trades-2', 'not made again');
-    await model.state();
+    await createClass({ sdlc: made, writer: WRITER, ...model.into('Trades', 'trades'), class: { name: 'Trade' } as never });
+    assert.equal(model.ref?.project, 'datacube:trades-2', 'not made again');
     assert.equal(sdlc.made, 1, 'its workspace made when next asked');
   });
 
-  it('a project not in this browser\'s model home is said by name', async () => {
+  it('a project not in this model home is said by name', async () => {
     const sdlc = new FakeSdlc();
     sdlc.workspace = false;
     const client = { ...sdlc.client(), createWorkspace: async () => { throw new SdlcError('no project', 404); } } as unknown as SdlcClient;
-    const model = new PageModel(client, { project: 'datacube:elsewhere', workspace: 'datacube', package: 'x', tables: {} });
-    await assert.rejects(model.state(), /datacube:elsewhere is not in this browser's model home/);
+    await assert.rejects(projectState(client, { project: 'datacube:elsewhere', workspace: 'datacube' }),
+      /datacube:elsewhere is not in this model home/);
   });
 
   it('a class saved over the revision its files were read at; a stale save made again once, then said', async () => {
     const sdlc = new FakeSdlc();
-    const model = new PageModel(sdlc.client(), { project: 'datacube:trades', workspace: 'datacube', package: 'trades', tables: {} });
+    const at = { project: 'datacube:trades', workspace: 'datacube' };
     const change = (path: string): PureChange => ({ type: 'CREATE', path, pureCode: `Class ${path} {}` });
     const read: string[] = [];
     sdlc.stale = 1;
-    await saveFresh(model, 'one', async (project) => {
+    await saveFresh(sdlc.client(), at, 'one', async (project) => {
       read.push(project);
       return { changes: [change('trades::domain::Trade')] };
     });
     assert.equal(read.length, 2, 'made again after the stale refusal');
     assert.equal(sdlc.saves.length, 1);
-    await saveFresh(model, 'two', async (project) => {
+    await saveFresh(sdlc.client(), at, 'two', async (project) => {
       assert.match(project, /###Pure\nClass trades::domain::Trade/, 'the project as it is now, its files as one text');
       return { changes: [change('trades::domain::Customer')] };
     });
     // its review committed in Studio, the workspace is gone: made again from the project line, and the class saved
     sdlc.workspace = false;
-    await saveFresh(model, 'after a commit', async () => ({ changes: [change('trades::domain::Book')] }));
+    await saveFresh(sdlc.client(), at, 'after a commit', async () => ({ changes: [change('trades::domain::Book')] }));
     assert.equal(sdlc.made, 1);
     sdlc.stale = 2;
-    await assert.rejects(saveFresh(model, 'three', async () => ({ changes: [change('trades::domain::Desk')] })), /Expected revision/);
+    await assert.rejects(saveFresh(sdlc.client(), at, 'three', async () => ({ changes: [change('trades::domain::Desk')] })),
+      /Expected revision/);
     assert.equal(projectText([{ pureCode: '###Mapping\nMapping a::M ()' }, { pureCode: 'Class a::C {}' }]),
       '###Mapping\nMapping a::M ()\n###Pure\nClass a::C {}');
   });

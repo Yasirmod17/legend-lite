@@ -72,6 +72,9 @@ js_library(
         # the page's model (src/page-model.ts, Create a Class…: docs/DATACUBE_MODEL_DESIGN_2026_10_10.md §15.3): the
         # SDLC's client, over the page's own SDLC (Studio's) or a server's
         "//sdlc-client:sdlc_client",
+        # a class, an association or a data space made in a project: the generic library DataCube's windows call
+        # (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B4)
+        "//model-changes:model_changes",
         # the model home's Depot client (a saved query's project opened by name): src/services/browser.ts connects to it
         # and src/app/sources.ts reads a project's model text, both by a dynamic import that every bundle of the app
         # inlines or splits off
@@ -515,6 +518,8 @@ typescript.tsc_test(
         "//sdlc-client:sdlc_client",
         # the one SDLC suite, which test/python-engine/model-home.test.ts holds Python's model home to
         "//sdlc-client:conformance",
+        # a class, an association or a data space made in a project: the library the model actions call (B4)
+        "//model-changes:model_changes",
         "//pure-protocol:typescript_sources",
         "//tools/js:runfiles",
         "//query-store:typescript_sources",
