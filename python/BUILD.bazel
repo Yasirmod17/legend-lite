@@ -472,11 +472,11 @@ copy_to_directory(
     root_paths = ["datacube/dist"],
 )
 
-# QUERY AND STUDIO SERVED BY PYTHON (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md E: ll.query(), ll.studio()): each app's site
-# as it is built, its tree kept (a page names ../src/ui/app.css), but DuckDB-WASM's builds, which a page whose engine
-# is Python's never loads (Python's DuckDB runs its queries: about 75 MB), and the demo's own configuration and models
-# (Python writes each app's config.json, pointing at itself). Studio's demo projects stay (84 KB): "Load demo projects"
-# writes them into this Python's repository, where Query then opens them by name
+# QUERY AND STUDIO SERVED BY PYTHON (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md E: ll.query(), ll.studio()): each app's
+# site as it is built, its tree kept (a page names ../src/ui/app.css), but DuckDB-WASM's builds, which a page whose
+# engine is Python's never loads (Python's DuckDB runs its queries: about 75 MB), and the demo's own configuration and
+# models (Python writes each app's config.json, pointing at itself). Studio's demo projects stay (84 KB): "Load demo
+# projects" writes them into this Python's repository, where Query then opens them by name
 _APP_SITE_LEFT_OUT = [
     "**/duckdb-*.wasm",
     "**/duckdb-browser-*.worker.js",
