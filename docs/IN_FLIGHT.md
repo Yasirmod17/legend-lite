@@ -150,9 +150,12 @@ with the compiler's plan/execution split**, in this order:
    over `Boundary`'s existing functions, reviewed by the Plan Gen / Exec Split line; the build by the Compiler Rewrite
    line. **Now (2026-10-11): DataCube as one app for every host** (`docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md`,
    agreed with the user: one app in `datacube/src/app/` over services -- the browser tab, Python's tab and widget, and
-   Python headless each a set of services; Python's model home an SDLC, the browser's in Python's terms). Its steps 1-4
-   touch `datacube/`, `python/` and `native/` only; step 5 (Studio and Query started from Python) is built with the
-   Studio line. Python's `create_class`, `create_association` and `create_data_space` wait for its step 3 (parked on
+   Python headless each a set of services; Python's model home an SDLC, the browser's in Python's terms). **Steps 1 and
+   2, and PlanAndRun (the design's §15), landed 2026-10-12 (36b72ee13, PR #31; its run 38323008283 green on all 52
+   checks, main's own 38327366349 green; GATES "DataCube one app, steps 1 and 2 and PlanAndRun").** Step 3 (Python's
+   model home: the SDLC and Depot from the same Java in the native library) touches `sdlc-server/`'s BUILD (the Studio
+   line's, reviewed by it) as well as `datacube/`, `python/` and `native/`, and is announced here before it is built;
+   step 5 (Studio and Query started from Python) is built with the Studio line. Python's `create_class`, `create_association` and `create_data_space` wait for its step 3 (parked on
    branch `datacube/python-model-parked`). **Step 2's second landing announced 2026-10-11 (rule 5; branch `datacube-m3`; the design's §15.6a,
    agreed with the user): a cross-area edit in `core/`** -- the route renamed and two more beside it,
    `/api/lite/v1/model/createClass` (was `/api/lite/v1/relational/promoteRelationToModel`), `createAssociation`,
@@ -761,11 +764,23 @@ green on every job after one re-run of windows / warehouse; diagnostics run 3819
 (`docs/VARIANT_STORAGE_CENSUS_2026_09_27.md` D2: V2's `columnRef` hook fires on a reference, and `SELECT *` renders
 none). Files: new `core/src/main/java/com/legend/sql/dialect/VariantEgress.java` (a DuckDB render pass, root only);
 `sql/dialect/DuckDb.java` (`storedVariant` over an output column, the pass last in `passes()`; the SQL island line's
-announced `variantElements` edit is another method of the same file); `core/src/test/java/com/legend/lowering/LowerRelationTest.java`
-(one test over six shapes and three storages, the storages' set-up shared with the census's test); the census's
-addendum; `docs/GATES.md` at landing. Judged by the judges, the render census, the corpora and the local gate; one
-full CI on the branch; the push to main after the DataCube line's PR #31 is in. The Plan Gen line agreed: lowering
-only, and result typing assumes JSON for a Variant output in every shape.
+announced `variantElements` edit is another method of the same file);
+`core/src/test/java/com/legend/lowering/LowerRelationTest.java` (one test over six shapes and three storages, the
+storages' set-up shared with the census's test); the census's addendum; `docs/GATES.md` at landing. Judged by the
+judges, the render census, the corpora and the local gate; one full CI on the branch; the push to main after the
+DataCube line's PR #31 is in. The Plan Gen line agreed: lowering only, and result typing assumes JSON for a Variant
+output in every shape. **Landed 2026-10-12 (rebased onto main 36b72ee13 after PRs #31 and #33, the code byte-identical;
+run 38327604817, 50 jobs green first time, the summary job skipped on a dispatched run, the first run 38310588988 before
+the rebase green too, main's own run on the landing 38331688457 green; `//gates:local` 348 pass, 2 skipped (two guards
+incompatible on this Mac) tests; GATES entry "A stored Variant column leaves the statement as JSON, whatever the shape
+of the query")** -- the audit widened the pass from star frames to every root-level star (`extend`'s `SELECT t0.*, x`, a
+UNION's branches, a WITH's body) and the test from six shapes to ten; files touched beyond the announced list: none.
+
+**Landed 2026-10-12 -- one `DUCKDB_PLATFORMS` (branch `build/duckdb-platforms`; run 38332350300; GATES entry "One
+`DUCKDB_PLATFORMS`: DuckDB's spelling of our platform names, in one place"):** a Bazel-only tidy-up after PR #31: the
+mapping from our platform names to DuckDB's extension names, spelled by hand in `python/BUILD.bazel` and
+`warehouse/defs.bzl`, is one constant in `tools/platforms/defs.bzl`; the same five repositories on the same five
+platforms. Audited; the DataCube line approved python's part. No announcement went first: no `core/` file, no behaviour.
 
 **Announced 2026-10-12 -- the semi-structured step: jsonb, LATERAL, set-returning functions** (the user's ask: JSON
 and Variant are what lite's DuckDB users do; branch `claude/loving-euler-gjta59`, three commits over main c03ac6b; the

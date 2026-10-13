@@ -8739,6 +8739,33 @@ compiled in lite and failed in the engine.
    "Can't find the packageable element '<descriptor>'" at the class mapping (its id conversion fails and the raw text is
    looked up): a deliberate difference, so an engine-fixture comparison of this case sees two messages.
 
+## 2026-10-12 — DataCube one app, steps 1 and 2 and PlanAndRun: the tab, then Python's pages, one app and one path on both hosts (the DataCube + Python line)
+
+The design is `docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md` (agreed 2026-10-11; §15 PlanAndRun agreed 2026-10-12). PR
+#31, merged as 36b72ee13. CI: run 38323008283 on f735d1857, every job green on every platform (52 checks), the branch up
+to date with main acd7a1df6; main's own run 38327366349 (dispatched: the push run was skipped by the merged commits'
+`[skip ci]`) green. `//gates:local //datacube/... //python/... //parser-equivalence/...` green on the rebased head before
+the push (361 pass, 2 of main's guards skipped on macOS).
+
+1. **What it is.**
+   - One DataCube app (`datacube/src/app/`) over services; the tab, Python's tab and widget, and Python headless each give
+     a set of them. `demo/boot.ts` is the tab's host; `demo/page.ts`, `engine-page.ts` and `engine-cube.ts` are gone.
+   - On Python's pages: a page's files and examples (sent a part at a time, any size), remote files (DuckDB's httpfs,
+     pinned and carried in the wheel), Save and Open… (records in `ll.home()`), every feature by giving services.
+   - PlanAndRun: every grid on either host is plan + run + read. On Python, one call (`plan-and-run.json`) plans
+     against the model Python holds, runs only that SQL on its DuckDB, and the page reads the rows with the tab's reader.
+     Python's own results (`table.execute`, `grid.to_pandas()`) are typed by the plan.
+   - The tab's DuckDB is set up from the compiler's session setup (`Boundary.sessionSetup`: UTC), as Python's is.
+2. **What proves it.**
+   - `//datacube:python_engine_test` (35 checks, its browser in America/New_York): every cube case answers the same
+     through PlanAndRun on Python and in the tab, SQL included; seven reader files read alike on both hosts; `now()`
+     alike; Python's tab and widget; files, examples, remote files and saved pages on Python's page.
+   - `//python:engine_test`, `:frames_test`, `:headless_test`, `:wheel_test`; `//datacube:upload_test`, `:duckdb_test`.
+3. **Known, and where it goes** (§15.7): two DuckDB patch versions (1.5.4 in the tab, 1.5.5 in Python); Python's
+   results come back whole (streaming a follow-up); a query's own `sourceUrl('file:...')` accepted on Python (the user,
+   §15.4); a Variant stored as a STRUCT under `SELECT *` comes back raw until the Compiler Rewrite line's egress fix
+   lands (core/variant-star-egress).
+
 ## 2026-10-11 — DataCube headless in Python: DataCube's own code in V8, planned by the native library, run on Python's DuckDB, no WebAssembly (the DataCube + Python line)
 
 The design is `docs/DATACUBE_HEADLESS_PYTHON_DESIGN_2026_10_11.md`. The user agreed it and ruled §10: one package, V8,
@@ -9041,6 +9068,80 @@ Announced in `docs/IN_FLIGHT.md` as the semi-structured step's widenings (5cb0ac
 6. **Not done, recorded in the study:** regular expressions (`~`, `regexp_*`); `mode()` (DuckDB breaks ties
    otherwise); `corr` over a window; text cast to a number; intervals as values and timestamp differences; the
    semi-structured step's open findings (DuckDB's JSON numbers as doubles among them, for the user to decide).
+
+## 2026-10-12 — A stored Variant column leaves the statement as JSON, whatever the shape of the query (the Compiler Rewrite line)
+
+The design is `docs/VARIANT_STORAGE_CENSUS_2026_09_27.md` (the user's "go", 2026-09-27), its "Addendum 2026-10-12: the
+star egress" this landing adds. The finding is the DataCube line's (2026-10-12), probed on Python's DuckDB and the tab's
+alike; the Plan Gen / Exec Split line agreed with the placement (lowering only; result typing may assume JSON for a
+Variant output in every shape) and asked for the statement's own column type to be held, which the test does. Branch
+`core/variant-star-egress`; the announcement cbd8f014f on `main` first; rebased onto main 36b72ee13 (PRs #31 and #33 in)
+before landing, the core change byte-identical (the two patches compared line for line), and the judges, the render
+census, the local gate and one CI run re-run on the rebased tree. CI: run 38327604817 on the rebased branch, green on
+all 50 jobs first time (the summary job a dispatched run skips); the first run, 38310588988 on the commit before the
+rebase, green on all 50 too; main's own push run on the landing, 38331688457, green (every lane, every platform; `core`
+is where the test runs, and the module in `wasm` and DataCube's tests plan through the same renderer). `//gates:local`
+green (348 pass, 2 skipped: `//tools/guards:classpath_test` and `markdown_inputs_test`, which depend on the MariaDB
+lane, incompatible on this Mac tests); the lane query empty; the judges against baselines built from main 36b72ee13:
+every result file the same (0 of 23 differ;
+`docs/build-inventory/program/evidence/variant-star-egress/judges_compare.txt`); the render census: 55,016 entries, 41
+differ, every one in the core lane's own unit tests: the new test's renders, and seven `extend` shapes over a table
+holding a Variant column now listing their columns, each with its successor (`render_census_compare.txt` beside it; the
+audit is `AUDIT.md` there).
+
+1. **The cause.** V2 of the census reads a stored Variant column as JSON through the DuckDB dialect's `columnRef`
+   hook, `CAST(col AS JSON)` on a column REFERENCE. A star renders none: a star frame (`SELECT *`, which a bare
+   source, `limit`, `filter`, `sort` and `distinct` keep to the statement's end) and a star projection
+   (`SELECT t0.*, x`: `extend`) alike. So an uploaded JSON file's `customer` column, a STRUCT as DuckDB's `read_json`
+   stores it and a Variant to the model, left the query as `{"name":"A","tier":2}` under `select` and as the
+   STRUCT under `limit`, and each executor rendered the STRUCT its own way (the tab's reader quoted the nested
+   integer). D2 of the census ("a whole column value leaving the query") was removed for projections, not for stars;
+   the census's own test projected and grouped and never took a bare `limit`.
+2. **What landed.** `core/src/main/java/com/legend/sql/dialect/VariantEgress.java`, a DuckDB render pass on the
+   statement root only (the renderer's `rewriteRoot` hook, last of the dialect's passes; `StoredReads` follows):
+   every star standing for a source that holds a stored Variant column is spelled into that source's columns
+   (`Stars.columns`, as `StoredReads` spells a star over a read table), the Variant ones read through the hook
+   (`CAST(t0.V AS JSON) AS V`), every other a bare reference, a join's sides each in place; a UNION's branches and a
+   WITH's body are roots too (`RootNumericTypes`'s precedent). Below the root nothing changes (a star there feeds a
+   reference the hook already reads); no other dialect changes (native nested storage is DuckDB's); the wire wrappers
+   (`_wire0`, the JSON and CSV wires) already read through references and are unchanged. `DuckDb.storedVariant` over
+   an output column; the pass added last in `DuckDb.passes()`.
+3. **How it is held.** `LowerRelationTest.wholeVariantReadsAsJsonInEveryShape` (`//core:core_tests_lowering`, the
+   `core` lane): ten shapes (bare, sort and limit, filter, sort, distinct, select, extend, join, a sorted join,
+   concatenate) over one column held three ways (JSON text in a VARCHAR, DuckDB JSON, a native STRUCT): the read in
+   the SQL (`CAST(t0.V AS JSON) AS V`, and in each UNION branch), the statement's own column type `JSON` as DuckDB's
+   JDBC reports it (what a result decoder sees), identical rows across the storages. Without the pass the JSON-type
+   check and the row comparison fail for the VARCHAR and STRUCT storages. The judges, the render census and the
+   corpora show no other SQL text changed: no pinned text anywhere has a root star over a DuckDB Variant column.
+4. **The audit** (the branch's, before landing): one blocker, the star projections (`extend`'s `SELECT t0.*, x`,
+   `ExistsJoinForm`'s, `Pivots`' `StarExcept`), which the first cut's star-frame-only rule missed; three should-fix:
+   UNION and WITH roots, the first cut's join wrapper dropping the frame's ORDER BY from the outermost statement
+   (gone with the wrapper: a join's sides are listed in place), and the test's coverage; three nits (a comment, line
+   lengths). All taken.
+5. **Not chased.** `Fold.declaredKindEnvelope`'s Float rule still rides a star frame through unchanged (its own
+   2026-09-17 reason: a wire already DOUBLE); it is a different rule and untouched. The tab's reader's JSON rendering
+   of a STRUCT that reaches it by another route (the DataCube line's `toScalar` fix) stands on its own.
+
+## 2026-10-12 — One `DUCKDB_PLATFORMS`: DuckDB's spelling of our platform names, in one place (the Compiler Rewrite line)
+
+A Bazel-only tidy-up after the DataCube line's PR #31: its httpfs extension (step 2b) brought a second hand-spelled copy
+of the mapping from our platform names (`//tools/platforms`) to the names DuckDB publishes its extensions under --
+`python/BUILD.bazel`'s `_DUCKDB_PLATFORMS` beside `warehouse/defs.bzl`'s five literal `POSTGRES_EXTENSION` labels. Now
+one constant, `DUCKDB_PLATFORMS` in `tools/platforms/defs.bzl`, read by both: the five httpfs `java_run` targets and the
+`platform_select` behind `//python:wheel_duckdb`, and the postgres extension's select. No behaviour change: the same
+five repositories (`MODULE.bazel`'s `duckdb_*_extension_<name>`) on the same five platforms, the same
+`target_compatible_with`. Left alone on purpose: the JDBC jar's library names (`warehouse/BUILD.bazel`, both macOS
+builds `osx_universal`), Chromium's, esbuild's and actionlint's own names, and `MODULE.bazel`'s two pin tables, which
+cannot load a `.bzl` file and so spell the five names by hand (the constant's comment says they must keep listing
+these). Branch `build/duckdb-platforms`, one commit over main 47349d82a; no announcement went first (no `core/` file, no
+behaviour). The audit (`docs/build-inventory/program/evidence/duckdb-platforms/AUDIT.md`): no blocker; two 122-column
+lines rewrapped and its nit on the pin tables taken into the comment. The DataCube line (python's owner) approved
+`python/BUILD.bazel`'s part; the warehouse's part has no live owner session, the audit read it. `//python:wheel_duckdb`
+and `//warehouse:postgres_extension` build here and the five httpfs targets keep their names; `//gates:local` 348 pass,
+2 skipped (the two guards incompatible on this Mac); the lane query empty; CI: run 38332350300 on the lanes the change
+reaches (`checks`, `datacube`, `warehouse`: the python tests sit in the warehouse lane, DataCube's engine test carries
+the wheel's extensions, `checks` holds the guards over `tools/`), every platform, green first time on every job (14 of
+15, the summary job a dispatched run skips).
 
 ## 2026-10-13 — `#SQL{...}#`: the long tail — text, numbers, date spellings, aggregate and window permutations
 

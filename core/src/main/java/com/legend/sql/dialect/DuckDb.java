@@ -274,6 +274,10 @@ public final class DuckDb extends AnsiSqlRenderer {
         if (Boolean.getBoolean("legend.exec.engineScanOrder")) {
             ps.add(new StableScanOrder());
         }
+        // last of this dialect's passes (StoredReads follows), on the statement root only: a stored Variant
+        // column leaving through a star is read as JSON (docs/VARIANT_STORAGE_CENSUS_2026_09_27.md, the 2026-10-12
+        // addendum)
+        ps.add(new VariantEgress());
         return java.util.List.copyOf(ps);
     }
 
@@ -561,6 +565,14 @@ public final class DuckDb extends AnsiSqlRenderer {
                         || c.origin() == com.legend.sql.OutputCol.Origin.PHYSICAL_QUOTED)
                 && c.type() instanceof com.legend.sql.TypeFact.Typed t
                 && t.type() == com.legend.sql.SqlType.Scalar.JSON;
+    }
+
+    /** The same fact of an OUTPUT column: born at the store, typed JSON (SEMISTRUCTURED as stored) -- what a
+     *  star delivers without a reference to read it through ({@link VariantEgress}). */
+    static boolean storedVariant(com.legend.sql.OutputCol o) {
+        return (o.origin() == com.legend.sql.OutputCol.Origin.PHYSICAL
+                        || o.origin() == com.legend.sql.OutputCol.Origin.PHYSICAL_QUOTED)
+                && o.type() == com.legend.sql.SqlType.Scalar.JSON;
     }
 
     /** The operand of a navigation: a stored Variant column as it is. */
