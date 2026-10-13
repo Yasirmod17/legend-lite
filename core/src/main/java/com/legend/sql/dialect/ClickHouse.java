@@ -55,16 +55,17 @@ public final class ClickHouse extends AnsiSqlRenderer {
     /** The setting of correlated subqueries, experimental on 25.8 and ON by default there (measured 2026-10-13): a
      *  correlated EXISTS answers false for an outer row whose correlated column is NULL, whatever the filter (o.v IS
      *  NULL OR true is false for a NULL o.v). So a statement holds one only where every conjunct of its filter is
-     *  null-rejecting ({@link #expr}: an EXISTS, and IN written as EXISTS), and carries the setting on; every other
-     *  statement carries it off, so a correlated subquery written anywhere else is refused by the server rather than
-     *  answered wrong (PR #34's review: the default had made that claim false). */
+     *  null-rejecting ({@link #expr}: an EXISTS, IN written as EXISTS, and a quantified comparison), and carries the
+     *  setting on; every other statement carries it off, so a correlated subquery written anywhere else is refused by
+     *  the server rather than answered wrong (PR #34's review: the default had made that claim false). */
     static final String CORRELATED = ", allow_experimental_correlated_subqueries = 1";
     static final String UNCORRELATED = ", allow_experimental_correlated_subqueries = 0";
 
     /** How deep the writer is in {@link #query}: the root query (depth 0 on entry) writes the SETTINGS clause. */
     private final int[] nesting = {0};
 
-    /** Whether the root statement being written holds a correlated EXISTS ({@link #CORRELATED}). */
+    /** Whether the root statement being written holds a correlated subquery, each checked ({@link #CORRELATED}):
+     *  an EXISTS, IN written as EXISTS, or a quantified comparison. */
     private final boolean[] correlatedExists = {false};
 
     public ClickHouse() {
@@ -761,6 +762,15 @@ public final class ClickHouse extends AnsiSqlRenderer {
             // when the subquery's column is Nullable (measured: 100 > ALL (an empty Nullable(Int64)) is NULL), so the
             // empty case is answered first
             case SqlExpr.Quantified q -> {
+                // a correlated subquery: right only where its filter is null-rejecting ({@link #CORRELATED})
+                if (q.subquery() instanceof SqlSelect s && correlated(s)) {
+                    if (!correlatedRight(s)) {
+                        throw new DialectCapability("a correlated quantified comparison reached ClickHouse, whose"
+                                + " correlated subqueries answer false for an outer row with a NULL (measured 25.8):"
+                                + " its filter reads the outer row other than as a comparison's operand");
+                    }
+                    correlatedExists[0] = true;
+                }
                 writer.append("(CASE WHEN (SELECT count() FROM (");
                 inline(writer, q.subquery());
                 writer.append(") AS \"__qa\") = 0 THEN ").append(q.quantifier() == SqlExpr.Quantifier.ALL ? "true"

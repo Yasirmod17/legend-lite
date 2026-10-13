@@ -79,6 +79,13 @@ class ClickHouseDialectTest {
         SqlExpr keepsNull = new SqlExpr.Call(SqlFn.OR, List.of(matches, new SqlExpr.Call(SqlFn.IS_NULL, List.of(id))));
         assertThrows(DialectCapability.class,
                 () -> render(select(d, new SqlExpr.Exists(select(e, keepsNull, new SqlExpr.IntLit(1))), id)));
+        // a correlated quantified comparison is checked the same way
+        SqlExpr above = new SqlExpr.Quantified(id, SqlFn.GREATER, SqlExpr.Quantifier.ALL, select(e, matches, dept),
+                new com.legend.sql.TypeFact.Typed(SqlType.Scalar.BOOLEAN, true));
+        assertTrue(render(select(d, above, id)).contains("allow_experimental_correlated_subqueries = 1"));
+        SqlExpr aboveKeepingNull = new SqlExpr.Quantified(id, SqlFn.GREATER, SqlExpr.Quantifier.ALL,
+                select(e, keepsNull, dept), new com.legend.sql.TypeFact.Typed(SqlType.Scalar.BOOLEAN, true));
+        assertThrows(DialectCapability.class, () -> render(select(d, aboveKeepingNull, id)));
         // every other statement turns the setting off (25.8's default is on), so no other correlated subquery runs
         assertTrue(render(select(d, null, id)).contains("allow_experimental_correlated_subqueries = 0"));
     }
