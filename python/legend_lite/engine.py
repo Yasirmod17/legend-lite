@@ -30,6 +30,7 @@ import base64
 import binascii
 import contextlib
 import functools
+import itertools
 import hmac
 import http.server
 import json
@@ -42,7 +43,7 @@ import threading
 import traceback
 import queue
 from concurrent.futures import Future
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from types import MappingProxyType
 from typing import Any, NamedTuple, Protocol
 from pathlib import Path
@@ -178,12 +179,18 @@ _NO_HEADERS: Mapping[str, str] = MappingProxyType({})
 
 
 class Answer(NamedTuple):
-    """An answer to one call, as HTTP would carry it: its status, its media type, its body and any other headers."""
+    """An answer to one call, as HTTP would carry it: its status, its media type, its body and any other headers -- or,
+    for rows sent as they come (G2), ``stream``: the body's parts, in order, read once (``body`` then empty)."""
 
     status: int
     content_type: str
     body: bytes
     headers: Mapping[str, str] = _NO_HEADERS
+    stream: Iterator[bytes] | None = None
+
+    def whole(self) -> bytes:
+        """The body whole, a streamed one's parts joined: for a channel that carries one message (a notebook's)."""
+        return self.body if self.stream is None else b''.join(self.stream)
 
 
 def _said(status: int, message: str) -> Answer:
@@ -211,17 +218,55 @@ def _quoted_name(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
-def _arrow_rows(rows: pa.Table, planned: str, receipt: dict[str, Any] | None = None) -> Answer:
-    """A plan-and-run's rows, as Arrow, the planner's answer in their schema's metadata (``legend.plan``), and where
-    they were read when not here (``legend.receipt``: a warehouse table's, its statement and its reader)."""
-    kept = {**(rows.schema.metadata or {}), _PLAN_KEY: planned.encode('utf-8')}
+# rows a plan-and-run sends at a time (G2): whole DuckDB vectors, a page's chunk as the tab's DuckDB hands it one
+_ROWS_PER_BATCH = 64 * 2048
+
+
+def _arrow_rows(rows: pa.Table | Iterator[pa.Table], planned: str, receipt: dict[str, Any] | None = None) -> Answer:
+    """A plan-and-run's rows, as an Arrow stream sent as it is written (G2): its schema first, the planner's answer in
+    its metadata (``legend.plan``) and where the rows were read when not here (``legend.receipt``: a warehouse table's,
+    its statement and its reader), then a batch at a time. ``rows``: a table, or tables of one schema as they come (a
+    warehouse's chunks), the first already read -- what fails before any row is said by status, not cut short."""
+    tables = iter([rows]) if isinstance(rows, pa.Table) else rows
+    first = next(tables)
+    kept = {**(first.schema.metadata or {}), _PLAN_KEY: planned.encode('utf-8')}
     if receipt is not None:
         kept[b'legend.receipt'] = json.dumps(receipt).encode('utf-8')
-    rows = rows.replace_schema_metadata(kept)
-    sink = pa.BufferOutputStream()
-    with pyarrow.ipc.new_stream(sink, rows.schema) as writer:
-        writer.write_table(rows)
-    return Answer(200, 'application/vnd.apache.arrow.stream', sink.getvalue().to_pybytes())
+    schema = first.schema.with_metadata(kept)
+
+    def parts() -> Iterator[bytes]:
+        written = _Written()
+        with pyarrow.ipc.new_stream(written, schema) as writer:
+            yield written.take()
+            for table in itertools.chain([first], tables):
+                for batch in table.cast(schema).to_batches(max_chunksize=_ROWS_PER_BATCH):
+                    writer.write_batch(batch)
+                    yield written.take()
+        yield written.take()
+
+    return Answer(200, 'application/vnd.apache.arrow.stream', b'', stream=parts())
+
+
+class _Written:
+    """What an Arrow stream writer has written since it was last taken: the stream's parts, as they are made."""
+
+    def __init__(self) -> None:
+        self._parts: list[bytes] = []
+        self.closed = False
+
+    def write(self, data: Any) -> int:
+        self._parts.append(bytes(data))
+        return len(data)
+
+    def flush(self) -> None:
+        pass
+
+    def close(self) -> None:
+        self.closed = True
+
+    def take(self) -> bytes:
+        taken, self._parts = b''.join(self._parts), []
+        return taken
 
 
 def _planned(said: dict[str, str], status: int = 200) -> Answer:
@@ -1129,10 +1174,17 @@ class Engine:
             receipt: dict[str, Any] | None = None
             if snapped:
                 # the copy in the frames' DuckDB, through the snap runtime: Python's executor, as a frame's rows
-                rows = self.frames.run(plan)
+                rows: pa.Table | Iterator[pa.Table] = self.frames.run(plan)
             else:
                 said: dict[str, Any] = {}
-                rows = typed_by_plan(_arrow_of(table.warehouse.arrow_chunks(plan.sql, said.update)), plan)
+                # the warehouse's chunks sent on as they come (G2), each typed by the plan; the first read here, so
+                # what fails before any row is said by its status
+                chunks = (typed_by_plan(pyarrow.ipc.open_stream(c).read_all(), plan)
+                          for c in table.warehouse.arrow_chunks(plan.sql, said.update))
+                first = next(chunks, None)
+                if first is None:
+                    raise pa.ArrowInvalid('the warehouse answered no chunk, not even its columns')
+                rows = itertools.chain([first], chunks)
                 # the warehouse's own receipt: where, as whom, its statement and its count (the tab's live reads carry it)
                 receipt = {'plane': 'warehouse', 'where': said.get('where', ''), 'as': said.get('as', ''),
                            **({'statementId': said['statementId']} if 'statementId' in said else {}),
@@ -1516,12 +1568,25 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     def _send(self, answer: Answer) -> None:
         self.send_response(answer.status)
         self.send_header('Content-Type', answer.content_type)
-        self.send_header('Content-Length', str(len(answer.body)))
+        if answer.stream is None:
+            self.send_header('Content-Length', str(len(answer.body)))
         self.send_header('Cache-Control', 'no-store')
         for name, value in answer.headers.items():
             self.send_header(name, value)
         self.end_headers()
-        self.wfile.write(answer.body)
+        if answer.stream is None:
+            self.wfile.write(answer.body)
+            return
+        # sent as it is written (G2): no length, the connection's close its end (HTTP/1.0); a part that fails after
+        # the first is the stream cut short, which the page's reader says
+        self.close_connection = True
+        try:
+            for part in answer.stream:
+                if part:
+                    self.wfile.write(part)
+                    self.wfile.flush()
+        except Exception:
+            traceback.print_exc()
 
     def _length(self) -> int | None:
         """The request's Content-Length, or None when it has none this engine reads (absent, not ASCII digits)."""

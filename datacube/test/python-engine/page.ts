@@ -223,6 +223,18 @@ async function run(): Promise<void> {
     }
     deepEqual(differ, [], 'PlanAndRun on Python and the tab disagree:');
     equal(CASES.length > 0 && compared === CASES.length, true, `cases compared: ${compared} of ${CASES.length}`);
+    // G2: the same rows streamed, a batch at a time as Python sends them, each typed by the plan
+    const [first] = queries();
+    const q: Lambda = onTheFrame(first!.query, served.source);
+    const snapshot: CubeSnapshot = onTheFrame(CASES[0]!.snapshot, served.source);
+    const whole = await python.run(q, snapshot, CASES[0]!.scope);
+    const chunks: ResultTable[] = [];
+    await python.stream(q, snapshot, (chunk) => chunks.push(chunk));
+    const joined = chunks.length === 0 ? whole.rows : {
+      ...chunks[0]!, rowCount: chunks.reduce((n, c) => n + c.rowCount, 0),
+      columns: chunks[0]!.columns.map((c, i) => ({ ...c, values: chunks.flatMap((k) => [...k.columns[i]!.values]) })),
+    };
+    equal(shape(joined, false), shape(whole.rows, false), 'the streamed rows are the whole answer\'s:');
   });
 
   // THE READER'S FILES (§15.6): each read by DataCube's own reader (upload.ts) into the tab's DuckDB and into Python's

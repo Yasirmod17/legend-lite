@@ -3,7 +3,7 @@
 // (datacube/src/headless/host.ts; docs/DATACUBE_HEADLESS_PYTHON_DESIGN_2026_10_11.md §3). A module of its own, so a
 // page that never reads IPC this way imports nothing more.
 
-import { tableFromIPC } from 'apache-arrow';
+import { RecordBatchReader, Table, tableFromIPC } from 'apache-arrow';
 
 import type { ArrowishTable } from './duckdb.ts';
 
@@ -17,4 +17,22 @@ export function arrowIpcTable(stream: Uint8Array): ArrowishTable {
 export function arrowIpcAnswer(stream: Uint8Array): { readonly table: ArrowishTable; readonly metadata: ReadonlyMap<string, string> } {
   const table = tableFromIPC(stream);
   return { table: table as unknown as ArrowishTable, metadata: table.schema.metadata };
+}
+
+/**
+ * An Arrow IPC stream read as it comes (an engine's answer sent a batch at a time: Python's plan-and-run, G2): its
+ * schema's metadata as soon as the schema has come, then each batch as a table of its own, none kept.
+ */
+export async function arrowIpcBatches(answer: Response): Promise<{
+  readonly metadata: ReadonlyMap<string, string>;
+  readonly tables: AsyncIterable<ArrowishTable>;
+}> {
+  const reader = await RecordBatchReader.from(answer);
+  await reader.open();
+  return {
+    metadata: reader.schema.metadata,
+    tables: (async function* () {
+      for await (const batch of reader) yield new Table([batch]) as unknown as ArrowishTable;
+    })(),
+  };
 }
