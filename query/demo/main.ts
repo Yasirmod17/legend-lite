@@ -99,10 +99,10 @@ async function boot(): Promise<void> {
     store = new QueryStoreClient(exec.engine);
     user = await http!.currentUser();
   } else {
-    let runner: QueryEngine & { readonly databaseType?: string };
+    let runner: QueryEngine;
     if (exec.kind === 'duckdb-wasm') {
       starting('Starting DuckDB in this tab');
-      const tab = await startDuckDbInTab('./vendor/');
+      const tab = await startDuckDbInTab('./vendor/', (databaseType) => planner!.sessionSetup(databaseType));
       runner = tab.engine;
       data = tab.data;     // a project opened by name brings its own test data, made here when opened (AppContext.activate)
       user = exec.user;
@@ -113,14 +113,11 @@ async function boot(): Promise<void> {
       runner = new WarehouseEngine(session, exec.catalog ?? 'main');
       user = session.principal;
     }
-    const tabEngine = new BrowserEngine(planner!, runner, user);
-    // the session the planner's SQL assumes (a DuckDB session in UTC), before anything is written to it
-    await tabEngine.setUpSession();
     if (exec.seed?.length) {
       starting('Loading the demo data');
       await seed(runner, exec.seed);
     }
-    engine = tabEngine;
+    engine = new BrowserEngine(planner!, runner, user);
     cubeRows = { kind: 'sql', engine: runner };
     // no server: the same API, answered in this page from this origin's IndexedDB by legend-lite's own rules (the
     // server's, compiled to WebAssembly: query-store's module at vendor/queries/, fetched at the store's first call)

@@ -27,38 +27,18 @@ export function runtimeOf(lambda: Lambda): string {
 
 export class BrowserEngine implements Engine {
   readonly #planner: WasmGrammar;
-  readonly #engine: QueryEngine & { readonly databaseType?: string };
+  readonly #engine: QueryEngine;
   readonly #user: string;
-  /** The engine's session set up as the planner's SQL expects: once, before its first query. */
-  #session: Promise<void> | undefined;
 
   /**
-   * `engine`: where the SQL runs; one in this tab says the database it is (`databaseType`: DuckDB-WASM's), and its
-   * session is set up as the server sets up its own before the first query -- one on a server (the warehouse) runs
-   * on that server's sessions. `user`: who saved queries belong to (the warehouse's signed-in principal, or the name
-   * this browser was configured with).
+   * `engine`: where the SQL runs -- the tab's DuckDB, its session set up as it was opened (engine.ts setUpSession), or
+   * a server's (the warehouse), on that server's sessions. `user`: who saved queries belong to (the warehouse's
+   * signed-in principal, or the name this browser was configured with).
    */
-  constructor(planner: WasmGrammar, engine: QueryEngine & { readonly databaseType?: string }, user: string) {
+  constructor(planner: WasmGrammar, engine: QueryEngine, user: string) {
     this.#planner = planner;
     this.#engine = engine;
     this.#user = user;
-  }
-
-  /**
-   * THE SESSION THE SQL ASSUMES: the dialect's own setup (Boundary.sessionSetup: a DuckDB session in UTC), run on the
-   * engine before its first query, as legend-lite's server runs it on every session and DataCube's tab on its DuckDB.
-   * Left alone, DuckDB-WASM takes the browser's zone, and a zoned value's text differs from the server's. A setup that
-   * fails is tried again at the next query. A host that writes to the engine first (a demo's seed) asks it first.
-   */
-  setUpSession(): Promise<void> {
-    const databaseType = this.#engine.databaseType;
-    if (databaseType === undefined) return Promise.resolve();
-    return this.#session ??= (async () => {
-      for (const statement of await this.#planner.sessionSetup(databaseType)) await this.#engine.run(statement, 0);
-    })().catch((e: unknown) => {
-      this.#session = undefined;
-      throw e;
-    });
   }
 
   get name(): string {
@@ -79,7 +59,6 @@ export class BrowserEngine implements Engine {
   /** `execute`'s answer as its text: planned, run on the engine, and arranged by the server's own writers. */
   async executeText(input: ExecuteInput, signal?: AbortSignal): Promise<string> {
     const { plan, text } = await this.#planner.executePlan(input);
-    await this.setUpSession();
     // the one value the database writes: a relation's rows as the JSON wire, a graph fetch's objects' array
     const raw = await this.#engine.run(plan.run, 0, signal);
     const cell = raw.columns[0]?.values[0];

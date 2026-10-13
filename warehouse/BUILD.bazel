@@ -64,6 +64,8 @@ legend_java_library(
         ":sqlapi",
         "//base",
         "//json",
+        # the site's media types, the one table every host serving a site answers with (C4)
+        "//site:types",
     ],
     # No DuckDB jar here: the server calls DuckDB's C API through java.lang.foreign and uses no JDBC class
     # (docs/WAREHOUSE_FFM_HOMEWORK_2026_09_26.md), and its native library is :duckdb_library, never extracted

@@ -30,6 +30,8 @@ _ARITY = {
     'lite_pure_v1': 3, 'lite_execute_plan': 2, 'lite_pure_v1_refusal': 1,
     # the planner protocol's execute halves for a host's own database, and its warm (C2)
     'lite_execute_json_plan': 2, 'lite_execute_json_answer': 2, 'lite_warm_model': 1,
+    # the site's media types, the one table every host serving a site answers with (C4)
+    'lite_site_types': 0,
     # Python's model home (native/.../ModelHome.java): a repository's folder, then a request's method, target and body
     'lite_sdlc_handle': 4, 'lite_depot_handle': 4, 'lite_saved_queries': 6, 'lite_saved_cubes': 6,
 }

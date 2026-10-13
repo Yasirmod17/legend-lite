@@ -375,7 +375,7 @@ public final class PureV1Api {
     public static Answer arrowPlan(String body, java.util.Collection<String> models) {
         return answer(500, "COMPILATION", () -> {
             Hosted hosted = hosted(body, models);
-            QueryPlan plan = hosted.query().plan(hosted.runtime());
+            QueryPlan plan = hosted.plan();
             if (plan.shape() == com.legend.plan.ResultShape.GRAPH) {
                 // upstream's Arrow answer is a relational result's (RelationalResultToArrowIPCSerializer)
                 throw new IllegalArgumentException("ARROW_IPC answers a relation query; a graph fetch is answered in JSON");
@@ -403,7 +403,7 @@ public final class PureV1Api {
     public static Answer jsonPlan(String body, java.util.Collection<String> models) {
         return answer(500, "COMPILATION", () -> {
             Hosted hosted = hosted(body, models);
-            QueryPlan plan = hosted.query().plan(hosted.runtime());
+            QueryPlan plan = hosted.plan();
             Map<String, Object> out = new LinkedHashMap<>();
             out.put("sql", plan.sql());
             if (plan.shape() == com.legend.plan.ResultShape.GRAPH) {
@@ -452,8 +452,9 @@ public final class PureV1Api {
         });
     }
 
-    /** An {@code ExecuteInput} read and its parameters bound, for a host that runs only {@code models}: its query and runtime. */
-    private record Hosted(com.legend.TypedQuery query, String runtime) {
+    /** An {@code ExecuteInput} read, its parameters bound and planned, for a host that runs only {@code models}: its
+     *  query, its runtime and its plan (a relation's or a graph fetch's, as the server's execute answers only those). */
+    private record Hosted(com.legend.TypedQuery query, String runtime, QueryPlan plan) {
     }
 
     private static Hosted hosted(String body, java.util.Collection<String> models) {
@@ -469,7 +470,14 @@ public final class PureV1Api {
         LambdaFunction lambda = ProtocolReader.lambda(
                 boundParameters(request.getObj("function"), request.getArrOr("parameterValues", null)));
         com.legend.TypedQuery query = com.legend.Compiler.query(com.legend.Compiler.compileModel(model), lambda);
-        return new Hosted(query, runtimeOf(request, query.target()));
+        String runtime = runtimeOf(request, query.target());
+        QueryPlan plan = query.plan(runtime);
+        if (plan.shape() != com.legend.plan.ResultShape.TABULAR && plan.shape() != com.legend.plan.ResultShape.GRAPH) {
+            // as the server's execute refuses it (Execution.wireOn): a value's answer is not one the engine was measured on
+            throw new com.legend.error.NotImplementedException(
+                    "execute: a " + plan.shape() + " result's serialization is unprobed");
+        }
+        return new Hosted(query, runtime, plan);
     }
 
     /**

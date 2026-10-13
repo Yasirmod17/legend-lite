@@ -298,6 +298,12 @@ class PureV1ApiTest {
         assertEquals(500, PureV1Api.jsonPlan(request, List.of(model + "\n")).status());
         // a plan that is not jsonPlan's: refused, never cast
         assertEquals(500, PureV1Api.jsonAnswer("{\"builder\":5}", "[]").status());
+        // a value's answer, which the server's execute refuses, is refused by both plan halves alike
+        String scalar = "{\"function\":" + PureV1Api.grammarToJsonLambda("|#>{trades::h2::DB.TRADES_SCHEMA.TRADES}#->size()->from(trades::h2::RT)", false).json() + ",\"model\":" + textModel() + "}";
+        for (PureV1Api.Answer refused : List.of(PureV1Api.jsonPlan(scalar, List.of(model)), PureV1Api.arrowPlan(scalar, List.of(model)))) {
+            assertEquals(500, refused.status(), refused.json());
+            assertTrue(refused.json().contains("result's serialization is unprobed"), refused.json());
+        }
 
         String trading = resource("upstream-api/query-app/trading.pure");
         String fetch = PureV1Api.grammarToJsonLambda("|demo::trading::Trade.all()->graphFetch(#{demo::trading::Trade{tradeId}}#)"

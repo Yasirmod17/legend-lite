@@ -88,7 +88,7 @@ describe("Studio's compiler over the session's engine", () => {
   });
 
   it("the in-tab engine's compilation/compile answers as the server's: OK, or the first failure, 400 COMPILATION", async () => {
-    const noSql = { databaseType: 'DuckDB' } as unknown as QueryEngine & { databaseType?: string };     // compiling runs no SQL
+    const noSql = {} as QueryEngine;     // compiling runs no SQL
     const engine = new BrowserEngine(grammar, noSql, 'local');
     assert.deepEqual(await engine.compile({ _type: 'text', code: GOOD }), { message: 'OK', defects: [] });
     await assert.rejects(engine.compile({ _type: 'text', code: BAD }),

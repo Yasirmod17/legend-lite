@@ -9,7 +9,7 @@ import type { RequestBody } from './planner-protocol.ts';
 export interface PlannerModule {
   readonly exports: {
     holdModelOrError(model: string): string;
-    releaseModel(handle: number): number;
+    releaseModelOrError(handle: number): string;
     planHeldOrError(handle: number, query: string, runtime: string): string;
     relationTypeHeldOrError(handle: number, query: string): string;
     tableModelOrError(table: string): string;
@@ -24,15 +24,15 @@ export interface PlannerModule {
     executeJsonAnswerOrError(plan: string, wire: string): string;
     testDataSqlOrError(model: string, database: string, tablesJson: string): string;
     sessionSetupOrError(databaseType: string): string;
-    warmModel(model: string): number;
+    warmModelOrError(model: string): string;
   };
 }
 
-/** One request, answered by the module's export of the same name: the export's tagged answer. */
+/** One request, answered by the module's export of the same name: the export's own tagged answer, every kind folded. */
 export function answer(m: PlannerModule, r: RequestBody): string {
   switch (r.kind) {
     case 'hold': return m.exports.holdModelOrError(r.model);
-    case 'release': m.exports.releaseModel(r.handle); return 'OK\n';
+    case 'release': return m.exports.releaseModelOrError(r.handle);
     case 'plan': return m.exports.planHeldOrError(r.handle, r.query, r.runtime);
     case 'relationType': return m.exports.relationTypeHeldOrError(r.handle, r.query);
     case 'tableModel': return m.exports.tableModelOrError(r.table);
@@ -44,6 +44,6 @@ export function answer(m: PlannerModule, r: RequestBody): string {
     case 'executeAnswer': return m.exports.executeJsonAnswerOrError(r.plan, r.wire);
     case 'testData': return m.exports.testDataSqlOrError(r.model, r.database, r.tables);
     case 'sessionSetup': return m.exports.sessionSetupOrError(r.databaseType);
-    case 'warm': m.exports.warmModel(r.model); return 'OK\n';
+    case 'warm': return m.exports.warmModelOrError(r.model);
   }
 }

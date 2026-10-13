@@ -32,6 +32,7 @@ legend_java_library(
         "//sdlc-server:git_storage",
         "//sdlc-server:rules",
         "//sdlc-server/grammar",
+        "//site:types",
         "//wasm:boundary",
     ],
 )

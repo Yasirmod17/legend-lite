@@ -1208,8 +1208,9 @@ _BUNDLES = {
     "demo/engine.ts": "demo/bundle-engine.js",
 }
 
-# the planner's worker: engine-client's own bundle (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C2: one planner protocol, one
-# worker for every app that plans in a tab), served as the page's ./planner-worker.js, as Query's and Studio's are
+# the planner's worker: engine-client's own bundle (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C2: one planner
+# protocol, one worker for every app that plans in a tab), served as the page's ./planner-worker.js, as Query's and
+# Studio's are
 copy_file(
     name = "planner_worker",
     src = "//engine-client:planner_worker",

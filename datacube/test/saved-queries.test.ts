@@ -76,7 +76,9 @@ describe('a saved query as a source: each fixture, as the README says it runs', 
 
   it('a data space context: its Production context, 5 rows, the enumeration read as its name', async () => {
     const q = record('data-space-context');
-    assert.deepEqual(contextOf(q, elements), { mapping: 'demo::trading::TradingMapping', runtime: 'demo::trading::Runtime' });
+    // query-store's one reader (Query's too): the data space it came from beside the mapping and runtime
+    assert.deepEqual(contextOf(q, elements), { mapping: 'demo::trading::TradingMapping', runtime: 'demo::trading::Runtime',
+      dataSpace: { path: 'demo::trading::TradingDataSpace', context: 'Production' } });
     const { source, planner } = await opened(q);
     assert.deepEqual((await sourceColumns(planner, source)).map((c) => `${c.name}:${c.type}`),
       ['Trade Id:Integer', 'Side:String', 'Quantity:Integer']);

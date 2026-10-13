@@ -111,7 +111,7 @@ function serverSession(api: string, user: string): RunSession & BuilderSession {
 function inTabSession(grammar: WasmGrammar, duckdbVendor: string, user: string): RunSession & BuilderSession {
   type Started = { engine: BrowserEngine; sql: QueryEngine; tables: TabTables };
   let started: Promise<Started> | undefined;
-  const start = (): Promise<Started> => (started ??= startDuckDbInTab(duckdbVendor)
+  const start = (): Promise<Started> => (started ??= startDuckDbInTab(duckdbVendor, (databaseType) => grammar.sessionSetup(databaseType))
     .then((tab) => ({ engine: new BrowserEngine(grammar, tab.engine, user), sql: tab.engine, tables: new TabTables(tab.data, tab.engine, grammar) })));
   return {
     modelJson: (text) => grammar.modelJson(text),

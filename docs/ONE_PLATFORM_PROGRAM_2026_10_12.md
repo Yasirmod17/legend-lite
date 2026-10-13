@@ -461,11 +461,15 @@ columns with `relationalType`, the activity's `comment`, the "Missing external p
   the planner's to refuse, in the server's words. `WasmGrammar.returnType` and `generatePlan` are the planner's
   pure/v1, as the server routes them, so the tab answers both (Query's SQL button already showed the tab's plan
   through its planner; unchanged).
-- The session the SQL assumes (the Plan Gen and Compiler Rewrite lines' review of bf058c233): `BrowserEngine` runs
-  the dialect's own session setup (`Boundary.sessionSetup`: a DuckDB session in UTC, as the server runs on every session
-  and DataCube's tab on its DuckDB) on an engine in the tab before its first query -- Query sets it up before its demo
-  seed; an engine on a server (the warehouse) runs on that server's sessions. Left alone, DuckDB-WASM takes the
-  browser's zone, and a value of the session's zone (`now()->hour()`) answered otherwise than the server.
+- The session the SQL assumes (the Plan Gen, Compiler Rewrite and Studio lines' reviews of bf058c233 and b44780c8e):
+  every tab's DuckDB is set up as it opens, before anything reads or writes it, by one function --
+  engine-client's `setUpSession(engine, setup)`, the dialect's own setup (`Boundary.sessionSetup`: a DuckDB session in
+  UTC, as the server sets up every session it opens) -- run by `startDuckDbInTab` (Query's and Studio's: their test
+  data, their grids' SQL and their executes all after it) and by DataCube's browser services; an engine on a server
+  (the warehouse) runs on that server's sessions. Left alone, DuckDB-WASM takes the browser's zone, and a value of the
+  session's zone (`now()->hour()`) answered otherwise than the server.
+- A value's answer (a scalar or a list: neither a relation nor a graph fetch) is refused by both plan halves, as the
+  server's execute refuses it ("a SCALAR result's serialization is unprobed"; the audit of b44780c8e).
 - Python answers legend-engine's JSON execute too (it answered ARROW_IPC only): the same two halves as the tab
   (`compiler.execute_json_plan`, `execute_json_answer`; its DuckDB runs `run`), so a JSON client -- Query served from
   Python (E) -- reads the server's answer text.
@@ -507,7 +511,13 @@ DataCube's ten kinds are the superset, but for Query's `warm` and its unheld `pl
   `LitePlanner`, its headless host and Python's page host, and Query's and Studio's `WasmGrammar` send it.
 - Python answers every kind (`legend_lite/_planner.py` KINDS, the start-up check `_headless.check_interface` holding
   the two lists alike): the native library gains `lite_execute_json_plan`, `lite_execute_json_answer` and
-  `lite_warm_model`, each delegating to the Boundary function the tab's export delegates to.
+  `lite_warm_model`, each delegating to the Boundary function the tab's export delegates to. A page on Python asks
+  `planner.json` only the kinds its planner sends (`engine.py` `_PAGE_KINDS`): not an unheld plan, execute's halves or
+  a warm, so it compiles only the models Python serves (the audit of b44780c8e).
+- Every kind answers folded alike on both hosts: the tab's `release` and `warm` through new exports
+  (`TabExports.releaseModelOrError`, `warmModelOrError`, as the native library's entries fold them; the Plan Gen line's
+  review). And one mapping of kinds to exports wherever the module runs: DataCube's LitePlanner, with no worker,
+  answers in-thread through the same `planner-answer.ts` (its own copy of the mapping gone).
 - Proof: every app's suites on the one worker (DataCube's, Query's and Studio's browser tests included), the headless
   lane (its start-up check), `python_execute_test`.
 
@@ -538,6 +548,16 @@ an audit.
 
 - One table of the site's file types, which Python reads.
 - One saved-query context reader, shared by DataCube and Query.
+
+**Built 2026-10-13 (branch `datacube/python-parity`):**
+- The site's media types are `site/src/main/java/com/legend/site/SiteTypes.java` (`//site:types`, no dependencies):
+  the warehouse's server answers with it (its `SITE_TYPES` copy gone), and Python's engine reads it through the native
+  library (`lite_site_types`; `engine.py` `_site_types`, its `_SITE_TYPES` copy gone). The development servers' and
+  harnesses' own tables (`demo/*.mjs`) are not a host's and stay.
+- A saved query's context is `query-store/src/context.ts` (`contextOf`, `projectOf`): an explicit mapping and runtime,
+  or a data space's execution context, with the data space it came from. Query's `persist.ts` and DataCube's
+  `saved-queries.ts` call it, each handing in how it finds a data space (Query's model graph, DataCube's elements);
+  their own two readers gone. DataCube's now also answers the data space a context came from, as Query's did.
 
 ### D. Headless pages
 

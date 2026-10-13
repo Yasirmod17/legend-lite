@@ -75,6 +75,18 @@ public final class TabExports {
         return 1;
     }
 
+    /**
+     * {@link Boundary#releaseModel}, folded: {@code OK\n}, or the failure as the planner protocol's other kinds answer
+     * one -- as the native library's {@code lite_release_model} answers it (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C2).
+     */
+    @JSExport
+    public static String releaseModelOrError(int handle) {
+        return Folded.of(() -> {
+            Boundary.releaseModel(handle);
+            return "";
+        });
+    }
+
     /** {@link Boundary#planHeld}. */
     @JSExport
     public static String planHeldOrError(int handle, String query, String runtime) {
@@ -131,6 +143,15 @@ public final class TabExports {
     @JSExport
     public static int warmModel(String model) {
         return Boundary.warmModel(model);
+    }
+
+    /** {@link Boundary#warmModel}, folded, as the native library's {@code lite_warm_model} answers it (C2). */
+    @JSExport
+    public static String warmModelOrError(String model) {
+        return Folded.of(() -> {
+            Boundary.warmModel(model);
+            return "";
+        });
     }
 
     /** {@link Boundary#touchPrelude}. */

@@ -40,7 +40,7 @@ import { askedOffers, askedSettings, pythonDatabase, pythonRunner, pythonService
 import { browserBasics } from '../../src/services/browser-basics.ts';
 import type { Services } from '../../src/app/services.ts';
 import { ingestFile } from '../../src/upload.ts';
-import { setUpSession } from '../../src/services/browser.ts';
+import { setUpSession } from '../../../engine-client/src/engine.ts';
 
 /** What the harness hands the page: the engine, and the frame it serves. */
 interface Served {
@@ -177,7 +177,7 @@ async function run(): Promise<void> {
   await local.run(`INSERT INTO trades VALUES ${served.rows.map((r) => `(${r.map(sqlValue).join(', ')})`).join(', ')}`, 0);
   const planner = new LitePlanner({ ...engine, workerUrl: new URL('planner-worker.js', location.href).href });
   // set up as the tab sets its DuckDB up (services/browser.ts): this browser is in New York (python-engine.mjs)
-  await setUpSession(local, planner);
+  await setUpSession(local, (databaseType) => planner.sessionSetup(databaseType));
   const tab = new PlanThenRun(planner, local);
 
   await check('every cube case answers the same on Python\'s engine and in the tab', async () => {

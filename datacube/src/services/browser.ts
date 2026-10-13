@@ -8,6 +8,7 @@
 
 import type { AsyncDuckDB } from '../../../engine-client/src/duckdb-wasm.ts';
 import type { DuckDbEngine } from '../../../engine-client/src/duckdb.ts';
+import { setUpSession } from '../../../engine-client/src/engine.ts';
 import type { SeedSource } from '../../../engine-client/src/model-data.ts';
 import { connect, listObjects, signInWithKey, WarehouseEngine } from '../../../engine-client/src/warehouse.ts';
 import type { QueriesModule, QueryReader } from '../../../query-store/src/index.ts';
@@ -69,20 +70,10 @@ export interface BrowserServicesOptions {
   readonly location: { readonly href: string };
 }
 
-/**
- * THE TAB'S DUCKDB SET UP as the planner's SQL expects, as Python's Frames sets up its own: the dialect's own session
- * setup, from the compiler (`Boundary.sessionSetup`: a DuckDB session in UTC), run on the connection before any query
- * the planner wrote. Left alone, DuckDB-WASM takes the browser's zone -- a fixed offset of it at that ("Etc/GMT+5" in New
- * York, in summer too) -- and `now()`, `today()` and any zoned timestamp answered otherwise than on Python.
- */
-export async function setUpSession(engine: DuckDbEngine, tables: TableModels): Promise<void> {
-  for (const statement of await tables.sessionSetup(engine.databaseType)) await engine.run(statement, 0);
-}
-
-/** The tab's services, built once as the page starts: its DuckDB set up first (`setUpSession`). */
+/** The tab's services, built once as the page starts: its DuckDB set up first (engine-client's `setUpSession`). */
 export async function browserServices(o: BrowserServicesOptions): Promise<Services> {
   const { config } = o;
-  await setUpSession(o.duckdb.engine, o.planner.tables);
+  await setUpSession(o.duckdb.engine, (databaseType) => o.planner.tables.sessionSetup(databaseType));
   const modelHome = o.config.depot ? depotHome(o.config.depot, o.location) : undefined;
   // THE STORES' RULES: the saved queries' and the saved pages', one WebAssembly module (`vendor/queries/`), fetched
   // once, at the first call of either store (a load that failed is tried again at the next)

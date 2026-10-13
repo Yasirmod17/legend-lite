@@ -5,7 +5,7 @@
 // execute answered by Python's engine over the same frame, its DuckDB writing the rows and the same writers arranging
 // them: the answer's TEXT, byte for byte (each trace id its own), a whole Float, a Decimal, a DateTime and a value of
 // the session's zone (`now()->hour()`) among its columns. The tab's DuckDB starts in a zone that is not UTC (as a
-// browser in Kathmandu would: +05:45), so a tab that did not set its session up as the server does answers otherwise.
+// browser in Kathmandu would: +05:45), so a tab whose session was not set up as the server's answers otherwise.
 // Python's ARROW_IPC answer (its plan PureV1Api.arrowPlan) carries the same builder.
 
 import assert from 'node:assert/strict';
@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 
 import { arrowIpcAnswer } from '../../../engine-client/src/arrow-ipc.ts';
 import { DuckDbEngine } from '../../../engine-client/src/duckdb.ts';
+import { setUpSession } from '../../../engine-client/src/engine.ts';
 import { arrowResultTable } from '../../../engine-client/src/engine-remote.ts';
 import { BrowserEngine } from '../../../engine-client/src/legend/browser-engine.ts';
 import { EngineError } from '../../../engine-client/src/legend/engine.ts';
@@ -113,8 +114,10 @@ before(async () => {
   if (t.name.includes('.')) await duck.run(`CREATE SCHEMA IF NOT EXISTS ${t.name.split('.')[0]}`, 0);
   await duck.run(`CREATE TABLE ${t.name} (${t.columns.map(([n, ty]) => `"${n}" ${ty}`).join(', ')})`, 0);
   await duck.run(`INSERT INTO ${t.name} VALUES ${served.rows.map((r) => `(${r.map(sqlValue).join(', ')})`).join(', ')}`, 0);
-  // the zone a browser in Kathmandu gives DuckDB-WASM: the engine must set its session up as the server's (UTC)
+  // the zone a browser in Kathmandu gives DuckDB-WASM, then the session set up as every tab's DuckDB is as it opens
+  // (engine-client's setUpSession, which startDuckDbInTab and DataCube's services run): UTC, the server's
   await duck.run("SET TimeZone = 'Asia/Kathmandu'", 0);
+  await setUpSession(duck, (databaseType) => grammar.sessionSetup(databaseType));
   tab = new BrowserEngine(grammar, duck, 'this browser');
 });
 

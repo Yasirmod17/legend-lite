@@ -313,9 +313,11 @@ class PlanAndRunRoutes(Served):
         refused = json.loads(self.post('/planner.json', json.dumps({
             'kind': 'planJson', 'model': 'unserved', 'lambda': lam, 'runtime': self.table.runtime}))[2])
         self.assertTrue(refused['answer'].startswith('ERR\nMODEL\n'), refused)
-        # holding and letting go are the page's own: Python holds nothing for a page
-        for kind in ('hold', 'release'):
-            self.assertEqual(self.post('/planner.json', json.dumps({'kind': kind, 'model': self.table.model, 'handle': '1'}))[0], 400)
+        # holding and letting go are the page's own: Python holds nothing for a page; and the kinds only another host's
+        # apps send (an unheld plan, execute's halves, a warm) are not a page's to ask, so it compiles only served models
+        for kind in ('hold', 'release', 'planModel', 'executePlan', 'executeAnswer', 'warm'):
+            self.assertEqual(self.post('/planner.json', json.dumps({'kind': kind, 'model': self.table.model, 'handle': '1'}))[0], 400,
+                             kind)
 
     def test_the_stores_need_the_token(self):
         # the saved queries and the saved pages (B5, B6): this user's, so only a page holding the engine's token asks

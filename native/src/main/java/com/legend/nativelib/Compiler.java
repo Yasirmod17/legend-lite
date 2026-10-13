@@ -313,6 +313,22 @@ public final class Compiler {
         return answer(a);
     }
 
+    /**
+     * The media types of legend-lite's sites by extension, as one JSON object ({@code com.legend.site.SiteTypes}): the
+     * one table the warehouse's server answers with, which Python's engine serves its site by
+     * (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C4).
+     */
+    @CEntryPoint(name = "lite_site_types")
+    static CCharPointer siteTypes(IsolateThread thread) {
+        String a;
+        try {
+            a = Folded.of(com.legend.site.SiteTypes::json);
+        } catch (Throwable failure) {
+            a = Folded.failure(failure);
+        }
+        return answer(a);
+    }
+
     /** A host's refusal of a call it could not finish, in the engine's error shape ({@code Boundary.refusal}). */
     @CEntryPoint(name = "lite_pure_v1_refusal")
     static CCharPointer refusal(IsolateThread thread, CCharPointer message) {

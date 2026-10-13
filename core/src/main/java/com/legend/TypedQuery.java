@@ -160,7 +160,9 @@ public final class TypedQuery {
      * The SQL whose one value is the whole relation as the JSON wire ({@code [row, ...]}, each row the database's own
      * {@code json_object}), in the runtime's dialect: what legend-lite's server runs for execute's rows
      * ({@code Execution.executeWire}), for a host that runs it on its own database (the tab: its DuckDB;
-     * docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C1). The database renders every value; nothing here does.
+     * docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C1). The database renders every value; nothing here does. The dialect is
+     * the runtime's own, not a connection's {@code forServer(version)} as the server's is: only H2's answers differently
+     * by its server's version, and a host runs DuckDB.
      */
     public String wireSql(@com.legend.base.Nullable String runtime) {
         Compiler.LoweredQuery l = lower(runtime, false);

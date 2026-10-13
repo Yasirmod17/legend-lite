@@ -148,9 +148,9 @@ async function run(): Promise<void> {
   const live = new WarehouseEngine(await signIn(base, 'rita', 'rita-pw'));
   // the tab's own DuckDB, in its worker, from the site's vendor/ (as Query and Studio start theirs)
   window.__liveSnapStage = 'starting the tab\'s DuckDB';
-  const local: DuckDbEngine = (await startDuckDbInTab('vendor/')).engine;
   const worker = new URL('planner-worker.js', location.href).href;
   const planner = new LitePlanner({ model: MODEL, runtime: RUNTIME, workerUrl: worker });
+  const local: DuckDbEngine = (await startDuckDbInTab('vendor/', (databaseType) => planner.sessionSetup(databaseType))).engine;
 
   await check('every cube case answers the same live on the warehouse and snapped in the tab', async () => {
     const liveRunner = new PlanThenRun(planner, live);

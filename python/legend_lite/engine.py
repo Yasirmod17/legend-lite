@@ -82,6 +82,10 @@ _CUBES = _QUERIES + '/dataCube'
 # PLANANDRUN (docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md §15): a page's grid planned against the model Python holds and
 # run on its DuckDB, in one call; and the planner protocol's other requests, answered as the tab's worker answers them
 _PLAN_AND_RUN, _PLANNER = '/plan-and-run.json', '/planner.json'
+# the planner protocol's kinds a page on Python sends to planner.json (DataCube's LitePlanner): every kind but the
+# page's own (hold, release) and those only another host's apps send (Query's unheld plan, execute's halves, a warm)
+_PAGE_KINDS = frozenset({'plan', 'relationType', 'tableModel', 'catalogColumnsSql', 'planJson', 'pureV1', 'testData',
+                         'sessionSetup'})
 # the planner's answer to the plan a page's rows are of, in their Arrow schema's metadata
 _PLAN_KEY = b'legend.plan'
 # the only places a page's remote file may be read from (remote.json), each as DuckDB's httpfs names it: never this
@@ -136,18 +140,15 @@ def _workers() -> _Pool:
         return _pool
 
 
-# the site's media types (the warehouse's, WarehouseServer.SITE_TYPES)
-_SITE_TYPES = {
-    '.html': 'text/html; charset=utf-8',
-    '.js': 'text/javascript; charset=utf-8',
-    '.mjs': 'text/javascript; charset=utf-8',
-    '.css': 'text/css; charset=utf-8',
-    '.json': 'application/json',
-    '.wasm': 'application/wasm',
-    '.pure': 'text/plain; charset=utf-8',
-    '.svg': 'image/svg+xml',
-    '.woff2': 'font/woff2',
-}
+@functools.cache
+def _site_types() -> dict[str, str]:
+    """The site's media types by suffix: the one table every host serving a site answers with (the native library's
+    ``lite_site_types``, com.legend.site.SiteTypes: the warehouse's server's too; docs/ONE_PLATFORM_PROGRAM_2026_10_12.md
+    C4). Anything else is served as bytes."""
+    tag, _, table = library().call('lite_site_types').partition('\n')
+    if tag != 'OK':
+        raise RuntimeError(f'the native library has no site types: {table}')
+    return {f'.{extension}': media for extension, media in json.loads(table).items()}
 
 _NO_HEADERS: Mapping[str, str] = MappingProxyType({})
 
@@ -816,17 +817,19 @@ class Engine:
         return Answer(200, 'application/vnd.apache.arrow.stream', sink.getvalue().to_pybytes())
 
     def _planner(self, body: str) -> Answer:
-        """The planner protocol's requests (datacube/src/planner-protocol.ts), answered by the native library as the
-        tab's worker answers them (legend_lite._planner): a held kind names its model by its text, never a handle (no
-        handle crosses hosts, §15.3), and is answered against the model Python holds of that text. ``hold`` and
-        ``release`` are the page's own; none of these runs SQL."""
+        """The planner protocol's requests (engine-client/src/legend/planner-protocol.ts) a page on Python sends,
+        answered by the native library as the tab's worker answers them (legend_lite._planner): a held kind names its
+        model by its text, never a handle (no handle crosses hosts, §15.3), and is answered against the model Python
+        holds of that text. ``hold`` and ``release`` are the page's own, and the kinds a page's planner never sends here
+        (an unheld plan, execute's halves, a warm: Query's and the tab's) are refused, so a page compiles only the
+        models Python serves; none of these runs SQL."""
         try:
             asked = json.loads(body)
         except ValueError:
             return _said(400, 'a planner request is its JSON')
         kind = asked.get('kind') if isinstance(asked, dict) else None
-        if not isinstance(kind, str) or kind not in _planner.KINDS or kind in ('hold', 'release'):
-            return _said(400, f'this engine answers the planner requests {sorted(set(_planner.KINDS) - {"hold", "release"})}')
+        if not isinstance(kind, str) or kind not in _PAGE_KINDS:
+            return _said(400, f'this engine answers the planner requests {sorted(_PAGE_KINDS)}')
         if kind in _planner.HELD:
             model = asked.pop('model', None)
             with self.frames.serving() as models:
@@ -989,7 +992,7 @@ class Engine:
         if (file is None or '\\' in relative or '..' in parts or '' in parts
                 or any(':' in part or '\0' in part for part in parts) or not file.is_file()):
             return _said(404, f'no such path: {path}')
-        return Answer(200, _SITE_TYPES.get(file.suffix, 'application/octet-stream'), file.read_bytes())
+        return Answer(200, _site_types().get(file.suffix, 'application/octet-stream'), file.read_bytes())
 
     def changed(self, name: str) -> None:
         """Says a frame changed -- its rows, its columns (registered again), or that it was closed -- so a page
