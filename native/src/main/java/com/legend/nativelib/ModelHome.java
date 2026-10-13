@@ -26,19 +26,26 @@ import planner.Folded;
  * own ({@code local}, "Local User": the page's, as the browser's in-page SDLC names it; there is no sign-in). Each call
  * is one request under its API root -- {@code target} the path after {@code /sdlc/api} or {@code /depot/api} with its
  * query -- answered {@code "OK\n<status>\n<body>"} (the body empty for none), or a failure as the library answers one
- * ({@link Folded}). The caller serializes the calls on a repository, across processes too (Python holds a lock around
- * each): the rules are single-threaded, and {@link GitStorage} keeps nothing in memory between calls.
+ * ({@link Folded}). Each call is made under the repository's own lock ({@link GitStorage#locked}: this process's threads
+ * and every other process that opens it, the model home's server among them; docs/ONE_PLATFORM_PROGRAM_2026_10_12.md
+ * G11): the rules are single-threaded, and {@link GitStorage} keeps nothing in memory between calls.
  */
 final class ModelHome {
+    private static final Map<String, GitStorage> REPOSITORIES = new HashMap<>();
     private static final Map<String, Sdlc> SDLCS = new HashMap<>();
     private static final Map<String, Depot> DEPOTS = new HashMap<>();
 
     private ModelHome() {
     }
 
+    /** The repository in {@code folder}, made the first time it is asked of. */
+    private static synchronized GitStorage repository(String folder) {
+        return REPOSITORIES.computeIfAbsent(folder, f -> new GitStorage(Path.of(f)));
+    }
+
     /** The repository's SDLC, made the first time (the repository made too, when it is not yet). */
     private static synchronized Sdlc sdlc(String folder) {
-        return SDLCS.computeIfAbsent(folder, f -> new Sdlc(new GitStorage(Path.of(f)), "local", "Local User",
+        return SDLCS.computeIfAbsent(folder, f -> new Sdlc(repository(f), "local", "Local User",
                 new CoreGrammar(), System::currentTimeMillis).backendType("git"));
     }
 
@@ -56,7 +63,7 @@ final class ModelHome {
         try {
             String f = Compiler.text(folder), m = Compiler.text(method), t = Compiler.text(target), b = Compiler.text(body);
             a = Folded.of(() -> {
-                Sdlc.Response r = sdlc(f).handle(m, t, b.isEmpty() ? null : b);
+                Sdlc.Response r = repository(f).locked(() -> sdlc(f).handle(m, t, b.isEmpty() ? null : b));
                 return r.status() + "\n" + (r.body() == null ? "" : r.body());
             });
         } catch (Throwable failure) {
@@ -73,7 +80,7 @@ final class ModelHome {
         try {
             String f = Compiler.text(folder), m = Compiler.text(method), t = Compiler.text(target), b = Compiler.text(body);
             a = Folded.of(() -> {
-                Depot.Response r = depot(f).handle(m, t, b.isEmpty() ? null : b);
+                Depot.Response r = repository(f).locked(() -> depot(f).handle(m, t, b.isEmpty() ? null : b));
                 return r.status() + "\n" + (r.body() == null ? "" : r.body());
             });
         } catch (Throwable failure) {

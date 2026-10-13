@@ -720,6 +720,14 @@ From `docs/DATACUBE_MODEL_DESIGN_2026_10_10.md` §13. Each lands once, in the on
 11. **The model home's lock in the repository itself** (the Studio line's review of B3).
     - Python holds a lock across its processes around each SDLC call, but `GitStorage` and `sdlc-server` take none.
     - Before a second kind of process opens the same repository (E), the lock moves into the repository.
+    - **Built 2026-10-13 (branch `datacube/python-parity`):** `GitStorage.locked(call)` makes each call of the rules
+      under the repository's own lock -- a lock per repository for this process's threads, and the operating system's
+      exclusive lock on `<repository>/legend/lock` for every other process -- and both hosts call through it: the model
+      home's server (`SdlcServer`, which had serialized only its own threads) and Python's native library
+      (`ModelHome`, its SDLC and its Depot). Python keeps its own lock across its processes, taken first on the
+      caller's thread, so a call waiting on another Python process still holds no compiler thread; the repository's
+      lock is the one every kind takes. Proof: `python/tests/test_model.py` TheRepositorysLock -- another process holds
+      the repository's lock, and the library's call waits for it.
 
 ### H. Publishing
 

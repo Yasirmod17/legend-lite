@@ -211,6 +211,33 @@ class Unrecorded(unittest.TestCase):
         self.assertEqual(seen, ['datacube:trades'])
 
 
+class TheRepositorysLock(unittest.TestCase):
+    """The model home's repository holds its own lock (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md G11): every call of the
+    native library's SDLC is made under it, so another kind of process that opens the repository -- the model home's
+    server -- and this one never write it at once. Here another process holds the operating system's lock on the
+    repository's lock file, and this process's call waits for it."""
+
+    @unittest.skipIf(sys.platform == 'win32', 'the other process takes a POSIX record lock, as the JVM does here')
+    def test_a_call_waits_while_another_process_holds_the_repository(self):
+        import subprocess
+        import tempfile
+        import time
+        folder = Path(tempfile.mkdtemp(dir=os.environ.get('TEST_TMPDIR'))) / 'projects'
+        sdlc = model.local_sdlc(folder)
+        sdlc.projects()  # the repository made
+        holder = subprocess.Popen([sys.executable, '-c', (
+            'import fcntl, sys, time\n'
+            f'f = open({str(folder / "legend" / "lock")!r}, "a+b")\n'
+            'fcntl.lockf(f, fcntl.LOCK_EX)\n'
+            'print("held", flush=True)\n'
+            'time.sleep(1.0)\n')], stdout=subprocess.PIPE, text=True)
+        self.addCleanup(holder.wait)
+        self.assertEqual(holder.stdout.readline().strip(), 'held')
+        started = time.monotonic()
+        sdlc.projects()
+        self.assertGreater(time.monotonic() - started, 0.5, 'the call did not wait for the other process')
+
+
 class OnThePage(unittest.TestCase):
     """A page's grids made classes, an association and a data space, by DataCube's request and the library, into this
     user's model home (the test's own folder): what Studio would open."""

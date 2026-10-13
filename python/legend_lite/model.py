@@ -102,9 +102,12 @@ class Sdlc:
 
 def home_call(folder: Path, kind: str, method: str, path: str, body: str | None) -> tuple[int, str]:
     """One call of the model home in this process (``kind``: ``'sdlc'`` or ``'depot'``): the native library's SDLC or
-    Depot over the git repository in ``folder``, under the lock every Python process takes on it, the library's call
-    on one of the compiler's threads -- the one way Python's engine (its ``/sdlc/api``, ``/depot/api``) and this library
-    reach it. A failure of the library's raised (``OSError``)."""
+    Depot over the git repository in ``folder``, the library's call on one of the compiler's threads -- the one way
+    Python's engine (its ``/sdlc/api``, ``/depot/api``) and this library reach it. The library makes each call under the
+    repository's own lock, which every kind of process that opens it takes (the model home's server too;
+    docs/ONE_PLATFORM_PROGRAM_2026_10_12.md G11); Python's own lock across its processes is taken first, on the
+    caller's thread, so a call waiting on another Python process holds no compiler thread. A failure of the library's
+    raised (``OSError``)."""
     from ._home import locked
     from ._library import library
     from .engine import _workers
