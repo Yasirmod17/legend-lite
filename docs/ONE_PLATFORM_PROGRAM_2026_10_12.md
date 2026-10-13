@@ -646,8 +646,37 @@ an audit.
   - the columns typed by Python's model;
   - rows read Live through Python;
   - a table not listed refused.
-- **Snap on Python's page** is the next step: the grid offers none yet, and says so ("this plane has no store in this
-  tab to snap into").
+
+**Built 2026-10-13, step 5 Snap (branch `datacube/python-parity`):**
+- **The cube.** `engine-client/src/snap.ts` names what a cube asks of its snaps (`Snaps`). `SnapManager` keeps the page's
+  copy in its own store; `HostSnaps`, beside it, keeps the same states for a copy its host keeps (`HostSnapTarget`:
+  `snap(pull)`, `release()`).
+  - `CubeControllerOptions.hostSnap` is for a cube read through a runner: the copy's runner is the host's, and
+    `snap()` sends the pull, the source's every column, as Pure.
+  - The plane button offers Snap there and says the copy is in Python's database (`describePlane`'s `store`).
+  - `hostSnap` travels where `snapTarget` does: `GridPlace`, `GridSource`, the app's options, a spawned or copied grid.
+- **Python.** `POST /warehouse.json` gains two calls.
+  - `snap` plans the pull with the live runtime. It counts the pull on the warehouse against the tab's limit
+    (`_MAX_SNAP_ROWS`, `MAX_SNAP_ROWS`'s twin, with its words), pulls the chunks, and copies them into the frames'
+    DuckDB under the table's own name, applying the model's conversions as the tab's copy does. It answers the count
+    and the pull's receipt.
+  - `release` drops the copy.
+  - A plan-and-run against the snap runtime runs on the frames' DuckDB while the copy is there, and is refused
+    otherwise. A copy never replaces a frame's, a file's, or any table this engine did not make.
+- **The page.** `WarehouseService` gains `snap` and `release`. `openedHostTable` gives the grid its `hostSnap`: the
+  copy's runner is the host's over the snap runtime.
+- **Measured.** `datacube/test/plane.test.ts` checks a cube with a host's snap:
+  - the pull goes to the host as Pure, with every column;
+  - the copy's runner answers while snapped;
+  - the copy is kept while live does not answer, and let go once it has.
+
+  `//datacube:python_engine_test` checks against the native warehouse:
+  - the copy refused before the snap;
+  - the snap's count (3) and its receipt (as rita, 3 rows on the server);
+  - the copy's rows read in Python's DuckDB;
+  - refused again once released.
+- **Not measured:** the plane button clicked on a grid of Python's page, which is the cube and the app above, held by
+  the typecheck and the plane tests.
 
 #### C4. The small copies
 

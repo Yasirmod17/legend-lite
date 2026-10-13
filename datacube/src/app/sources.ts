@@ -18,7 +18,7 @@ import type { Query, QueryReader } from '../../../query-store/src/index.ts';
 import { lambda, type ValueSpecification } from '../../../pure-protocol/src/index.ts';
 import type { HeldCopy } from '../app.ts';
 import { DEFAULT_CONFIGURATION, DEFAULT_MAX_ROWS, type CubeConfiguration } from '../config.ts';
-import type { Planner, SnapTarget } from '../cube.ts';
+import type { HostSnap, Planner, SnapTarget } from '../cube.ts';
 import {
   fileSource,
   openCube,
@@ -56,6 +56,8 @@ export type GridPlace = {
   // snap lands under the source's own name so one model reads both.
   readonly live?: WarehouseEngine;
   readonly snapTarget?: SnapTarget;
+  /** A warehouse table its host reads (Python's): Snap copies into the host's database, planned and run there (C3). */
+  readonly hostSnap?: HostSnap;
   /** A grid can be saved: its source, by identity (never its data). */
   readonly cubeSource?: CubeSource;
   /** The groups a saved cube had open. */
@@ -406,7 +408,7 @@ export function pageSources(d: SourcesOf): PageSources {
   /** A warehouse table for a grid: Live there as the user, Snap into the host's database; its own planner over its model. */
   async function openedTable(on: WarehouseService, session: WarehouseSession, chosen: CatalogObject, saved?: CubeDocument,
     capped = false): Promise<Opened> {
-    if (on.table) return openedHostTable(on.table, session, chosen, saved, capped);
+    if (on.table) return openedHostTable(on, session, chosen, saved, capped);
     // read through the page's own pair: a warehouse the host does not read is offered only where the page has one
     if (!local || !on.live) throw new Error('this page reads no warehouse');
     // A warehouse table is read-only: a column the compiler says must be converted to be declared cannot be, so it is
@@ -442,10 +444,18 @@ export function pageSources(d: SourcesOf): PageSources {
    * and the grid's rows are the host's -- planned and run there, Live on the warehouse as the person signed in there
    * (R4: the page sends Pure).
    */
-  async function openedHostTable(table: NonNullable<WarehouseService['table']>, session: WarehouseSession,
-    chosen: CatalogObject, saved?: CubeDocument, capped = false): Promise<Opened> {
-    const m = await table(session, chosen);
+  async function openedHostTable(on: WarehouseService, session: WarehouseSession, chosen: CatalogObject,
+    saved?: CubeDocument, capped = false): Promise<Opened> {
+    const m = await on.table!(session, chosen);
     const rows = services.engine.rows(m.model, m.runtime, { bitColumns: m.bitColumns });
+    // Snap there: the copy under the table's own name in the host's database, read through the same model's snap
+    // runtime -- planned and run by the host as the live rows are
+    const copy = on.snap && on.release ? services.engine.rows(m.model, m.snapRuntime, { bitColumns: m.bitColumns }) : undefined;
+    const hostSnap: HostSnap | undefined = copy?.runner && on.snap && on.release ? {
+      table: chosen.name, schema: chosen.schema, source: m.source, runner: copy.runner,
+      snap: (pull) => on.snap!(m.model, pull),
+      release: () => on.release!(m.model),
+    } : undefined;
     const columns = await sourceColumns(typer(rows), m.source);
     const name = `${chosen.schema}.${chosen.name}`;
     // where it is, never the sign-in: whoever reopens it signs in as themselves
@@ -458,9 +468,13 @@ export function pageSources(d: SourcesOf): PageSources {
       label: name,
       notes: r.notes,
       make: gridMaker(r.snapshot, r.configuration, [], {
-        ...rowsPlace(rows), cubeSource, label: name, ...(r.tree ? { tree: r.tree } : {}), foldPanel: capped,
+        ...rowsPlace(rows), ...(hostSnap ? { hostSnap } : {}), cubeSource, label: name, ...(r.tree ? { tree: r.tree } : {}),
+        foldPanel: capped,
       }),
-      discard: async () => letGo(rows),
+      discard: async () => {
+        letGo(rows);
+        if (copy) letGo(copy);
+      },
     };
   }
 

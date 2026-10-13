@@ -17,6 +17,7 @@ import type { Plan, PlanColumn } from '../../engine-client/src/relation-type.ts'
 import type { ResultTable } from '../../engine-client/src/result.ts';
 import type { SnapTarget } from '../src/cube.ts';
 import type { CubeSnapshot } from '../src/snapshot.ts';
+import { PlanThenRun } from '../src/runner.ts';
 import { TreeState } from '../src/tree.ts';
 import { FakeEngine } from './fake-engine.ts';
 import { fakeParse, fakePrint } from './fake-planner.ts';
@@ -352,6 +353,51 @@ describe('a plane holds only once it has answered', () => {
     await assert.rejects(c.snapAndRun(SNAPSHOT, refused), /could not snap — .*Still live\./);
     assert.equal(c.snaps.isSnapped, false);
     assert.ok(engine.sql.some((q) => /DROP TABLE/i.test(q)), 'the unreadable snap is dropped');
+  });
+});
+
+describe('a snap its host makes (Python\'s page: docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C3)', () => {
+  const applied = async () => ({ kind: 'applied' });
+  const refused = async () => ({ kind: 'refused', error: new Error('cannot reach the warehouse at http://wh') });
+  /** A cube read through a runner, its host snapping: what it was sent, and how often it let a copy go. */
+  const hosted = () => {
+    const live = new RecordingPlanner();
+    const copy = new RecordingPlanner();
+    const pulls: Lambda[] = [];
+    let released = 0;
+    const c = new CubeController(new PlanThenRun(live, new RecordingEngine()), {
+      hostSnap: {
+        table: 'TRADES', source: accessor('trades::DB', 'TRADES'), runner: new PlanThenRun(copy, new RecordingEngine()),
+        snap: async (pull) => { pulls.push(pull); return { rowCount: 7 }; },
+        release: async () => { released += 1; },
+      },
+    });
+    return { c, live, copy, pulls, released: () => released };
+  };
+
+  it('sends the pull as Pure -- every source column -- and reads the copy through the host\'s runner', async () => {
+    const h = hosted();
+    await h.c.run(at(SNAPSHOT));
+    await h.c.snap(SNAPSHOT, 'test');
+    assert.deepEqual(h.pulls.map(selectOf), [{ source: toJson(SNAPSHOT.source.query), columns: ['region', 'notional'] }]);
+    const state = h.c.snaps.state;
+    assert.ok(state.mode === 'snapped' && state.snap.rowCount === 7 && state.snap.label === 'test', JSON.stringify(state));
+    h.live.pure.length = 0;
+    await h.c.run(at(SNAPSHOT));
+    assert.ok(h.copy.pure.length > 0, 'the copy\'s runner answers while snapped');
+    assert.deepEqual(h.live.pure, [], 'the live runner answers nothing on the copy');
+  });
+
+  it('lets the copy go only once live has answered', async () => {
+    const h = hosted();
+    await h.c.run(at(SNAPSHOT));
+    await h.c.snap(SNAPSHOT, 'test');
+    await assert.rejects(h.c.goLive(refused), /could not go live — cannot reach the warehouse at http:\/\/wh\. Still on the snap/);
+    assert.equal(h.c.snaps.isSnapped, true);
+    assert.equal(h.released(), 0, 'the copy is kept while live does not answer');
+    await h.c.goLive(applied);
+    assert.equal(h.c.snaps.isSnapped, false);
+    assert.equal(h.released(), 1);
   });
 });
 

@@ -11,7 +11,8 @@ import type { ModelHome } from '../../../depot-client/src/model-home.ts';
 import type { QueryEngine } from '../../../engine-client/src/engine.ts';
 import type { SeedSource } from '../../../engine-client/src/model-data.ts';
 import type { CatalogObject, WarehouseEngine, WarehouseSession } from '../../../engine-client/src/warehouse.ts';
-import type { ValueSpecification } from '../../../pure-protocol/src/index.ts';
+import type { Lambda, ValueSpecification } from '../../../pure-protocol/src/index.ts';
+import type { Receipt } from '../../../engine-client/src/receipt.ts';
 import type { QueryReader } from '../../../query-store/src/index.ts';
 import type { HeldCopy } from '../app.ts';
 import type { CubeConfiguration } from '../config.ts';
@@ -254,6 +255,13 @@ export interface WarehouseService {
    * the tab's own writer's answer, read-only, with the runtime a copy is planned against.
    */
   table?(session: WarehouseSession, object: CatalogObject): Promise<InferredModel & { readonly snapRuntime: string }>;
+  /**
+   * A table the host read (`table`) snapped there: `pull` (Pure: its every column) planned and run where the rows are,
+   * the copy in the host's database, read through the model's snap runtime. Its count, and the pull's receipt.
+   */
+  snap?(model: string, pull: Lambda): Promise<{ readonly rowCount: number; readonly pulledBy?: Receipt }>;
+  /** That copy dropped. */
+  release?(model: string): Promise<void>;
 }
 
 // -------------------------------------------------------------------------------------------------------- the browser

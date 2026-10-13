@@ -30,7 +30,7 @@ import { arrowIpcAnswer } from '../../../engine-client/src/arrow-ipc.ts';
 import { toRawTable } from '../../../engine-client/src/duckdb.ts';
 import { typedByPlan } from '../../../engine-client/src/engine.ts';
 import type { Plan } from '../../../engine-client/src/relation-type.ts';
-import { hostOf } from '../../../engine-client/src/receipt.ts';
+import { hostOf, type Receipt } from '../../../engine-client/src/receipt.ts';
 import type { ResultTable } from '../../../engine-client/src/result.ts';
 import { toJson, type Lambda } from '../../../pure-protocol/src/index.ts';
 import { LitePlanner } from '../lite-planner.ts';
@@ -439,6 +439,10 @@ function pythonWarehouse(link: PythonLink): WarehouseService {
     table: async (session, object) => JSON.parse(await posted(link, 'warehouse.json', {
       op: 'table', url: session.baseUrl, catalog: object.catalog, schema: object.schema, name: object.name,
     })) as InferredModel & { readonly snapRuntime: string },
+    // the pull sent as Pure (R4), as a plan-and-run's query is; Python plans it where the rows are and keeps the copy
+    snap: async (model, pull) => JSON.parse(await posted(link, 'warehouse.json', { op: 'snap', model, pull: toJson(pull) })) as
+      { readonly rowCount: number; readonly pulledBy?: Receipt },
+    release: async (model) => { await posted(link, 'warehouse.json', { op: 'release', model }); },
   };
 }
 

@@ -52,7 +52,7 @@ import { isPivotTotalColumn, withoutConditions } from './snapshot.ts';
 import type { Lambda } from '../../pure-protocol/src/index.ts';
 import type { QueryEngine } from '../../engine-client/src/engine.ts';
 import { describePlane, type RemoteSource } from '../../engine-client/src/snap.ts';
-import type { SnapTarget } from './cube.ts';
+import type { HostSnap, SnapTarget } from './cube.ts';
 import { exportFileName, toCsv, toEml } from './export.ts';
 import {
   ALERT_WINDOW,
@@ -156,6 +156,8 @@ export interface GridSource {
   readonly configuration?: CubeConfiguration;
   readonly place: CubeAppQuerySource;
   readonly snapTarget?: SnapTarget;
+  /** A snap its host makes (Python's page: CubeControllerOptions.hostSnap). */
+  readonly hostSnap?: HostSnap;
   readonly heldCopy?: HeldCopy;
   readonly cubeSource?: CubeSource;
   /** What its header says it reads: a file's name, `sales.orders`, a saved query's name. */
@@ -316,6 +318,8 @@ export interface CubeAppBaseOptions {
    * cube is planned as a live one is. Without one the cube cannot snap.
    */
   readonly snapTarget?: SnapTarget;
+  /** A snap its host makes, for a cube read through a runner (Python's page: CubeControllerOptions.hostSnap). */
+  readonly hostSnap?: HostSnap;
   /**
    * The rows are ALREADY a copy in this tab: a file opened into its DuckDB,
    * rows generated there. Nothing can move them while the person works, so
@@ -741,6 +745,7 @@ export class CubeApp {
     // nobody's plane exercised.
     const deps: CubeControllerOptions = {
       ...(options.snapTarget ? { snapTarget: options.snapTarget } : {}),
+      ...(options.runner !== undefined && options.hostSnap ? { hostSnap: options.hostSnap } : {}),
       ...(options.runner === undefined && options.live ? { live: options.live } : {}),
       onQueryFailure: (error) => this.#offerSignIn(error),
     };
@@ -2436,6 +2441,7 @@ export class CubeApp {
     return (host, spawned) => new CubeApp(host, source.snapshot, {
       ...source.place,
       ...(source.snapTarget ? { snapTarget: source.snapTarget } : {}),
+      ...(source.hostSnap ? { hostSnap: source.hostSnap } : {}),
       ...(source.heldCopy ? { heldCopy: source.heldCopy } : {}),
       ...(source.cubeSource ? { cubeSource: source.cubeSource } : {}),
       sourceLabel: source.label,
@@ -2541,6 +2547,7 @@ export class CubeApp {
         return new CubeApp(host, snapshot, {
           ...source,
           ...(o.snapTarget ? { snapTarget: o.snapTarget } : {}),
+          ...(o.hostSnap ? { hostSnap: o.hostSnap } : {}),
           // what its rows ARE, as this grid knows it: the same copy in the tab, the same file, the
           // host's own name for it -- so its header says the same source, and the same plane
           ...(o.heldCopy ? { heldCopy: o.heldCopy } : {}),
@@ -3616,7 +3623,9 @@ export class CubeApp {
     // way it still states the plane, and a click does nothing -- a Live
     // that only answers with a refusal, or a Snap of a copy, was a lie.
     const held = this.#options.heldCopy;
-    const canSnap = this.#options.runner === undefined && this.#options.snapTarget !== undefined;
+    // the page's own store, or its host's (Python's page: hostSnap)
+    const canSnap = (this.#options.runner === undefined && this.#options.snapTarget !== undefined)
+      || (this.#options.runner !== undefined && this.#options.hostSnap !== undefined);
     if (held !== undefined || !canSnap) {
       snap.textContent = held !== undefined ? 'Snapped' : 'Live';
       snap.classList.toggle('dc-on', held !== undefined);
@@ -3633,8 +3642,9 @@ export class CubeApp {
         const state = this.#controller.snaps.state;
         snap.classList.toggle('dc-on', state.mode === 'snapped');
         // Where the data is, when Live is a warehouse: the plane is a place (the wording every app shares)
-        const remote = this.#options.runner === undefined && this.#options.live !== undefined;
-        const described = describePlane(state, { remote, toggles: true });
+        const host = this.#options.runner !== undefined && this.#options.hostSnap !== undefined;
+        const remote = host || (this.#options.runner === undefined && this.#options.live !== undefined);
+        const described = describePlane(state, { remote, toggles: true, ...(host ? { store: 'Python' } : {}) });
         snap.textContent = described.text;
         snap.title = described.title;
       };

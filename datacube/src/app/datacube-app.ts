@@ -197,6 +197,7 @@ export async function openDataCube(o: OpenDataCube): Promise<DataCubeApp> {
         configuration: start?.configuration ?? config,
         // Snap only where the place says what to copy: no other source's target stands in for it
         ...(place.snapTarget ? { snapTarget: place.snapTarget } : {}),
+        ...(place.hostSnap ? { hostSnap: place.hostSnap } : {}),
         ...(place.cubeSource ? { cubeSource: place.cubeSource } : {}),
         // the groups a saved cube had open: its own grid's, not a copy's (a copy starts collapsed, as a new grid)
         ...(place.tree && !start ? { tree: place.tree } : {}),

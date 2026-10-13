@@ -311,7 +311,7 @@ async function run(): Promise<void> {
   // A WAREHOUSE TABLE ON PYTHON'S PAGE (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C3): Python signs in as the person
   // (rita), lists what she may read, writes and holds the table's model with the tab's own writer, and plans and runs
   // the grid's queries Live there -- the page sends Pure, and never holds the warehouse's token
-  await check('a warehouse table read on Python\'s page: signed in there, its model Python\'s, its rows Live from the warehouse', async () => {
+  await check('a warehouse table read on Python\'s page: signed in there, its model Python\'s, its rows Live from the warehouse, and snapped into Python\'s DuckDB', async () => {
     const link: PythonLink = { baseUrl: location.origin, fetch: (i, init) => fetch(i, init), authorization: served.authorization };
     const offers = await askedOffers(link);
     equal(offers.warehouse, true, 'Python offers a warehouse:');
@@ -329,6 +329,17 @@ async function run(): Promise<void> {
     equal(shape(read.rows, false), 'desk:String,qty:Integer\n["EQ",5]\n["FX",10]\n["FX",3]', 'its rows, read Live through Python:');
     // a table it did not list is not one Python opens
     await rejects(warehouse.table!(session, { ...objects[0]!, name: 'secret' }), /not a table rita may read/);
+    // SNAP, on Python: the pull sent as Pure, counted and copied there; the copy read through the snap runtime, by
+    // Python's DuckDB; released, the copy is gone, and reading it is refused
+    const copy = services.engine.rows(m.model, m.snapRuntime, { bitColumns: m.bitColumns }).runner!;
+    const two = from(m.source).select(['desk', 'qty']).lambda();
+    await rejects(copy.run(two, { epoch: 0 } as CubeSnapshot), /read on its warehouse, through its own runtime, or snapped/);
+    const frozen = await warehouse.snap!(m.model, from(m.source).select(['desk', 'qty', 'px']).lambda());
+    deepEqual([frozen.rowCount, frozen.pulledBy?.as, frozen.pulledBy?.serverRows], [3, 'rita', 3], 'what Python froze:');
+    equal(shape((await copy.run(two, { epoch: 0 } as CubeSnapshot)).rows, false), 'desk:String,qty:Integer\n["EQ",5]\n["FX",10]\n["FX",3]',
+      'the copy\'s rows, read in Python\'s DuckDB:');
+    await warehouse.release!(m.model);
+    await rejects(copy.run(two, { epoch: 0 } as CubeSnapshot), /read on its warehouse, through its own runtime, or snapped/);
   });
 
   await check('a query\'s types, parse and print: the same compiler\'s answers', async () => {

@@ -34,7 +34,7 @@
 // queries are planned is the app's (DataCube's SnapTarget adds its planner).
 
 import { UI_LOCALE } from './locale.ts';
-import type { ValueSpecification } from '../../pure-protocol/src/index.ts';
+import type { Lambda, ValueSpecification } from '../../pure-protocol/src/index.ts';
 import type { QueryEngine } from './engine.ts';
 import type { Receipt } from './receipt.ts';
 
@@ -134,7 +134,18 @@ function qualified(schema: string | undefined, table: string): string {
   return schema ? `${quoteIdent(schema)}.${quoteIdent(table)}` : quoteIdent(table);
 }
 
-export class SnapManager {
+/** What a cube asks of its snaps, wherever the copy is: the page's own store (SnapManager) or its host's (HostSnaps). */
+export interface Snaps {
+  readonly state: PlaneState;
+  readonly isSnapped: boolean;
+  sourceFor(liveSource: ValueSpecification): ValueSpecification;
+  release(): Promise<void>;
+  detach(): SnapInfo | null;
+  reattach(snap: SnapInfo): void;
+  discard(snap: SnapInfo): Promise<void>;
+}
+
+export class SnapManager implements Snaps {
   /**
    * The local store a snapshot freezes INTO.
    *
@@ -330,22 +341,104 @@ export class SnapManager {
  * tooltip -- WHEN a snap was frozen and HOW MANY rows it holds, or where live data is. `remote`: live is another
  * machine (a warehouse); `toggles`: a click changes the plane (both planes exist), which the tooltip offers.
  */
-export function describePlane(state: PlaneState, where: { readonly remote: boolean; readonly toggles: boolean }): { text: string; title: string } {
+export function describePlane(state: PlaneState, where: {
+  readonly remote: boolean;
+  readonly toggles: boolean;
+  /** Where a snap's copy is kept: this tab (the default), or its host's database (`Python`). */
+  readonly store?: string;
+}): { text: string; title: string } {
+  const into = where.store === undefined ? 'this tab' : `${where.store}'s database`;
   if (state.mode === 'snapped') {
     const s = state.snap;
     return {
       text: 'Snapped',
       title: `${s.label} — frozen at ${s.takenAt.toLocaleTimeString(UI_LOCALE)}, ${s.rowCount.toLocaleString(UI_LOCALE)} rows`
-        + (where.remote ? ', a copy in this tab' : '') + '.' + (where.toggles ? ' Click to go live.' : ' Nothing can change it while you work.'),
+        + (where.remote ? `, a copy in ${into}` : '') + '.' + (where.toggles ? ' Click to go live.' : ' Nothing can change it while you work.'),
     };
   }
   if (!where.toggles) return { text: 'Live', title: 'Live — this plane has no store in this tab to snap into.' };
   return {
     text: 'Live',
     title: where.remote
-      ? 'Live — running on the warehouse, as you. Click to snap a copy of your rows into this tab.'
+      ? `Live — running on the warehouse, as you. Click to snap a copy of your rows into ${into}.`
       : 'Live data, which may move while you work. Click to snap.',
   };
+}
+
+/**
+ * A SNAP ITS HOST MAKES (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C3): where the page has no store of its own (a page on
+ * Python), the host pulls the live source's rows into its own database, and the copy's queries are the host's. The page
+ * sends the pull as Pure (R4); the host plans it where the rows are, counts it against the same limit
+ * (MAX_SNAP_ROWS), copies it with the model's conversions, and says what it froze.
+ */
+export interface HostSnapTarget {
+  /** Freeze `pull` (the live source's every column, as Pure) into the host's copy: its count, and the pull's receipt. */
+  snap(pull: Lambda): Promise<{ readonly rowCount: number; readonly pulledBy?: Receipt }>;
+  /** The copy dropped. */
+  release(): Promise<void>;
+  /** The table the copy is (the live table's own name, which the model declares), and the relation that reads it. */
+  readonly table: string;
+  readonly schema?: string;
+  readonly source: ValueSpecification;
+}
+
+/** The states SnapManager keeps, for a copy its host keeps (HostSnapTarget). */
+export class HostSnaps implements Snaps {
+  readonly #target: HostSnapTarget;
+  #state: PlaneState = { mode: 'live' };
+
+  constructor(target: HostSnapTarget) {
+    this.#target = target;
+  }
+
+  get state(): PlaneState {
+    return this.#state;
+  }
+
+  get isSnapped(): boolean {
+    return this.#state.mode === 'snapped';
+  }
+
+  sourceFor(liveSource: ValueSpecification): ValueSpecification {
+    return this.#state.mode === 'snapped' ? this.#state.snap.source : liveSource;
+  }
+
+  /** Freeze `pull` there and switch to snapped. */
+  async snap(pull: Lambda, label?: string): Promise<SnapInfo> {
+    const frozen = await this.#target.snap(pull);
+    const takenAt = new Date();
+    const snap: SnapInfo = {
+      ...(frozen.pulledBy ? { pulledBy: frozen.pulledBy } : {}),
+      label: label ?? defaultLabel(takenAt),
+      takenAt,
+      rowCount: frozen.rowCount,
+      table: this.#target.table,
+      ...(this.#target.schema ? { schema: this.#target.schema } : {}),
+      source: this.#target.source,
+    };
+    this.#state = { mode: 'snapped', snap };
+    return snap;
+  }
+
+  async release(): Promise<void> {
+    const held = this.detach();
+    if (held) await this.discard(held);
+  }
+
+  detach(): SnapInfo | null {
+    if (this.#state.mode !== 'snapped') return null;
+    const held = this.#state.snap;
+    this.#state = { mode: 'live' };
+    return held;
+  }
+
+  reattach(snap: SnapInfo): void {
+    this.#state = { mode: 'snapped', snap };
+  }
+
+  async discard(_snap: SnapInfo): Promise<void> {
+    await this.#target.release();
+  }
 }
 
 function defaultLabel(at: Date): string {
