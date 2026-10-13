@@ -87,7 +87,6 @@ async function boot(): Promise<void> {
     };
     depotProjects = (await depot.projects()).map((p) => ({ groupId: p.groupId, artifactId: p.artifactId }));
   }
-  const isEnumeration = (t: string): boolean => projects.some((p) => p.graph.enumerations.has(t));
 
   let engine: Engine;
   let cubeRows: CubeRows;
@@ -118,7 +117,7 @@ async function boot(): Promise<void> {
       starting('Loading the demo data');
       await seed(runner, exec.seed);
     }
-    engine = new BrowserEngine(planner!, runner, isEnumeration, user);
+    engine = new BrowserEngine(planner!, runner, user);
     cubeRows = { kind: 'sql', engine: runner };
     // no server: the same API, answered in this page from this origin's IndexedDB by legend-lite's own rules (the
     // server's, compiled to WebAssembly: query-store's module at vendor/queries/, fetched at the store's first call)

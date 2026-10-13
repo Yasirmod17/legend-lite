@@ -441,6 +441,29 @@ columns with `relationalType`, the activity's `comment`, the "Missing external p
 
 **Reviews.** Plan Gen (the boundary), Compiler Rewrite, Studio (Query), an audit.
 
+**Built 2026-10-13 (branch `datacube/python-parity`):**
+- The plan half: `PureV1Api.jsonPlan(body, models)`, beside `arrowPlan` and planning as it does (one `hostPlan`: the
+  request read, its parameters bound by `boundParameters`, planned over the host's models only), answers the JSON
+  answer's every part but its rows -- `{sql, builder, activities, columns}` for a relation (the builder and the activity
+  as `execute` writes them), `{sql, builder: {"_type": "json"}}` for a graph fetch (the Arrow half still refuses one, as
+  upstream's Arrow is a relation's). `Boundary.executeJsonPlan` and the export `TabExports.executeJsonPlanOrError`
+  (Folded.http); the tab's planner kind `executePlan` (engine-client's planner-answer.ts).
+- The tab: `WasmGrammar.executePlan(input)` asks it over the input's own model (the only one the tab runs: its data is
+  the page's), a refusal the engine's in its words and status; `BrowserEngine.execute` runs the SQL on its engine and
+  fills the rows in -- its own `bindParameters`, graph-fetch detection, TDS shaping and enumeration list gone (the
+  constructor takes no `isEnumeration`: Query and Studio no longer build one). `WasmGrammar.returnType` and
+  `generatePlan` are the planner's pure/v1, as the server routes them, so `BrowserEngine` answers both (Query's SQL
+  button already showed the tab's plan through its planner; unchanged).
+- Proof: `//datacube:python_execute_test` (the warehouse lane) -- an execute over Python's frame answered in the tab
+  (the planner in-process, DuckDB-WASM in Node, the same rows) and by Python's engine (ARROW_IPC): the same builder,
+  each column's `relationalType` included, the same activity SQL and trace comment form, columns and rows; a
+  parameter bound alike; "Missing external parameter(s): minQty:Integer[1]" refused in the same words; the lambda's
+  return type and the execution plan the same. `PureV1ApiTest.e8_jsonPlan_*` (the plan half against `execute`'s own
+  answer, and a graph fetch's). Query's `verify_test` (in the browser: a run, a filter, a parameter, a graph fetch) and
+  Studio's tests pass on the tab's new execute.
+- Changed from this plan: the differential is the tab against Python, as written; legend-lite's server would run the
+  same Java but seeds only a connection's declared test data, not a page's Data, so it cannot hold the same rows.
+
 #### C2. One planner protocol
 
 DataCube's ten kinds are the superset, but for Query's `warm` and its unheld `plan` (model text, lambda JSON:

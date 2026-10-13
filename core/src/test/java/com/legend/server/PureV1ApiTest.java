@@ -266,6 +266,43 @@ class PureV1ApiTest {
         assertTrue(Json.parseObject(graph.json()).getString("message").contains("graph fetch"), graph.json());
     }
 
+    /**
+     * E8's plan half in the engine's JSON ({@code jsonPlan}, the tab's: docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C1): the
+     * JSON answer's every part but its rows -- the builder and the activity as {@link PureV1Api#execute} writes them,
+     * the result's columns -- and a graph fetch's SQL with its JSON builder, which the Arrow half refuses.
+     */
+    @Test
+    void e8_jsonPlan_isTheJsonAnswerButItsRows_andAnswersAGraphFetch() throws IOException {
+        String request = "{\"clientVersion\":\"vX_X_X\",\"function\":" + lambda
+                + ",\"model\":" + textModel()
+                + ",\"context\":{\"_type\":\"BaseExecutionContext\"}}";
+        PureV1Api.Answer a = PureV1Api.jsonPlan(request, List.of(model));
+        assertEquals(200, a.status(), a.json());
+        Json.Obj plan = Json.parseObject(a.json());
+        Json.Obj answered = Json.parseObject(execute(request).json());
+        assertEquals(List.of("sql", "builder", "activities", "columns"), new ArrayList<>(plan.fields().keySet()));
+        assertEquals(Json.toCompact(answered.getObj("builder")), Json.toCompact(plan.getObj("builder")));
+        assertEquals(Json.toCompact(answered.getObj("result").get("columns")), Json.toCompact(plan.get("columns")));
+        Json.Obj activity = (Json.Obj) plan.getArr("activities").items().get(0);
+        Json.Obj answeredActivity = (Json.Obj) answered.getArr("activities").items().get(0);
+        assertEquals(new ArrayList<>(answeredActivity.fields().keySet()), new ArrayList<>(activity.fields().keySet()));
+        assertEquals(plan.getString("sql"), activity.getString("sql"));
+        assertEquals("relational", activity.getString("_type"));
+        // its host's models only, as the Arrow half
+        assertEquals(500, PureV1Api.jsonPlan(request, List.of(model + "\n")).status());
+
+        String trading = resource("upstream-api/query-app/trading.pure");
+        String fetch = PureV1Api.grammarToJsonLambda("|demo::trading::Trade.all()->graphFetch(#{demo::trading::Trade{tradeId}}#)"
+                + "->serialize(#{demo::trading::Trade{tradeId}}#)->from(demo::trading::TradingMapping, demo::trading::H2Runtime)", false).json();
+        PureV1Api.Answer graph = PureV1Api.jsonPlan("{\"function\":" + fetch + ",\"model\":"
+                + Json.toCompact(Map.of("_type", "text", "code", trading)) + "}", List.of(trading));
+        assertEquals(200, graph.status(), graph.json());
+        Json.Obj graphPlan = Json.parseObject(graph.json());
+        assertEquals(List.of("sql", "builder"), new ArrayList<>(graphPlan.fields().keySet()));
+        assertEquals("{\"_type\":\"json\"}", Json.toCompact(graphPlan.getObj("builder")));
+        assertTrue(graphPlan.getString("sql").toLowerCase(java.util.Locale.ROOT).contains("select"), graph.json());
+    }
+
     /** route: each path answers as its endpoint does; any other is 404 in the engine's shape; execute runs through the runner. */
     @Test
     void route_answersEachPathAsItsEndpoint() {

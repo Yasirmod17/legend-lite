@@ -9,7 +9,7 @@ import { toJson } from '../../../pure-protocol/src/index.ts';
 import type { PureModelContextData } from './pmcd.ts';
 import { EngineError, HttpEngine, type Grammar } from './engine.ts';
 import type { PlannerRequest, PlannerResponse } from './planner-worker.ts';
-import type { CompileResult, PureModelContext, RelationTypeAnswer } from './wire.ts';
+import type { CompileResult, ExecuteInput, PureModelContext, RelationTypeAnswer } from './wire.ts';
 import type { SeedTable, TableSeed } from '../model-data.ts';
 
 /** Where a request goes: a worker, or (in tests) the module called directly. */
@@ -74,18 +74,42 @@ export function plannerFetch(port: PlannerPort): typeof fetch {
     if (body !== undefined && body !== null && typeof body !== 'string') {
       throw new TypeError('the planner answers a pure/v1 request with a text body only');
     }
-    const answer = unfold(await port.ask({ kind: 'pureV1', path: url.pathname, query: url.search.slice(1), body: body ?? '' }));
+    const answer = httpAnswer(await port.ask({ kind: 'pureV1', path: url.pathname, query: url.search.slice(1), body: body ?? '' }));
     init?.signal?.throwIfAborted();
-    const first = answer.indexOf('\n');
-    const second = answer.indexOf('\n', first + 1);
-    if (first < 0 || second < 0) {
-      throw new EngineError(`the planner answered a pure/v1 call in no form it has: ${JSON.stringify(answer.slice(0, 120))}`, 500);
-    }
-    return new Response(answer.slice(second + 1), {
-      status: Number(answer.slice(0, first)),
-      headers: { 'Content-Type': answer.slice(first + 1, second) },
-    });
+    return new Response(answer.body, { status: answer.status, headers: { 'Content-Type': answer.type } });
   };
+}
+
+/** A pure/v1 answer the planner gives (`OK\n<status>\n<type>\n<body>`): its status, media type and body. */
+function httpAnswer(folded: string): { status: number; type: string; body: string } {
+  const answer = unfold(folded);
+  const first = answer.indexOf('\n');
+  const second = answer.indexOf('\n', first + 1);
+  if (first < 0 || second < 0) {
+    throw new EngineError(`the planner answered a pure/v1 call in no form it has: ${JSON.stringify(answer.slice(0, 120))}`, 500);
+  }
+  return { status: Number(answer.slice(0, first)), type: answer.slice(first + 1, second), body: answer.slice(second + 1) };
+}
+
+/**
+ * Execute's plan half in the engine's JSON (PureV1Api.jsonPlan; docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C1): every
+ * part of the answer but its rows. A relation's: the SQL, the TDS builder and the activities as the answer writes
+ * them, and its result's columns; a graph fetch's: the SQL, whose one cell is the objects' JSON array, and its builder.
+ */
+export type ExecutePlan =
+  | {
+    readonly sql: string;
+    readonly builder: TdsBuilder;
+    // the relational activity: its SQL and its trace comment, as the engine writes them
+    readonly activities: readonly { readonly _type: string; readonly sql?: string; readonly comment?: string }[];
+    readonly columns: readonly string[];
+  }
+  | { readonly sql: string; readonly builder: { readonly _type: 'json' } };
+
+/** The TDS builder: each column's name, its Pure type (an enumeration's String) and its relational spelling. */
+export interface TdsBuilder {
+  readonly _type: 'tdsBuilder';
+  readonly columns: readonly { readonly name: string; readonly type: string; readonly relationalType: string }[];
 }
 
 export class WasmGrammar implements Grammar {
@@ -121,6 +145,40 @@ export class WasmGrammar implements Grammar {
 
   relationType(model: PureModelContext, lambda: Lambda): Promise<RelationTypeAnswer> {
     return this.#pureV1.relationType(model, lambda);
+  }
+
+  /** `compilation/lambdaReturnType`, answered in the tab as the server answers it (PureV1Api.route). */
+  returnType(model: PureModelContext, lambda: Lambda): Promise<string> {
+    return this.#pureV1.returnType(model, lambda);
+  }
+
+  /** `execution/generatePlan`, answered in the tab as the server answers it: the plan legend-engine generates. */
+  generatePlan(input: ExecuteInput): Promise<unknown> {
+    return this.#pureV1.generatePlan(input);
+  }
+
+  /**
+   * Execute's plan half (ExecutePlan), asked of the planner over `input`'s own model, the only one this tab runs (its
+   * data the page's). A refusal -- a parameter with no value, a query that does not compile -- is the engine's, in its
+   * words and status, as a server's execute refuses it.
+   */
+  async executePlan(input: ExecuteInput): Promise<ExecutePlan> {
+    const model = input.model as { readonly _type?: string; readonly code?: string };
+    if (model._type !== 'text' || typeof model.code !== 'string') {
+      throw new EngineError('the tab executes a query over a model given as its text', 400);
+    }
+    const answer = httpAnswer(await this.#port.ask({ kind: 'executePlan', body: toJson(input), models: JSON.stringify([model.code]) }));
+    if (answer.status !== 200) {
+      let message = answer.body || `${answer.status}`;
+      let errorType: string | undefined;
+      try {
+        const e = JSON.parse(answer.body) as { message?: string; errorType?: string };
+        if (typeof e.message === 'string') message = e.message;
+        errorType = e.errorType;
+      } catch { /* not JSON: the text is the message */ }
+      throw new EngineError(message, answer.status, errorType);
+    }
+    return JSON.parse(answer.body) as ExecutePlan;
   }
 
   /** The SQL a query compiles to on its runtime, and the type of its result (upstream's relationType shape). */

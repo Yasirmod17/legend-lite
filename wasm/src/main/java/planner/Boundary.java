@@ -60,6 +60,21 @@ public final class Boundary {
      * texts.
      */
     public static com.legend.server.PureV1Api.Answer executePlan(String body, String modelsJson) {
+        return com.legend.server.PureV1Api.arrowPlan(body, models(modelsJson));
+    }
+
+    /**
+     * Execute's plan half in the engine's JSON (PureV1Api.jsonPlan): everything the answer holds but its rows -- the
+     * SQL, the TDS builder, the activities, the result's columns, or a graph fetch's JSON builder -- for a host whose
+     * executor runs the SQL and types the rows (the tab; docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C1).
+     * {@code modelsJson}: the only models the host runs, a JSON array of their texts.
+     */
+    public static com.legend.server.PureV1Api.Answer executeJsonPlan(String body, String modelsJson) {
+        return com.legend.server.PureV1Api.jsonPlan(body, models(modelsJson));
+    }
+
+    /** The models a host runs, from their JSON array of texts. */
+    private static java.util.List<String> models(String modelsJson) {
         java.util.List<String> models = new java.util.ArrayList<>();
         if (!(com.legend.json.Json.parse(modelsJson) instanceof com.legend.json.Json.Arr arr)) {
             throw new IllegalArgumentException("the models: not a JSON array");
@@ -70,7 +85,7 @@ public final class Boundary {
             }
             models.add(text.value());
         }
-        return com.legend.server.PureV1Api.arrowPlan(body, models);
+        return models;
     }
 
     /** A host's refusal of a call it could not finish (its database refusing the SQL), in the engine's shape. */

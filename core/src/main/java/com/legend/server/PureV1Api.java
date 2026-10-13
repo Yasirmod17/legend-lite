@@ -369,19 +369,7 @@ public final class PureV1Api {
      */
     public static Answer arrowPlan(String body, java.util.Collection<String> models) {
         return answer(500, "COMPILATION", () -> {
-            Json.Obj request = request(body);
-            String model = modelText(request.getObj("model"));
-            if (!models.contains(model)) {
-                // a host's models change (Python's: a Live frame whose columns changed is written a new model), so
-                // the refusal says what to do
-                throw new IllegalArgumentException("this engine runs queries over the models it serves only, "
-                        + "and the request's model is not one of them: if the engine's model changed since it was "
-                        + "read (a frame whose columns changed), read it again");
-            }
-            LambdaFunction lambda = ProtocolReader.lambda(
-                    boundParameters(request.getObj("function"), request.getArrOr("parameterValues", null)));
-            com.legend.TypedQuery query = com.legend.Compiler.query(com.legend.Compiler.compileModel(model), lambda);
-            QueryPlan plan = query.plan(runtimeOf(request, query.target()));
+            QueryPlan plan = hostPlan(body, models);
             if (plan.shape() == com.legend.plan.ResultShape.GRAPH) {
                 // upstream's Arrow answer is a relational result's (RelationalResultToArrowIPCSerializer)
                 throw new IllegalArgumentException("ARROW_IPC answers a relation query; a graph fetch is answered in JSON");
@@ -395,6 +383,48 @@ public final class PureV1Api {
             out.put("metadata", metadata);
             return Json.toCompact(out);
         });
+    }
+
+    /**
+     * E8's plan half for a host that runs the SQL itself and answers in the engine's JSON (the tab: its DuckDB, its
+     * executor typing the rows; docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C1): the {@code ExecuteInput} read, bound and
+     * planned as {@link #execute} plans it, answered with every part of {@link #execute}'s answer but the rows -- a
+     * relation's {@code {"sql", "builder", "activities", "columns"}} (the TDS builder and the activities as the JSON
+     * answer writes them, and its result's columns, in order), or a graph fetch's {@code {"sql", "builder":
+     * {"_type": "json"}}}, whose SQL builds the objects' JSON array in one cell (the host writes one object bare, as
+     * {@link #execute} does). {@code models} are the only models the host runs, as {@link #arrowPlan}'s.
+     */
+    public static Answer jsonPlan(String body, java.util.Collection<String> models) {
+        return answer(500, "COMPILATION", () -> {
+            QueryPlan plan = hostPlan(body, models);
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("sql", plan.sql());
+            if (plan.shape() == com.legend.plan.ResultShape.GRAPH) {
+                out.put("builder", Map.of("_type", "json"));
+            } else {
+                out.put("builder", tdsBuilder(plan));
+                out.put("activities", List.of(activity(plan, true)));
+                out.put("columns", columnNames(plan));
+            }
+            return Json.toCompact(out);
+        });
+    }
+
+    /** An {@code ExecuteInput} read, its parameters bound and planned, for a host that runs only {@code models}. */
+    private static QueryPlan hostPlan(String body, java.util.Collection<String> models) {
+        Json.Obj request = request(body);
+        String model = modelText(request.getObj("model"));
+        if (!models.contains(model)) {
+            // a host's models change (Python's: a Live frame whose columns changed is written a new model), so
+            // the refusal says what to do
+            throw new IllegalArgumentException("this engine runs queries over the models it serves only, "
+                    + "and the request's model is not one of them: if the engine's model changed since it was "
+                    + "read (a frame whose columns changed), read it again");
+        }
+        LambdaFunction lambda = ProtocolReader.lambda(
+                boundParameters(request.getObj("function"), request.getArrOr("parameterValues", null)));
+        com.legend.TypedQuery query = com.legend.Compiler.query(com.legend.Compiler.compileModel(model), lambda);
+        return query.plan(runtimeOf(request, query.target()));
     }
 
     /**

@@ -1038,6 +1038,36 @@ node_test(
     env = {"LEGEND_SERVER": "$(rlocationpath //query-store:legend_server)"},
 )
 
+# THE TAB'S EXECUTE, ONE IMPLEMENTATION (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C1): an execute answered in the tab
+# (legend-lite's planner planning it, DuckDB-WASM running it, engine-client's BrowserEngine) against the same execute
+# answered by Python's engine over the same frame
+node_test(
+    name = "python_execute_test",
+    size = "medium",
+    data = [
+        "test/host/node.ts",
+        "test/python-engine/execute.test.ts",
+        ":dist",
+        ":engine_fixture",
+        ":headless_bundle",
+        ":src",
+        "//engine-client:node_modules/@duckdb/duckdb-wasm",
+        "//native:compiler",
+    ],
+    entry_point = "test/python-engine/execute.test.ts",
+    env = {
+        "DATACUBE_SITE": "$(rlocationpath :dist)",
+        "ENGINE_FIXTURE": "$(rlocationpath :engine_fixture)",
+        "LEGEND_LITE_DATACUBE": "$(rlocationpath :headless_bundle)",
+        "LEGEND_LITE_LIBRARY": "$(rlocationpath //native:compiler)",
+    },
+    platform_env = select({
+        "//tools/platforms:windows_x86_64": {"PROCESSOR_ARCHITECTURE": "AMD64"},
+        "//conditions:default": {},
+    }),
+    wasm = True,
+)
+
 node_test(
     name = "python_saved_pages_test",
     size = "medium",

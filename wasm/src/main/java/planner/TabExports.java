@@ -24,6 +24,12 @@ public final class TabExports {
         return Folded.http(() -> Boundary.pureV1(path, rawQuery, body));
     }
 
+    /** {@link Boundary#executeJsonPlan}: execute's plan half, the answer but its rows, for the tab's executor (C1). */
+    @JSExport
+    public static String executeJsonPlanOrError(String body, String modelsJson) {
+        return Folded.http(() -> Boundary.executeJsonPlan(body, modelsJson));
+    }
+
     // ---- planning and typing
 
     /** {@link Boundary#planSql}: the SQL alone, unfolded (a refusal is thrown). */
