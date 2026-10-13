@@ -402,6 +402,11 @@ Size: about 400 lines.
   - ClickHouse's connector carries what its burn-down put on the test harness's URL (2026-10-12,
     `docs/CLOUD_BACKENDS_PCT_2026_10_11.md` §19.1): the raised `max_query_size` and AST limits on every connection,
     and, on a system connection, an HTTP session of its own (`session_id`), where its temporary tables live.
+    Two PCT tests pass only through these (`testFormatFloat`, getAll's `testBasic`; their ledgers say so). The
+    session needs more than the harness gives it (PR #34's review, 2026-10-13): `SystemDatabase.routeFor` keeps it
+    for the model's life, but the server ends it after `session_timeout` idle (then every system query fails
+    "unknown table"); it takes one statement at a time (SESSION_IS_LOCKED); and closing the JDBC connection does not
+    end it, so its tables outlive the model by up to an hour.
 - **`Sessions`' five per-concern switches collapse into `Connectors.of(type)`.**
   - `ConnectionResolver`'s `Opening` switch is a capability in disguise (`Named` means H2, `Held` means DuckDB or
     SQLite); it moves onto the connector.

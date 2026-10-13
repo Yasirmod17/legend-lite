@@ -30,6 +30,10 @@ public class Test_LegendLite_ClickHouse_EssentialFunctions_PCT extends PCTReport
     // Pinned by a STABLE part of the message (the runner matches by containment): no per-run id.
     // First measured 2026-10-12 (ClickHouse 25.8, the pinned server).
     private static final MutableList<ExclusionSpecification> expectedFailures = Lists.mutable.with(
+            // testFormatFloat passes through the harness's connection, not the dialect: its statement is past 256 KiB,
+            // and EmbeddedClickHouse.jdbcUrl raises max_query_size and the AST limits; a server on its defaults refuses
+            // it ("Max query size exceeded", loudly). The ClickHouse connector carries them (the dialect plan's P5;
+            // PR #34's review, 2026-10-13)
             // INSTANCE IDENTITY (as on DuckDB): the asserts want the interpreter's ORIGINAL instances back, or eq/==
             // by reference; the harness inlines captured instances BY VALUE, so identity is erased before the wire
             one("meta::pure::functions::collection::tests::find::testFindInstance_Function_1__Boolean_1_", "instanceOf meta::pure::functions::collection::tests::model::CO_Person"),

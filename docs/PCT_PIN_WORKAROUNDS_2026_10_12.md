@@ -75,7 +75,7 @@ the shared lowering's, fixed there for the ordered aggregate and re-measured on 
 
 | pins | what Postgres could not do | the answer | outcome |
 |---:|---|---|---|
-| 13 | **printf**: `format()` has `%s`, `%I` and `%L` only | A literal format unrolled into `\|\|` pieces, Snowflake's shape: `%s` the dialect's own text of the value, `%d` padded after its sign, `%.Nf` as `round(numeric, N)` (half away from zero, as printf), a negative that rounds to zero keeping its `-`. Padding is `lpad` to `greatest(width, length)`, because Postgres' `lpad` cuts a longer text (measured). DuckDB's `%g` date part is `to_char`'s `MS` | fixed |
+| 13 | **printf**: `format()` has `%s`, `%I` and `%L` only | A literal format unrolled into `\|\|` pieces, Snowflake's shape: `%s` the dialect's own text of the value, `%d` padded after its sign, `%.Nf` rounded half-even on the value's shortest decimal text, as Pure rounds (it was `round(numeric, N)`, half away from zero, until PR #34's review), a negative that rounds to zero keeping its `-`. Padding is `lpad` to `greatest(width, length)`, because Postgres' `lpad` cuts a longer text (measured). DuckDB's `%g` date part is `to_char`'s `MS` | fixed |
 | 21 | **The empty collection as a list** (a NULL of no type): Postgres types every array, so `unnest(NULL)` or a reduction over it is refused ("could not determine polymorphic type") | Each call over it is spelled as DuckDB answers over a NULL list: a reduction, an element or a rearrangement is NULL, its explosion no row, a concatenation its other lists, `exists`/`forAll` the empty answer. A projection whose expression is the empty collection is cast to its column's declared type | fixed |
 | 2 | **No `max(boolean)`** | A Boolean list's max is `bool_or`, its min `bool_and` | fixed |
 | 7 | **A struct came back as the driver's jsonb object** (zip's pairs, a new instance) | `normalize` decodes its JSON text into the platform's map, fields in declared order | fixed. Seven more tests then fail as on DuckDB (instance identity); they were already counted among the platform's pins, and only their pinned message changed |
@@ -97,3 +97,38 @@ would likely print `123` there. Not yet checked on Snowflake.
 
 H2 has the most own pins (25), then MySQL (20), MariaDB (17) and SQLite (15); Postgres has 9 after its burn-down.
 BigQuery (8) and Trino (6) were burned down hardest, and Databricks and Snowflake have 1 each.
+
+## What PR #34's independent review found beyond PCT (2026-10-13)
+
+Four reviewers, none of whom wrote the code, read the shared code, the Postgres and ClickHouse dialects, and these
+docs. They ran each shape on the lanes' own servers (Postgres 16.15, ClickHouse 25.8.2.29). PCT passes on every
+lane, so what they found is what PCT's inputs do not reach.
+
+**Fixed in the PR:**
+- ClickHouse: an absent nested instance read as a present one with NULL fields (its struct field is now its
+  Variant, unwrapped only to read a field of it); a correlated EXISTS ran under 25.8's NULL bug, its setting being on
+  by default (it now runs only under a null-rejecting filter, and every other statement turns the setting off);
+  a fractional RANGE frame used bare aggregate names (COUNT a UInt64, STDDEV without its OrNull form, MEDIAN
+  approximate); a sample deviation or variance of one value was inf, DuckDB's NULL; an as-of join's hash key was
+  taken from an inequality of one side.
+- Postgres: printf's `%.Nf` rounded ties away from zero, and lost digits past 15 (`%.17f` of 0.1 + 0.2); a raise
+  carried a volatile term everywhere, which stopped the planner flattening subqueries and aggregating in parallel
+  (now only on a list or map raise, which unnest can take); a list of maps built an array of arrays; a jsonb number
+  past a Long crashed the decode, and a jsonb null struct cell reached the caller as the driver's object.
+- Shared: the type census accepted a map delivered as an array on every database (now BigQuery and Postgres only);
+  the typed ordered list aggregate made SQLite, MariaDB, MySQL and BigQuery write it twice.
+
+**Queued as their own tasks:** zero padding (`%0Nd`) cuts a long number on every database (the lowering's LPAD);
+Postgres's Levenshtein is O(n·m²) on long text (12.6 s at 600 characters) and Jaro-Winkler slow past 1,000; a
+Postgres struct's date-time, NaN and map fields stay raw (the executor's unwrap would type them).
+
+**Kept, known, not fixed:**
+- ClickHouse: a fractional RANGE frame holds its partition's pairs on every row, so its memory is the partition's
+  size squared (a large partition fails loudly); a column-valued quantile level outside [0, 1] answers instead of
+  raising; a session's limits, recorded in the plan's P5.
+- Postgres: `splitPart` with a NULL delimiter splits into characters, and a negative part is NULL (DuckDB counts
+  from the end; Pure raises); a precision on `%s` or `%d` is ignored (Pure raises); `hashCode` hashes each value's
+  text, so `'10'` and `10` collide; a Variant cast to a `Map<Integer, _>` keeps its keys as text; `MAP_CONCAT` of NULL
+  maps is `{}` (DuckDB's NULL); Jaro-Winkler is DuckDB's, which differs from commons-text on some pairs and on two
+  empty strings; a supplementary character is one character (the reference counts UTF-16 units). None of these has
+  a row in `docs/SEMANTICS_REGISTER.md` yet.

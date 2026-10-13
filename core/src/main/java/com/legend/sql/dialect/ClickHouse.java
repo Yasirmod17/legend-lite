@@ -52,11 +52,14 @@ public final class ClickHouse extends AnsiSqlRenderer {
     static final String SETTINGS = "SETTINGS join_use_nulls = 1, union_default_mode = 'DISTINCT',"
             + " cast_keep_nullable = 1, session_timezone = 'UTC', query_plan_merge_expressions = 0";
 
-    /** The setting a statement holding a correlated EXISTS carries ({@link #expr}'s IN): experimental on 25.8, where it
-     *  answers false for an outer row whose correlated column is NULL, whatever the filter (measured: o.v IS NULL in
-     *  the filter is false for a NULL o.v). So it is on only there, where the filter is null-rejecting; a correlated
-     *  subquery written anywhere else is still refused by the server. */
+    /** The setting of correlated subqueries, experimental on 25.8 and ON by default there (measured 2026-10-13): a
+     *  correlated EXISTS answers false for an outer row whose correlated column is NULL, whatever the filter (o.v IS
+     *  NULL OR true is false for a NULL o.v). So a statement holds one only where every conjunct of its filter is
+     *  null-rejecting ({@link #expr}: an EXISTS, and IN written as EXISTS), and carries the setting on; every other
+     *  statement carries it off, so a correlated subquery written anywhere else is refused by the server rather than
+     *  answered wrong (PR #34's review: the default had made that claim false). */
     static final String CORRELATED = ", allow_experimental_correlated_subqueries = 1";
+    static final String UNCORRELATED = ", allow_experimental_correlated_subqueries = 0";
 
     /** How deep the writer is in {@link #query}: the root query (depth 0 on entry) writes the SETTINGS clause. */
     private final int[] nesting = {0};
@@ -139,11 +142,17 @@ public final class ClickHouse extends AnsiSqlRenderer {
         if (src instanceof com.legend.sql.SqlSource.Join j && j.kind() == com.legend.sql.SqlSource.Join.Kind.ASOF_LEFT
                 && j.on() != null && !conjuncts(j.on()).stream().anyMatch(c -> c instanceof SqlExpr.Call call
                         && call.fn() == SqlFn.EQUAL)) {
+            // the inequality whose operands read the two sides, where there is one (an operand of one side only would
+            // make the hash key constant on both, which the server refuses)
             SqlExpr.Call ineq = conjuncts(j.on()).stream()
                     .filter(c -> c instanceof SqlExpr.Call call && (call.fn() == SqlFn.LESS
                             || call.fn() == SqlFn.LESS_EQUAL || call.fn() == SqlFn.GREATER
                             || call.fn() == SqlFn.GREATER_EQUAL))
-                    .map(SqlExpr.Call.class::cast).findFirst()
+                    .map(SqlExpr.Call.class::cast)
+                    .sorted(java.util.Comparator.comparingInt(c -> TablesRead.of(c.args().get(0)).isEmpty()
+                            || TablesRead.of(c.args().get(1)).isEmpty()
+                            || TablesRead.of(c.args().get(0)).equals(TablesRead.of(c.args().get(1))) ? 1 : 0))
+                    .findFirst()
                     .orElseThrow(() -> new DialectCapability("an as-of join with neither an equality nor an"
                             + " inequality reached ClickHouse"));
             source(writer, j.left(), depth);
@@ -300,7 +309,7 @@ public final class ClickHouse extends AnsiSqlRenderer {
         } finally {
             nesting[0]--;
         }
-        return root ? nl(writer, 0).append(SETTINGS + (correlatedExists[0] ? CORRELATED : "")) : writer;
+        return root ? nl(writer, 0).append(SETTINGS + (correlatedExists[0] ? CORRELATED : UNCORRELATED)) : writer;
     }
 
     @Override
@@ -404,6 +413,15 @@ public final class ClickHouse extends AnsiSqlRenderer {
         }
         return e instanceof SqlExpr.Call c && c.args().size() == 2 && COMPARISONS.contains(c.fn())
                 && c.args().stream().allMatch(a -> own.containsAll(TablesRead.of(a)) || a instanceof SqlExpr.Column);
+    }
+
+    /** Whether a correlated subquery's answer is right here ({@link #CORRELATED}): it has a filter, and each of its
+     *  conjuncts is null-rejecting, so an outer row with a NULL correlated column matches no row, which is what the
+     *  server answers for it. */
+    private static boolean correlatedRight(SqlSelect s) {
+        java.util.Set<String> own = new java.util.HashSet<>();
+        aliasesOf(s.from(), own);
+        return s.where() != null && conjuncts(s.where()).stream().allMatch(x -> nullRejecting(x, own));
     }
 
     /** EXISTS a row of {@code s} under its filter {@code w} and {@code cond} (none: {@code w} alone). */
@@ -734,6 +752,11 @@ public final class ClickHouse extends AnsiSqlRenderer {
                 super.expr(writer, q, 0);
                 yield writer.append(" END)");
             }
+            // a correlated EXISTS: right only where its filter is null-rejecting ({@link #CORRELATED})
+            case SqlExpr.Exists ex when ex.subquery() instanceof SqlSelect q && correlated(q) && !correlatedRight(q) ->
+                    throw new DialectCapability("a correlated EXISTS reached ClickHouse, whose correlated subqueries"
+                            + " answer false for an outer row with a NULL (measured 25.8): its filter reads the outer"
+                            + " row other than as a comparison's operand");
             // EXISTS over a select of constants answers 0 where its filter keeps a row (ClickHouse 25.8, measured:
             // EXISTS (SELECT 1 FROM numbers(5) WHERE number > 3) is 0, with the column selected 1): the rows' own
             // columns are selected instead
@@ -900,16 +923,30 @@ public final class ClickHouse extends AnsiSqlRenderer {
         return t;
     }
 
-    /** A field by name; a field NUMBER (a zip's pair, read by position) by its index. */
+    /** A field by name; a field NUMBER (a zip's pair, read by position) by its index. A struct-typed field is its
+     *  Variant (structTypeName), NULL where the instance is absent, and stays one: its value is tested, cast and
+     *  delivered as the Variant. Only a read of a field OF it unwraps the Tuple ({@code variantElement}), whose fields
+     *  are NULL where it is absent, as Pure's are. (Read as the Tuple everywhere, an absent instance was a present one
+     *  of NULL fields, a Tuple never being NULL: isEmpty false, toOne not raising; PR #34's review, 2026-10-13,
+     *  measured on 25.8.) */
     @Override
     protected SqlWriter structGet(SqlWriter writer, SqlExpr.StructGet g) {
         String field = g.field().matches("[0-9]+") ? g.field() : stringLit(g.field());
-        if (typeOf(g) instanceof SqlType.Struct st) {
-            // a struct-typed field is its Variant (structTypeName): read as the Tuple, NULL fields where it is absent
-            return writer.append("variantElement(tupleElement(").expr(g.source(), 0).append(", ").append(field)
-                    .append("), ").append(stringLit(castTypeName(st))).append(")");
+        writer.append("tupleElement(");
+        if (variantField(g.source()) && typeOf(g.source()) instanceof SqlType.Struct st) {
+            writer.append("variantElement(").expr(g.source(), 0).append(", ").append(stringLit(castTypeName(st)))
+                    .append(")");
+        } else {
+            writer.expr(g.source(), 0);
         }
-        return writer.append("tupleElement(").expr(g.source(), 0).append(", ").append(field).append(")");
+        return writer.append(", ").append(field).append(")");
+    }
+
+    /** Whether {@code e} is a struct-typed field of an instance (by name), held as its Variant; a zip's pair, read by
+     *  position, is a plain Tuple. */
+    private static boolean variantField(SqlExpr e) {
+        return e instanceof SqlExpr.StructGet g && typeOf(g) instanceof SqlType.Struct
+                && !g.field().matches("[0-9]+");
     }
 
     @Override
@@ -1974,9 +2011,10 @@ public final class ClickHouse extends AnsiSqlRenderer {
                 }
                 yield ov(super.reducer(writer, r), win);
             }
-            case STDDEV_SAMP, STDDEV -> ov(plain(writer, "stddevSampStableOrNull", r), win);
+            // one value's sample deviation and variance are inf here, DuckDB's NULL (measured 25.8, 2026-10-13)
+            case STDDEV_SAMP, STDDEV -> sampled(writer, "stddevSampStableOrNull", r, win);
             case STDDEV_POP -> ov(plain(writer, "stddevPopStableOrNull", r), win);
-            case VAR_SAMP, VARIANCE -> ov(plain(writer, "varSampStableOrNull", r), win);
+            case VAR_SAMP, VARIANCE -> sampled(writer, "varSampStableOrNull", r, win);
             case VAR_POP -> ov(plain(writer, "varPopStableOrNull", r), win);
             // one row's sample covariance is NaN here, DuckDB's NULL (measured)
             case COVAR_SAMP -> {
@@ -2062,6 +2100,15 @@ public final class ClickHouse extends AnsiSqlRenderer {
         };
     }
 
+    /** A sample statistic, NULL under two values (as DuckDB's; ClickHouse answers inf for one). */
+    private SqlWriter sampled(SqlWriter writer, String fn, SqlAgg.Reducer r,
+            SqlExpr.@com.legend.base.Nullable WindowCall win) {
+        writer.append("if(");
+        ov(writer.append("count(").append(r.distinct() ? "DISTINCT " : "").expr(r.args().get(0), 0).append(")"), win)
+                .append(" < 2, NULL, ");
+        return ov(plain(writer, fn, r), win).append(")");
+    }
+
     private SqlWriter plain(SqlWriter writer, String fn, SqlAgg.Reducer r) {
         if (!r.orderBy().isEmpty()) {
             throw new DialectCapability("an ordered " + r.fn() + " reached ClickHouse");
@@ -2134,7 +2181,10 @@ public final class ClickHouse extends AnsiSqlRenderer {
      * frame is computed over its partition's (value, key) pairs: the pairs whose key lies within the offsets of the
      * row's own key, reduced by the same aggregate ({@code arrayReduce}) -- the key compared as the window compares it,
      * a NULL key at its type's edge ({@link #nullsAtEdge}), a NULL value kept (a tuple is never NULL) for the
-     * aggregate to skip.
+     * aggregate to skip. The aggregate is the one {@link #reducerIn} writes (PR #34's review, 2026-10-13: a bare
+     * aggregate name gave COUNT as a UInt64, STDDEV without its OrNull form and MEDIAN approximate), and any other is
+     * refused. Each row holds its whole partition's pairs, so the memory is the partition's size squared: a large
+     * partition fails on the server's memory limit, loudly.
      */
     private SqlWriter fractionalRange(SqlWriter writer, SqlExpr.WindowCall w, SqlExpr.WindowCall.Frame f) {
         if (!(w.fn() instanceof SqlAgg.Reducer r) || r.distinct() || !r.orderBy().isEmpty() || r.args().size() != 1
@@ -2178,16 +2228,44 @@ public final class ClickHouse extends AnsiSqlRenderer {
         if (hi != null) {
             conds.add(hi);
         }
-        writer.append("arrayReduce('").append(aggregateName(r.fn())).append("', arrayMap(__p -> __p.1, ");
-        if (!conds.isEmpty()) {
-            writer.append("arrayFilter(__p -> ").join(conds, " AND ", SqlWriter::piece).append(", ");
+        String agg = switch (r.fn()) {
+            case SUM, AVG, MIN, MAX -> aggregateName(r.fn());
+            case COUNT -> "count";
+            case STDDEV_SAMP, STDDEV -> "stddevSampStableOrNull";
+            case STDDEV_POP -> "stddevPopStableOrNull";
+            case VAR_SAMP, VARIANCE -> "varSampStableOrNull";
+            case VAR_POP -> "varPopStableOrNull";
+            case MEDIAN -> "quantileExactInclusiveOrNull(0.5)";
+            case BOOL_AND -> "minOrNull";
+            case BOOL_OR -> "maxOrNull";
+            case ANY_VALUE -> "anyOrNull";
+            default -> throw new DialectCapability("a RANGE frame with a fractional offset over " + r.fn()
+                    + " reached ClickHouse, whose RANGE offsets are integers");
+        };
+        // the frame's values: the partition's pairs within the bounds, their values
+        SqlWriter.Piece values = x -> {
+            x.append("arrayMap(__p -> ").append(r.fn() == SqlAgg.Fn.MEDIAN ? "toFloat64(__p.1)" : "__p.1").append(", ");
+            if (!conds.isEmpty()) {
+                x.append("arrayFilter(__p -> ").join(conds, " AND ", SqlWriter::piece).append(", ");
+            }
+            x.append("groupArray(tuple(").expr(r.args().get(0), 0).append(", ").expr(key, 0).append(")) OVER (");
+            if (!w.partitionBy().isEmpty()) {
+                x.append("PARTITION BY ").list(w.partitionBy());
+            }
+            x.append(")").append(conds.isEmpty() ? ")" : "))");
+        };
+        boolean sample = switch (r.fn()) {
+            case STDDEV_SAMP, STDDEV, VAR_SAMP, VARIANCE -> true;
+            default -> false;
+        };
+        if (sample) {
+            // under two values NULL, as the native sample statistic ({@link #sampled})
+            writer.append("if(arrayReduce('count', ").piece(values).append(") < 2, NULL, ");
         }
-        writer.append("groupArray(tuple(").expr(r.args().get(0), 0).append(", ").expr(key, 0).append(")) OVER (");
-        if (!w.partitionBy().isEmpty()) {
-            writer.append("PARTITION BY ").list(w.partitionBy());
-        }
-        writer.append(")");
-        return writer.append(conds.isEmpty() ? "))" : ")))");
+        boolean count = r.fn() == SqlAgg.Fn.COUNT;
+        writer.append(count ? "toInt64(" : "").append("arrayReduce('").append(agg).append("', ").piece(values)
+                .append(")").append(count ? ")" : "");
+        return sample ? writer.append(")") : writer;
     }
 
     private static boolean isOffset(SqlExpr.WindowCall.Frame.Bound b) {

@@ -260,7 +260,18 @@ public final class Json {
         // Decimal comparison exact, never through double).
         return t.contains(".") || t.contains("e") || t.contains("E")
                 ? (Object) new java.math.BigDecimal(t)
-                : (Object) Long.parseLong(t);
+                : integer(t);
+    }
+
+    /** An integer token: a Long, or a BigInteger past a Long's range (a database prints a large number in plain
+     *  digits -- Postgres's jsonb numeric 1e20 is 100000000000000000000; it was a NumberFormatException: PR #34's
+     *  review, 2026-10-13). */
+    private static Object integer(String t) {
+        try {
+            return Long.parseLong(t);
+        } catch (NumberFormatException overflow) {
+            return new java.math.BigInteger(t);
+        }
     }
 
     private void ws() {

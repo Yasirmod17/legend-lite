@@ -310,7 +310,7 @@ public final class Postgres extends AnsiSqlRenderer {
 
     /** DuckDB's map error, raised as a map (the CASE's type). */
     private SqlWriter.Piece mapRaise(String message) {
-        SqlWriter.Piece text = raise(List.of(new SqlExpr.StringLit(message)), null);
+        SqlWriter.Piece text = raise(List.of(new SqlExpr.StringLit(message)), null, true);
         return w -> w.append("CAST(").piece(text).append(" AS JSONB[])");
     }
 
@@ -358,6 +358,10 @@ public final class Postgres extends AnsiSqlRenderer {
         if (heldAsItself(t)) {
             return w -> w.append("CAST((").piece(json).append(" #>> '{}') AS ").append(castTypeName(t)).append(")");
         }
+        // a map is its entries, a jsonb[] (mapTypeName): rebuilt as a list of jsonb
+        if (t instanceof SqlType.Map) {
+            return decode(json, new SqlType.Array(SqlType.Scalar.JSON), depth);
+        }
         if (t instanceof SqlType.Array a) {
             String e = "__e" + depth;
             String o = "__o" + depth;
@@ -385,15 +389,22 @@ public final class Postgres extends AnsiSqlRenderer {
         return heldAsItself(e) ? e : SqlType.Scalar.JSON;
     }
 
-    /** A value of type {@code t} as a list holds it: a list as jsonb, anything else as it is. */
-    private static SqlWriter.Piece encode(SqlWriter.Piece value, SqlType t) {
-        return t instanceof SqlType.Array ? w -> w.append("to_jsonb(").piece(value).append(")") : value;
+    /** A value of type {@code t} as a list holds it: a list or a map (its entries, a jsonb[]) as jsonb, anything
+     *  else as it is. */
+    private static SqlWriter.Piece encode(SqlWriter.Piece value, @com.legend.base.Nullable SqlType t) {
+        return rebuilt(t) ? w -> w.append("to_jsonb(").piece(value).append(")") : value;
+    }
+
+    /** Whether a list holds a value of type {@code t} as jsonb and rebuilds it when read: a list, or a map, which
+     *  is a jsonb[] of its entries (a list of maps had been an array of arrays: PR #34's review, 2026-10-13). */
+    private static boolean rebuilt(@com.legend.base.Nullable SqlType t) {
+        return t instanceof SqlType.Array || t instanceof SqlType.Map;
     }
 
     /** {@code ... FROM} the elements of {@code xs}: each bound to {@code elem} as its type reads (a list
      *  element held as jsonb rebuilt as a list), its 1-based position to {@code idx}. */
     private SqlWriter.Piece elementsFrom(SqlWriter.Piece xs, SqlType element, String elem, String idx) {
-        if (!(element instanceof SqlType.Array)) {
+        if (!rebuilt(element)) {
             return w -> w.append("unnest(").piece(xs).append(") WITH ORDINALITY AS __u(" + elem + ", " + idx + ")");
         }
         return w -> w.append("(SELECT ").piece(decode(v -> v.append("__ue"), element, 0))
@@ -523,7 +534,7 @@ public final class Postgres extends AnsiSqlRenderer {
                         .append(")[cardinality(").piece(xs).append(") + 1 + ").expr(args.get(1), 6).append("] ELSE (")
                         .piece(xs).append(")[").expr(args.get(1), 0).append("] END)");
                 // an inner list is held as jsonb: read back as a list
-                yield writer.piece(first instanceof SqlType.Array ? decode(at, first, 0) : at);
+                yield writer.piece(rebuilt(first) ? decode(at, first, 0) : at);
             }
             case LIST_POSITION -> writer.append("array_position(").piece(xs).append(", ").expr(args.get(1), 0)
                     .append(")");
@@ -857,8 +868,7 @@ public final class Postgres extends AnsiSqlRenderer {
         if (e instanceof SqlExpr.OrderedListAgg ola) {
             // DuckDB's list(value ORDER BY key), as the LIST aggregate: NULL over no row, a list value held as jsonb
             SqlExpr v = ola.value();
-            return writer.append("array_agg(").piece(typeOf(v) instanceof SqlType.Array
-                    ? w -> w.append("to_jsonb(").expr(v, 0).append(")") : w -> w.expr(v, 0))
+            return writer.append("array_agg(").piece(encode(w -> w.expr(v, 0), typeOf(v)))
                     .append(" ORDER BY ").expr(ola.orderBy(), 0).append(")");
         }
         return super.expr(writer, e, parentPrec);
@@ -1206,7 +1216,8 @@ public final class Postgres extends AnsiSqlRenderer {
                     .expr(a.get(0), 0).append(" AS BIGINT) * INTERVAL '1 millisecond'"));
 
             // error() outside a CASE branch: the raise, VARCHAR-typed (see raise)
-            case ERROR -> writer.piece(raise(a, null));
+            case ERROR -> writer.piece(raise(a, null, c.type() instanceof com.legend.sql.TypeFact.Typed t
+                    && (t.type() instanceof SqlType.Array || t.type() instanceof SqlType.Map)));
 
             // ---- walls
             case STRPTIME -> throw wall(c.fn(), "to_timestamp(text, fmt) is lenient and"
@@ -1280,17 +1291,27 @@ public final class Postgres extends AnsiSqlRenderer {
      * constant-false and row guards do not fire, a taken guard raises the message.
      * But a STABLE expression IS evaluated at plan time where the planner estimates (an
      * argument of unnest, whose row estimate pre-evaluates it: an untaken raise under
-     * unnest(CASE ...) fired, measured on 16.15, 2026-10-12), so the message carries an
-     * empty VOLATILE term ({@code left(random()::text, 0)}), which no estimate evaluates.
+     * unnest(CASE ...) fired, measured on 16.15, 2026-10-12), so a raise whose value is a
+     * list or a map, the only kind unnest takes, carries an empty VOLATILE term
+     * ({@code left(random()::text, 0)}), which no estimate evaluates. Only that kind: a
+     * volatile term keeps the planner from flattening a subquery and from aggregating in
+     * parallel, and every Integer division's zero guard is a raise (PR #34's review,
+     * 2026-10-13, measured on 16.15: a join on a subquery's id went from an index nested
+     * loop to a hash join over a full scan).
      */
     private SqlWriter.Piece raise(List<SqlExpr> a, @com.legend.base.Nullable SqlType slot) {
+        return raise(a, slot, slot instanceof SqlType.Array || slot instanceof SqlType.Map);
+    }
+
+    private SqlWriter.Piece raise(List<SqlExpr> a, @com.legend.base.Nullable SqlType slot, boolean unnestable) {
         SqlWriter.Piece text = w -> {
             w.append("CAST(CAST(chr(31) || ");
             if (a.size() > 1) {
                 w.expr(a.get(1), 0).append(" || chr(30) || ");
             }
-            w.append("(").expr(a.get(0), 0).append(") || chr(31) || left(CAST(random() AS VARCHAR), 0) AS TIMESTAMPTZ)"
-                    + " AS VARCHAR)");
+            w.append("(").expr(a.get(0), 0).append(") || chr(31)")
+                    .append(unnestable ? " || left(CAST(random() AS VARCHAR), 0)" : "")
+                    .append(" AS TIMESTAMPTZ) AS VARCHAR)");
         };
         // typed as its slot (never evaluated: the TIMESTAMPTZ cast raises first) -- a list of scalars too
         boolean typed = slot instanceof SqlType.Scalar || slot instanceof SqlType.Decimal
@@ -1374,9 +1395,17 @@ public final class Postgres extends AnsiSqlRenderer {
                 case 's', 'd' -> isText(x) ? w -> w.expr(x, 0) : w -> w.expr(asText, 0);
                 case 'f' -> {
                     int precision = m.group(4) == null ? 6 : Integer.parseInt(m.group(4));
-                    yield w -> w.append("(CASE WHEN ").expr(x, 0).append(" < 0 AND round(CAST(").expr(x, 0)
-                            .append(" AS NUMERIC), " + precision + ") = 0 THEN '-' ELSE '' END || CAST(round(CAST(")
-                            .expr(x, 0).append(" AS NUMERIC), " + precision + ") AS VARCHAR))");
+                    // Pure rounds the value's own decimal text half-EVEN (FormatTools, RoundingMode.HALF_EVEN): the
+                    // text is the shortest one that reads back (a float8's text; its cast to numeric keeps 15 digits),
+                    // and numeric rounds half away from zero, so an exact half of the scaled value steps to its even
+                    // neighbour (PR #34's review, 2026-10-13: %.2f of 1.125 is 1.12, %.0f of 2.5 is 2)
+                    String scale = java.math.BigDecimal.ONE.movePointRight(precision).toPlainString();
+                    SqlWriter.Piece rounded = w -> w.append("(SELECT round(CASE WHEN __hv - floor(__hv) = 0.5 THEN (CASE"
+                            + " WHEN mod(floor(__hv), 2) = 0 THEN floor(__hv) ELSE floor(__hv) + 1 END) ELSE round(__hv)"
+                            + " END / " + scale + ", " + precision + ") FROM (SELECT CAST(CAST(").expr(x, 0)
+                            .append(" AS TEXT) AS NUMERIC) * " + scale + " AS __hv) AS __he)");
+                    yield w -> w.append("(CASE WHEN ").expr(x, 0).append(" < 0 AND ").piece(rounded)
+                            .append(" = 0 THEN '-' ELSE '' END || CAST(").piece(rounded).append(" AS VARCHAR))");
                 }
                 default -> throw new IllegalStateException("the directive pattern admits s, d, f: " + conversion);
             };
@@ -1738,8 +1767,7 @@ public final class Postgres extends AnsiSqlRenderer {
                 }
                 SqlExpr x = r.args().get(0);
                 writer.append("array_agg(").append(r.distinct() ? "DISTINCT " : "")
-                        .piece(typeOf(x) instanceof SqlType.Array ? w -> w.append("to_jsonb(").expr(x, 0).append(")")
-                                : w -> w.expr(x, 0));
+                        .piece(encode(w -> w.expr(x, 0), typeOf(x)));
                 if (!r.orderBy().isEmpty()) {
                     writer.append(" ORDER BY ").join(r.orderBy(), ", ", this::aggregateOrderKey);
                 }
@@ -1905,7 +1933,9 @@ public final class Postgres extends AnsiSqlRenderer {
 
     /** A struct is jsonb here, and the driver hands a jsonb cell back as its own object, whose text is the JSON
      *  (PGobject's toString): decoded to the platform's map, a struct's fields in its declared order (nested ones
-     *  too), a Float field a Double. */
+     *  too), a Float field a Double, a Decimal one a BigDecimal. A jsonb null (an absent optional instance read off
+     *  its owner, {@code x -> 'f'}) is NULL. (Still raw: a date-time field arrives as its text, and a map field as its
+     *  entries -- the executor's unwrap would type them, and sql/ cannot reach it: PR #34's review, 2026-10-13.) */
     @Override
     public @com.legend.base.Nullable Object normalize(@com.legend.base.Nullable Object jdbcValue,
             @com.legend.base.Nullable SqlType type) {
@@ -1913,6 +1943,9 @@ public final class Postgres extends AnsiSqlRenderer {
             String text = jdbcValue.toString();
             if (text.startsWith("{")) {
                 return declared(com.legend.sql.Json.parse(text), st);
+            }
+            if (text.equals("null")) {
+                return null;
             }
         }
         return jdbcValue;
@@ -1937,6 +1970,9 @@ public final class Postgres extends AnsiSqlRenderer {
         }
         if (t == SqlType.Scalar.DOUBLE && v instanceof Number n) {
             return n.doubleValue();
+        }
+        if (t instanceof SqlType.Decimal && v instanceof Number n && !(v instanceof java.math.BigDecimal)) {
+            return new java.math.BigDecimal(n.toString());
         }
         return v;
     }
