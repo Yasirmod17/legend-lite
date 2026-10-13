@@ -227,8 +227,8 @@ async function run(): Promise<void> {
 
   // THE READER'S FILES (§15.6): each read by DataCube's own reader (upload.ts) into the tab's DuckDB and into Python's
   // (the page hands Python the bytes the tab's DuckDB is given, fileBytes), then every row planned and run on each
-  // host -- the same columns, types and values. A text file is read as the tab has always read it: a byte-order mark
-  // dropped, CRLF lines, a Latin-1 byte the replacement character; and a file larger than one part.
+  // host -- the same columns, types and values. A text file is read as the page reads it: a byte-order mark
+  // dropped, CRLF lines, a Latin-1 file read as Latin-1 (G4); and a file larger than one part.
   await check('every reader file reads the same on Python\'s page and in the tab', async () => {
     const link: PythonLink = { baseUrl: location.origin, fetch: (i, init) => fetch(i, init), authorization: served.authorization };
     const python = pythonDatabase(link, await askedOffers(link));

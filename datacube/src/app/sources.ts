@@ -945,7 +945,7 @@ export function pageSources(d: SourcesOf): PageSources {
     const files = database.ingestFile !== undefined;
     const sections: PickerSections<T | null> = {
       ...(files ? { files: {
-        accept: '.csv,.parquet,.json,.jsonl,.ndjson,text/csv,application/json',
+        accept: '.csv,.parquet,.json,.jsonl,.ndjson,.gz,text/csv,application/json,application/gzip',
         formats: ['CSV', 'Parquet', 'JSON', 'JSON Lines'],
         // where the browser can keep a handle to the file, pick THROUGH it: a saved cube then reopens its file from
         // where it was picked (file-handles.ts)

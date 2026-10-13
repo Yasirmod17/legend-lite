@@ -42,8 +42,10 @@ function dq(name: string): string {
  * -- DuckDB's reader tells them apart itself.
  */
 export function formatOf(fileName: string): UploadFormat {
-  if (/\.parquet$/i.test(fileName)) return 'parquet';
-  if (/\.(json|jsonl|ndjson)$/i.test(fileName)) return 'json';
+  // a gzipped file's format is its name's within (`trades.csv.gz`): its bytes are unpacked as they are read (fileParts)
+  const name = fileName.replace(/\.gz$/i, '');
+  if (/\.parquet$/i.test(name)) return 'parquet';
+  if (/\.(json|jsonl|ndjson)$/i.test(name)) return 'json';
   return 'csv';
 }
 
@@ -56,7 +58,7 @@ export function formatOf(fileName: string): UploadFormat {
  * `2024_trades` is not an identifier.
  */
 export function tableNameOf(fileName: string): string {
-  const stem = fileName.replace(/\.[^.]*$/, '');
+  const stem = fileName.replace(/\.gz$/i, '').replace(/\.[^.]*$/, '');
   const cleaned = stem.replace(/[^A-Za-z0-9_]+/g, '_')
     .replace(/^_+|_+$/g, '') || 'data';
   return /^[0-9]/.test(cleaned) ? `t_${cleaned}` : cleaned;
@@ -94,21 +96,35 @@ export const PART_BYTES = 4 * 1024 * 1024;
 
 /**
  * A FILE'S BYTES AS DUCKDB IS GIVEN THEM, on every host (the tab's DuckDB-WASM, Python's): Parquet as it is, and a text
- * file -- CSV, JSON, JSON Lines -- as the tab has always read it, decoded as UTF-8 in the page (a byte-order mark taken
- * off, a byte that is not UTF-8 replaced) and written out again, so every host's DuckDB reads the same text the tab's
- * always did. A part at a time, each `size` bytes but the last, read as the file streams: no part of the file is ever
- * one string, so no file is too long for the page's strings, and a host is sent the parts as they come (Python's
- * file-part.json). The one place it is done: the tab registers these bytes whole (`fileBytes`).
+ * file -- CSV, JSON, JSON Lines -- decoded in the page and written out again as UTF-8, so every host's DuckDB reads the
+ * same text (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md G4):
+ * - a gzipped file (its first bytes gzip's) unpacked first, whatever its format;
+ * - UTF-16 read by its byte-order mark, either order;
+ * - UTF-8 when its first 64 KB are UTF-8 (a mark taken off; a bad byte after them replaced, as a File's text() does);
+ * - else Latin-1 (the web's windows-1252), each byte its character, never a replacement.
+ *
+ * A part at a time, each `size` bytes but the last, read as the file streams: no part of the file is ever one string,
+ * so no file is too long for the page's strings, and a host is sent the parts as they come (Python's file-part.json).
+ * The one place it is done: the tab registers these bytes whole (`fileBytes`).
  */
 export async function* fileParts(file: PickedFile, size = PART_BYTES): AsyncGenerator<Uint8Array> {
-  // the same decoding as a File's text(): UTF-8, its mark off, a bad byte U+FFFD -- a character split between two of
-  // the stream's chunks decoded whole, as the stream decoder keeps its state between them
-  // (a TextDecoderStream takes any BufferSource, a Uint8Array among them; TypeScript's own types will not pipe one in)
-  const bytes = formatOf(file.name) === 'parquet'
-    ? file.stream()
-    : file.stream()
-      .pipeThrough(new TextDecoderStream() as unknown as ReadableWritablePair<string, Uint8Array>)
+  let raw = await peeked(file.stream(), 2);
+  if (raw.head[0] === 0x1f && raw.head[1] === 0x8b) {
+    // gzip: unpacked, then read as what is inside
+    raw = await peeked(raw.stream.pipeThrough(new DecompressionStream('gzip') as unknown as ReadableWritablePair<Uint8Array, Uint8Array>), 2);
+  }
+  let bytes: ReadableStream<Uint8Array>;
+  if (formatOf(file.name) === 'parquet') {
+    bytes = raw.stream;
+  } else {
+    const sampled = await peeked(raw.stream, SNIFF_BYTES);
+    // a character split between two of the stream's chunks is decoded whole: the stream decoder keeps its state between
+    // them (a TextDecoderStream takes any BufferSource, a Uint8Array among them; TypeScript's own types will not pipe
+    // one in)
+    bytes = sampled.stream
+      .pipeThrough(new TextDecoderStream(encodingOf(sampled.head)) as unknown as ReadableWritablePair<string, Uint8Array>)
       .pipeThrough(new TextEncoderStream());
+  }
   const reader = bytes.getReader();
   let part = new Uint8Array(size);
   let filled = 0;
@@ -132,6 +148,63 @@ export async function* fileParts(file: PickedFile, size = PART_BYTES): AsyncGene
     reader.releaseLock();
   }
   if (filled > 0) yield part.subarray(0, filled);
+}
+
+/** How much of a text file is looked at to tell UTF-8 from Latin-1. */
+const SNIFF_BYTES = 64 * 1024;
+
+/** A text file's encoding, from its first bytes (`fileParts`). */
+function encodingOf(head: Uint8Array): 'utf-8' | 'utf-16le' | 'utf-16be' | 'windows-1252' {
+  if (head[0] === 0xff && head[1] === 0xfe) return 'utf-16le';
+  if (head[0] === 0xfe && head[1] === 0xff) return 'utf-16be';
+  if (head[0] === 0xef && head[1] === 0xbb && head[2] === 0xbf) return 'utf-8';
+  try {
+    // `stream`: a character cut off at the sample's end is not a fault of the file's
+    new TextDecoder('utf-8', { fatal: true }).decode(head, { stream: true });
+    return 'utf-8';
+  } catch {
+    return 'windows-1252';
+  }
+}
+
+/** A stream's first `n` bytes (fewer when it is shorter), and the whole stream again from its start. */
+async function peeked(stream: ReadableStream<Uint8Array>, n: number): Promise<{ readonly head: Uint8Array; readonly stream: ReadableStream<Uint8Array> }> {
+  const reader = stream.getReader();
+  const read: Uint8Array[] = [];
+  let length = 0;
+  let done = false;
+  while (length < n) {
+    const next = await reader.read();
+    if (next.done) {
+      done = true;
+      break;
+    }
+    read.push(next.value);
+    length += next.value.length;
+  }
+  const head = new Uint8Array(Math.min(n, length));
+  let at = 0;
+  for (const chunk of read) {
+    if (at >= head.length) break;
+    const taken = Math.min(chunk.length, head.length - at);
+    head.set(chunk.subarray(0, taken), at);
+    at += taken;
+  }
+  const again = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of read) controller.enqueue(chunk);
+      if (done) controller.close();
+    },
+    async pull(controller) {
+      const next = await reader.read();
+      if (next.done) controller.close();
+      else controller.enqueue(next.value);
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
+  return { head, stream: again };
 }
 
 /** A file's bytes as every host's DuckDB is given them (`fileParts`), whole: what the tab registers. */

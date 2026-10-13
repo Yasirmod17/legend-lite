@@ -935,6 +935,22 @@ From `docs/DATACUBE_MODEL_DESIGN_2026_10_10.md` §13. Each lands once, in the on
    1.5.5.
 4. **Text encodings:** UTF-16, gzipped files, and Latin-1 read as Latin-1. Today a text file is decoded as UTF-8 in
    the page on both hosts (`upload.ts` `fileParts`).
+   - **Built 2026-10-13 (branch `datacube/python-parity-2`):** `fileParts`, the one reader of a picked file on both
+     hosts, reads a file by its first bytes:
+     - gzip's are unpacked first (`DecompressionStream`), then read as what is inside;
+     - UTF-16 is read by its byte-order mark, either order;
+     - UTF-8 when its first 64 KB are UTF-8;
+     - else Latin-1 (the web's windows-1252), each byte its character.
+
+     Every host's DuckDB is given the text as UTF-8, as before. `formatOf` and `tableNameOf` read a gzipped file by
+     its name within (`trades.csv.gz` is a CSV, table `trades`), and both pickers take `.gz`.
+   - **The rule's one limit:** the choice is the first 64 KB's. A Latin-1 byte past them, in a file UTF-8 until there,
+     is replaced, as a File's `text()` replaces it.
+   - **Measured:** `datacube/test/upload.test.ts`:
+     - a Latin-1 CSV opens as José and München;
+     - UTF-16 LE and BE, a gzipped CSV (UTF-8 and UTF-16 inside) and a gzipped JSON read alike;
+     - the 64 KB rule;
+     - the `.gz` names.
 5. **Iceberg files on Python. Decided 2026-10-12 (the user): ship the extension.**
    - **Pins.** DuckDB 1.5.5's `iceberg`, and the `avro` it reads manifests with, pinned in `MODULE.bazel` as httpfs is
      (`http_file` per platform; their integrity measured 2026-10-13):
