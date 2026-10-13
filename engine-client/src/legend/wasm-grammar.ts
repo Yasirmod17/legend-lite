@@ -80,6 +80,20 @@ export function plannerFetch(port: PlannerPort): typeof fetch {
   };
 }
 
+/** A pure/v1 answer's body when it is a 200; else the engine's refusal, in its words and status, as a server's is. */
+function answered(folded: string): string {
+  const answer = httpAnswer(folded);
+  if (answer.status === 200) return answer.body;
+  let message = answer.body || `${answer.status}`;
+  let errorType: string | undefined;
+  try {
+    const e = JSON.parse(answer.body) as { message?: string; errorType?: string };
+    if (typeof e.message === 'string') message = e.message;
+    errorType = e.errorType;
+  } catch { /* not JSON: the text is the message */ }
+  throw new EngineError(message, answer.status, errorType);
+}
+
 /** A pure/v1 answer the planner gives (`OK\n<status>\n<type>\n<body>`): its status, media type and body. */
 function httpAnswer(folded: string): { status: number; type: string; body: string } {
   const answer = unfold(folded);
@@ -92,24 +106,16 @@ function httpAnswer(folded: string): { status: number; type: string; body: strin
 }
 
 /**
- * Execute's plan half in the engine's JSON (PureV1Api.jsonPlan; docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C1): every
- * part of the answer but its rows. A relation's: the SQL, the TDS builder and the activities as the answer writes
- * them, and its result's columns; a graph fetch's: the SQL, whose one cell is the objects' JSON array, and its builder.
+ * Execute's plan half in the engine's JSON (PureV1Api.jsonPlan; docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C1): `run`, the
+ * SQL the tab runs -- a relation's JSON wire (the rows as the server's database writes them, one value), a graph
+ * fetch's objects' array -- and the answer's every part but its rows (its text, for the planner's executeAnswer).
  */
-export type ExecutePlan =
-  | {
-    readonly sql: string;
-    readonly builder: TdsBuilder;
-    // the relational activity: its SQL and its trace comment, as the engine writes them
-    readonly activities: readonly { readonly _type: string; readonly sql?: string; readonly comment?: string }[];
-    readonly columns: readonly string[];
-  }
-  | { readonly sql: string; readonly builder: { readonly _type: 'json' } };
-
-/** The TDS builder: each column's name, its Pure type (an enumeration's String) and its relational spelling. */
-export interface TdsBuilder {
-  readonly _type: 'tdsBuilder';
-  readonly columns: readonly { readonly name: string; readonly type: string; readonly relationalType: string }[];
+export interface ExecutePlan {
+  /** The plan's own SQL: what the answer's activity reports. */
+  readonly sql: string;
+  /** What the host runs: one value, the whole result as the database writes it. */
+  readonly run: string;
+  readonly builder: { readonly _type: string };
 }
 
 export class WasmGrammar implements Grammar {
@@ -158,27 +164,25 @@ export class WasmGrammar implements Grammar {
   }
 
   /**
-   * Execute's plan half (ExecutePlan), asked of the planner over `input`'s own model, the only one this tab runs (its
-   * data the page's). A refusal -- a parameter with no value, a query that does not compile -- is the engine's, in its
-   * words and status, as a server's execute refuses it.
+   * Execute's plan half (ExecutePlan) and its text, asked of the planner over `input`'s own model. A refusal -- a
+   * parameter with no value, a query that does not compile -- is the engine's, in its words and status, as a server's
+   * execute refuses it (500, its errorType COMPILATION).
    */
-  async executePlan(input: ExecuteInput): Promise<ExecutePlan> {
+  async executePlan(input: ExecuteInput): Promise<{ readonly plan: ExecutePlan; readonly text: string }> {
+    // the tab runs the model it is handed (its data the page's): that one, the planner's check then always met; a
+    // model not given as text is the planner's to refuse, in the server's words
     const model = input.model as { readonly _type?: string; readonly code?: string };
-    if (model._type !== 'text' || typeof model.code !== 'string') {
-      throw new EngineError('the tab executes a query over a model given as its text', 400);
-    }
-    const answer = httpAnswer(await this.#port.ask({ kind: 'executePlan', body: toJson(input), models: JSON.stringify([model.code]) }));
-    if (answer.status !== 200) {
-      let message = answer.body || `${answer.status}`;
-      let errorType: string | undefined;
-      try {
-        const e = JSON.parse(answer.body) as { message?: string; errorType?: string };
-        if (typeof e.message === 'string') message = e.message;
-        errorType = e.errorType;
-      } catch { /* not JSON: the text is the message */ }
-      throw new EngineError(message, answer.status, errorType);
-    }
-    return JSON.parse(answer.body) as ExecutePlan;
+    const models = model._type === 'text' && typeof model.code === 'string' ? [model.code] : [];
+    const text = answered(await this.#port.ask({ kind: 'executePlan', body: toJson(input), models: JSON.stringify(models) }));
+    return { plan: JSON.parse(text) as ExecutePlan, text };
+  }
+
+  /**
+   * Execute's answer (PureV1Api.jsonAnswer): `plan` (executePlan's text) and the one value the tab's database wrote
+   * running its `run` SQL, arranged by the writers legend-lite's server answers with -- its text, the server's.
+   */
+  async executeAnswer(plan: string, wire: string): Promise<string> {
+    return answered(await this.#port.ask({ kind: 'executeAnswer', plan, wire }));
   }
 
   /** The SQL a query compiles to on its runtime, and the type of its result (upstream's relationType shape). */

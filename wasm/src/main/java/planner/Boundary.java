@@ -73,6 +73,14 @@ public final class Boundary {
         return com.legend.server.PureV1Api.jsonPlan(body, models(modelsJson));
     }
 
+    /**
+     * Execute's answer for a host that ran {@link #executeJsonPlan}'s {@code run} SQL (PureV1Api.jsonAnswer): that
+     * plan's answer and the one value its database wrote, arranged by the writers legend-lite's server answers with.
+     */
+    public static com.legend.server.PureV1Api.Answer executeJsonAnswer(String plan, String wire) {
+        return com.legend.server.PureV1Api.jsonAnswer(plan, wire);
+    }
+
     /** The models a host runs, from their JSON array of texts. */
     private static java.util.List<String> models(String modelsJson) {
         java.util.List<String> models = new java.util.ArrayList<>();

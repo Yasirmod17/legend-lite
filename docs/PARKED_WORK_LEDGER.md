@@ -919,3 +919,30 @@ SQL); B5 lands the store itself.
 
 **Anchor.** `const queries = local ? services.queries : undefined;` in `datacube/src/app/sources.ts` (ParkedWorkLedgerTest
 reads core only; checked by hand).
+
+## PARK-34 — an execute over a column whose relational spelling is unprobed is refused
+
+**Recorded** 2026-10-13 by the DataCube + Python line, with C1 (`docs/ONE_PLATFORM_PROGRAM_2026_10_12.md`: the tab's
+execute answered by the Java the server and Python use; its audit). Execute's TDS answer names each column's relational
+type (`builder.columns[].relationalType`, `UpstreamRelationType.relationalSpelling`), which knows the spellings measured
+against legend-engine 4.145.0 -- Integer, Float, Decimal, Number, String, Boolean, StrictDate, DateTime, Date and
+enumerations -- and refuses any other ("the relational spelling of ... is unprobed").
+
+**What happens today.** An execute whose result has a column of another type -- a Variant (a `SEMISTRUCTURED` store
+column) is the one a page meets -- is refused 500, on legend-lite's server since E8 and in the tab since C1: before C1
+the tab typed its rows itself and never asked the spelling, so such a query ran there. Python's ARROW_IPC answer names
+the same builder, so it refuses alike. Planning (DataCube's grids, `planJson`) is not affected.
+
+**The fix.** Ask legend-engine what its TDS builder spells a Variant column (and each other type a store column can
+have that is not measured), and add it to `relationalSpelling` beside the others, with the probe's date.
+
+**Acceptance.** `PureV1ApiTest`: an execute over a Variant column answers the engine's builder, its relationalType the
+probed spelling; `//datacube:python_execute_test` and the tab agree on it.
+
+**Why parked.** It needs legend-engine run (the L line's), and refusing an unmeasured spelling is the rule (do not
+guess); C1 moved the tab onto the server's answer, which already refused it.
+
+**When.** With L1 (the differential against legend-engine), which runs the engine.
+
+**Anchor.** `is unprobed -- probe legend-engine, do not guess` in `core/src/main/java/com/legend/plan/UpstreamRelationType.java`
+(ParkedWorkLedgerTest).

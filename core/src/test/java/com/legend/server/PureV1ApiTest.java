@@ -267,29 +267,37 @@ class PureV1ApiTest {
     }
 
     /**
-     * E8's plan half in the engine's JSON ({@code jsonPlan}, the tab's: docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C1): the
-     * JSON answer's every part but its rows -- the builder and the activity as {@link PureV1Api#execute} writes them,
-     * the result's columns -- and a graph fetch's SQL with its JSON builder, which the Arrow half refuses.
+     * E8 for a host that runs the SQL on its own database ({@code jsonPlan} then {@code jsonAnswer}, the tab's:
+     * docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C1): the plan's {@code run} SQL is the JSON wire the server's database
+     * writes, and its one value arranged by {@code jsonAnswer} is the server's own answer text, byte for byte (the trace
+     * id each answer's own) -- the database renders every value, Java arranges them, on both. A graph fetch's plan runs
+     * its own SQL, which the Arrow half refuses.
      */
     @Test
-    void e8_jsonPlan_isTheJsonAnswerButItsRows_andAnswersAGraphFetch() throws IOException {
+    void e8_jsonPlanThenJsonAnswer_isTheServersAnswerText_andAGraphFetchIsPlanned() throws Exception {
         String request = "{\"clientVersion\":\"vX_X_X\",\"function\":" + lambda
                 + ",\"model\":" + textModel()
                 + ",\"context\":{\"_type\":\"BaseExecutionContext\"}}";
         PureV1Api.Answer a = PureV1Api.jsonPlan(request, List.of(model));
         assertEquals(200, a.status(), a.json());
         Json.Obj plan = Json.parseObject(a.json());
-        Json.Obj answered = Json.parseObject(execute(request).json());
-        assertEquals(List.of("sql", "builder", "activities", "columns"), new ArrayList<>(plan.fields().keySet()));
-        assertEquals(Json.toCompact(answered.getObj("builder")), Json.toCompact(plan.getObj("builder")));
-        assertEquals(Json.toCompact(answered.getObj("result").get("columns")), Json.toCompact(plan.get("columns")));
+        assertEquals(List.of("sql", "run", "builder", "activities", "columns"), new ArrayList<>(plan.fields().keySet()));
         Json.Obj activity = (Json.Obj) plan.getArr("activities").items().get(0);
-        Json.Obj answeredActivity = (Json.Obj) answered.getArr("activities").items().get(0);
-        assertEquals(new ArrayList<>(answeredActivity.fields().keySet()), new ArrayList<>(activity.fields().keySet()));
         assertEquals(plan.getString("sql"), activity.getString("sql"));
-        assertEquals("relational", activity.getString("_type"));
+        // the run SQL on the same database the server's runner reads: its one value, arranged, is the server's text
+        List<String> setup = sqlNode(Json.parseObject(resource("upstream-api/e9-groupby-sort.json")))
+                .getObj("connection").getObj("datasourceSpecification")
+                .getStringArray("testDataSetupSqls");
+        List<List<Object>> wire = rows(setup, plan.getString("run"));
+        assertEquals(1, wire.size(), String.valueOf(wire));
+        PureV1Api.Answer answered = PureV1Api.jsonAnswer(a.json(), String.valueOf(wire.get(0).get(0)));
+        assertEquals(200, answered.status(), answered.json());
+        java.util.function.UnaryOperator<String> traced = t -> t.replaceAll("executionTraceID\\\\\" : \\\\\"[0-9a-f-]{36}", "ID");
+        assertEquals(traced.apply(execute(request).json()), traced.apply(answered.json()));
         // its host's models only, as the Arrow half
         assertEquals(500, PureV1Api.jsonPlan(request, List.of(model + "\n")).status());
+        // a plan that is not jsonPlan's: refused, never cast
+        assertEquals(500, PureV1Api.jsonAnswer("{\"builder\":5}", "[]").status());
 
         String trading = resource("upstream-api/query-app/trading.pure");
         String fetch = PureV1Api.grammarToJsonLambda("|demo::trading::Trade.all()->graphFetch(#{demo::trading::Trade{tradeId}}#)"
@@ -298,9 +306,12 @@ class PureV1ApiTest {
                 + Json.toCompact(Map.of("_type", "text", "code", trading)) + "}", List.of(trading));
         assertEquals(200, graph.status(), graph.json());
         Json.Obj graphPlan = Json.parseObject(graph.json());
-        assertEquals(List.of("sql", "builder"), new ArrayList<>(graphPlan.fields().keySet()));
+        assertEquals(List.of("sql", "run", "builder"), new ArrayList<>(graphPlan.fields().keySet()));
         assertEquals("{\"_type\":\"json\"}", Json.toCompact(graphPlan.getObj("builder")));
-        assertTrue(graphPlan.getString("sql").toLowerCase(java.util.Locale.ROOT).contains("select"), graph.json());
+        assertEquals(graphPlan.getString("sql"), graphPlan.getString("run"));
+        // one object is written bare, as execute writes it
+        assertEquals("{\"builder\":{\"_type\":\"json\"},\"values\":{\"tradeId\":1}}",
+                PureV1Api.jsonAnswer(graph.json(), "[{\"tradeId\":1}]").json());
     }
 
     /** route: each path answers as its endpoint does; any other is 404 in the engine's shape; execute runs through the runner. */

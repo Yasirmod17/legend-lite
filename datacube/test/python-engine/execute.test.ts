@@ -1,9 +1,11 @@
 // THE TAB'S EXECUTE, ONE IMPLEMENTATION (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C1): an execute answered in the tab --
 // legend-lite's planner (WebAssembly) reading, binding and planning it with the Java the server and Python answer it
-// with (PureV1Api.jsonPlan), DuckDB-WASM running its SQL and the tab's executor typing the rows (engine-client's
-// BrowserEngine) -- against the same execute answered by Python's engine (ARROW_IPC, its plan PureV1Api.arrowPlan), over
-// the same frame: the builder (each column's relationalType), the activity's SQL and its trace comment, the columns,
-// the rows, and a parameter given no value refused in the same words.
+// with (PureV1Api.jsonPlan), DuckDB-WASM writing its rows as the server's database writes them (the JSON wire), and
+// the server's own writers arranging them (PureV1Api.jsonAnswer; engine-client's BrowserEngine) -- against the same
+// execute answered by Python's engine (ARROW_IPC, its plan PureV1Api.arrowPlan), over the same frame: the builder (each
+// column's relationalType), the activity's SQL and its trace comment, the columns, the rows' values, and a parameter
+// given no value refused in the same words. (That the tab's answer TEXT is the server's is PureV1ApiTest's: the same
+// writers over the same database's wire.)
 
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -163,7 +165,8 @@ describe("the tab's execute answers as Python's, the same Java planning both", (
   });
 
   it('a parameter bound by its value, as Python binds it', async () => {
-    const asked = await input('->filter(x|$x.qty > $minQty)->select(~[book, qty])->sort(~book->ascending())', 'minQty: Integer[1]',
+    // sorted to one order: two rows share a book, so the quantity breaks the tie (DuckDB promises no order for ties)
+    const asked = await input('->filter(x|$x.qty > $minQty)->select(~[book, qty])->sort([~book->ascending(), ~qty->ascending()])', 'minQty: Integer[1]',
       [{ name: 'minQty', value: { _type: 'integer', value: 6 } } as unknown as NonNullable<ExecuteInput['parameterValues']>[number]]);
     const mine = await tab.execute(asked) as TdsResult;
     const theirs = await onPython(asked);

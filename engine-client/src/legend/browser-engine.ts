@@ -4,18 +4,18 @@
 // only where the SQL runs differs.
 //
 // It answers legend-engine's API with the Java the server and Python answer it with
-// (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C1): an execute's answer is the planner's -- its parameters bound, its
-// builder, its activities, its columns, or a graph fetch's JSON (PureV1Api.jsonPlan) -- and only its rows are the tab's,
-// its executor running the SQL and typing them; a lambda's return type and an execution plan are the planner's
-// pure/v1, as the server routes them.
+// (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C1): an execute is planned by the planner (its parameters bound, the SQL
+// that writes its rows -- the JSON wire the server's database writes, PureV1Api.jsonPlan), run on the tab's database,
+// and its rows arranged by the server's own writers (PureV1Api.jsonAnswer), so its answer's text is the server's: the
+// database renders every value, Java arranges them, nothing here writes either. A lambda's return type and an
+// execution plan are the planner's pure/v1, as the server routes them.
 
 import { findAll, isFunction, type Lambda } from '../../../pure-protocol/src/index.ts';
 import type { QueryEngine } from '../engine.ts';
-import type { Plan } from '../relation-type.ts';
 import type { PureModelContextData } from './pmcd.ts';
 import { EngineError, type Engine } from './engine.ts';
 import type { WasmGrammar } from './wasm-grammar.ts';
-import type { CompileResult, ExecuteInput, ExecutionResult, PureModelContext, RelationTypeAnswer, TdsResult } from './wire.ts';
+import type { CompileResult, ExecuteInput, ExecutionResult, PureModelContext, RelationTypeAnswer } from './wire.ts';
 
 /** The runtime a query runs on: the last argument of its `->from(...)`. */
 export function runtimeOf(lambda: Lambda): string {
@@ -51,28 +51,15 @@ export class BrowserEngine implements Engine {
   relationType(model: PureModelContext, lambda: Lambda): Promise<RelationTypeAnswer> { return this.#planner.relationType(model, lambda); }
 
   async execute(input: ExecuteInput, signal?: AbortSignal): Promise<ExecutionResult> {
-    const planned = await this.#planner.executePlan(input);
-    if (planned.builder._type === 'json') {
-      // a graph fetch: the database builds the objects' JSON array in one cell
-      const raw = await this.#engine.run(planned.sql, 0, signal);
-      const cell = raw.columns[0]?.values[0];
-      if (typeof cell !== 'string') throw new EngineError('the graph fetch returned no JSON', 500);
-      const values = JSON.parse(cell) as unknown[];
-      // as legend-engine answers: exactly one object is written bare
-      return { builder: { _type: 'json' }, values: values.length === 1 ? values[0] : values };
+    const { plan, text } = await this.#planner.executePlan(input);
+    // the one value the database writes: a relation's rows as the JSON wire, a graph fetch's objects' array
+    const raw = await this.#engine.run(plan.run, 0, signal);
+    const cell = raw.columns[0]?.values[0];
+    if (cell !== undefined && cell !== null && typeof cell !== 'string') {
+      throw new EngineError(`the database wrote its rows as no text (${typeof cell})`, 500);
     }
-    if (!('columns' in planned)) throw new EngineError('the planner answered a relation with no columns', 500);
-    // the rows typed by the builder's types (an enumeration's String, as the engine's TDS builder names it)
-    const plan: Plan = { sql: planned.sql, columns: planned.builder.columns.map((c) => ({ name: c.name, type: c.type })) };
-    const t = await this.#engine.execute(plan, 0, signal);
-    const rows: { values: unknown[] }[] = [];
-    for (let i = 0; i < t.rowCount; i++) rows.push({ values: t.columns.map((c) => c.values[i] ?? null) });
-    const result: TdsResult = {
-      builder: planned.builder,
-      activities: planned.activities,
-      result: { columns: [...planned.columns], rows },
-    };
-    return result;
+    // arranged by the server's own writers: the answer's text is the server's, read as a server's answer is
+    return JSON.parse(await this.#planner.executeAnswer(text, cell ?? '')) as ExecutionResult;
   }
 
   /** `compilation/compile` in the tab, answered by the planner as the server answers it: OK, or its first failure. */
