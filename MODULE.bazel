@@ -473,6 +473,24 @@ http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_
     "windows_amd64": "sha256-ZbMfACxwrF+BLSk7hVK5d9HA5nUtChEnF2RUyBhO0AE=",
 }.items()]
 
+# DuckDB's httpfs extension for Python's DuckDB (1.5.5, as duckdb's Python wheel is pinned: tools/python/requirements.in;
+# it must match exactly), one per platform, pinned by content. Pinned 2026-10-12 on the user's ruling that day: httpfs
+# hermetic in the build (never downloaded where legend-lite runs, CI reading remote files offline), and Python reading
+# only remote URL schemes. A page on Python reads a remote file through it
+# (docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md, step 2b). The wheel carries it (//python:wheel_duckdb); nothing is
+# downloaded where it runs.
+[http_file(
+    name = "duckdb_httpfs_extension_" + platform,
+    integrity = sha,
+    urls = ["https://extensions.duckdb.org/v1.5.5/" + platform + "/httpfs.duckdb_extension.gz"],
+) for platform, sha in {
+    "osx_arm64": "sha256-dYrMCwxPvwlQbzh/9vUoJrEDi3toSd7TmSjS+ZKUUjA=",
+    "osx_amd64": "sha256-9EXCaS+GO/+CYJxwYebic6TZ/TtmleVqbrwYvVAu1GQ=",
+    "linux_amd64": "sha256-fN1SoxNTiHGIhKm3HjmHunIwAhIejp3jmcTtYZ2CSgU=",
+    "linux_arm64": "sha256-CCDgtbdO+qI2CMI53450SmiUMxjVMLSDpSnqzhnLVHU=",
+    "windows_amd64": "sha256-u0qfJyHENDkAbm53Y2SnSNJGn5Lf5eXr42XtEOK+Dng=",
+}.items()]
+
 # THE BROWSER the harnesses drive (Bazel workplan P1-14, spike S4): Playwright 1.63.0's
 # chromium-headless-shell, revision 1243 = Chrome for Testing 153.0.8010.12 (the locked playwright-core's
 # browsers.json; //tools/browser:revision_test holds them equal). One archive per platform, fetched by
