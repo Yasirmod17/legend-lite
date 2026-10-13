@@ -675,9 +675,13 @@ an audit.
   - the snap's count (3) and its receipt (as rita, 3 rows on the server);
   - the copy's rows read in Python's DuckDB;
   - refused again once released.
-- **Not measured in a browser:** `sources.ts`'s `openedHostTable`, the `hostSnap` and `signInAgain` wiring through
-  `GridPlace`, `GridSource` and `CubeApp`, and the plane button on a grid of Python's page. The typecheck and the
-  plane tests hold them; the browser test drives the services the grid calls.
+- **In a browser, as a person does it** (added 2026-10-13, `//datacube:python_engine_test`):
+  - Python's page signs in through the Database section and opens the table.
+  - It reads Live: "Live", the warehouse's receipt as rita, Snap offered into Python's database.
+  - The grid's plane button snaps it: "Snapped", "a copy in Python's database", the receipt "Python's copy".
+  - Clicked again, it is Live once more.
+
+  Not driven in a browser: `signInAgain` on an expired session, held by the typecheck and the Python tests.
 - **Changed from the design:** the copy is read only through the warehouse model's snap runtime, not served like a
   page's file. The refusal of a table whose model a frame or file holds cannot fire today: a frame's model is written
   under its own package with no snap runtime, so the two texts differ. It stays as the guard of that rule.
@@ -719,6 +723,24 @@ an audit.
   saved stores fetch `queries/`.
 - `:planner_worker`, a copy of engine-client's worker since C2, left DataCube's `:bundles` (`//:web`), as Studio's
   did (`//tools/guards:compile_only_test`).
+
+#### C5. A project's data where its queries run (PARK-35, PARK-33)
+
+Added 2026-10-13 (the user: "make sure park35 and park33 are on the list to do").
+
+**Goal.** A project's queries run on the project's own data on every host, not only in a browser tab.
+- Query and Studio on Python, and on legend-lite's server, then run a project's query. Today Python refuses, and the
+  server runs on an empty in-memory DuckDB: PARK-35.
+- A saved query opens as a grid on Python's page: PARK-33.
+
+**The design question, the user's first** (one architecture for both server hosts, before either is coded):
+- Where a project's database lives: one per project and version, filled from its `###Data` elements by the planner's
+  statements (Pure, never the page's SQL: R4).
+- When it is made, and when it closes.
+
+**Proof.** PARK-35's acceptance: a query built in Query on Python over a published demo project answers the rows the
+tab answers, and the same on legend-lite's server. PARK-33's: a query saved in the tab opens from Saved queries on
+Python's page, its rows as the tab shows them.
 
 #### C4. The small copies
 
@@ -820,6 +842,11 @@ engine, as `ll.show()` opens DataCube.
 - **Where the link is clicked.** Strict holds where it is clicked on another site (Jupyter's output, at
   `localhost:8888`; the Studio line's question, measured): the cookie is stored from the cross-site load, the page's
   files need none, and the page's own calls are same-site, so they carry it.
+- **Studio's link from DataCube on Python** (added 2026-10-13): `services.json` names the apps Python serves (`apps`),
+  and Python's model home then gives Studio's link to a project. That link is the editor's address with the engine's
+  token, which its first load trades for Studio's cookie. A notebook's cube, whose channel carries no token, gives none.
+  `//datacube:python_engine_test` serves Studio as the wheel ships it (`//python:wheel_studio_site`): Create a Class…
+  on Python's page offers "Open it in Studio", and the link opens Studio on the workspace with the class.
 - **The session keeps the web server for an app.** An app's tab says nothing when it closes, so once `ll.query()` or
   `ll.studio()` is called, the web server stays while the process lives (closing the last cube no longer stops it),
   and a plain script's end waits for the app as for a cube (a link only printed, `browser=False`, ends with it).
@@ -973,7 +1000,8 @@ PyPI; the npm packages' third-party notices; the FINOS name; the copyright-holde
 | 4 | One engine path | C1 + C2 + C4 | The tab answers legend-engine's execute API with Python's Java; Query's SQL button with no server; one planner protocol |
 | 5 | Warehouse on Python | C3 | Warehouse tables on Python's pages, Live on the warehouse, Snap into Python's DuckDB |
 | 6 | Studio and Query from Python | G11 + E | `ll.studio()` and `ll.query()` on Python's own SDLC, saved queries and engine |
-| 7+ | The model plan | F1 to F5 (B7 with F4) | Dashboards on classes, joins in prep, the model view, promote and publish, measures |
+| 7 | A project's data where its queries run | C5 (PARK-35 + PARK-33) | Query and Studio on Python, and on legend-lite's server, run a project's queries on its own data; a saved query opens as a grid on Python's page |
+| 8+ | The model plan | F1 to F5 (B7 with F4) | Dashboards on classes, joins in prep, the model view, promote and publish, measures |
 
 - Rows 1 to 3 are independent of each other, so each lands as soon as it is green.
 - Row 6 needs rows 2 and 3.

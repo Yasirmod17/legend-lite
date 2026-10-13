@@ -82,6 +82,8 @@ export interface PythonOffers {
   readonly modelHome?: { readonly where: string };
   /** Whether it reads a warehouse's tables (C3: Python signs in as this user; the token never reaches the page). */
   readonly warehouse?: boolean;
+  /** The apps it serves beside DataCube (E: `query`, `studio`), when it has their sites. */
+  readonly apps?: readonly string[];
   readonly plane: PythonPlane;
   readonly planes: readonly PythonPlane[];
 }
@@ -349,7 +351,7 @@ function pythonBrowser(link: PythonLink, browser: BrowserService, kept: Record<s
 export async function askedOffers(link: PythonLink): Promise<PythonOffers> {
   const said = JSON.parse(await asked(link, 'services.json')) as {
     files?: unknown; remote?: unknown; pages?: { where?: unknown; user?: unknown }; modelHome?: { where?: unknown };
-    warehouse?: unknown; plane?: unknown; planes?: unknown;
+    warehouse?: unknown; apps?: unknown; plane?: unknown; planes?: unknown;
   };
   if (typeof said.files !== 'boolean' || typeof said.remote !== 'boolean') {
     throw new Error(`the engine did not say which of a page's files it reads: ${JSON.stringify(said)}`);
@@ -362,6 +364,7 @@ export async function askedOffers(link: PythonLink): Promise<PythonOffers> {
     files: said.files, remote: said.remote, pages: { where: said.pages.where, user: said.pages.user },
     ...(typeof said.modelHome?.where === 'string' ? { modelHome: { where: said.modelHome.where } } : {}),
     ...(said.warehouse === true ? { warehouse: true } : {}),
+    ...(Array.isArray(said.apps) ? { apps: said.apps.filter((a): a is string => typeof a === 'string') } : {}),
     plane: planeOf(said.plane), planes: said.planes.map(planeOf),
   };
 }
@@ -369,13 +372,21 @@ export async function askedOffers(link: PythonLink): Promise<PythonOffers> {
 /**
  * PYTHON'S MODEL HOME (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B3): the SDLC and its Depot Python serves
  * (`/sdlc/api`, `/depot/api`), the very rules the browser's in-page SDLC runs, over a git repository in this user's
- * folder; reached by the same clients, each call carrying the engine's token. No Studio link until Python serves Studio
- * (the program's E).
+ * folder; reached by the same clients, each call carrying the engine's token; and Studio's link to a project, where
+ * Python serves Studio (the program's E).
  */
-function pythonModelHome(link: PythonLink, where: string): ModelHomeService {
+function pythonModelHome(link: PythonLink, where: string, apps: readonly string[]): ModelHomeService {
   const withToken = tokened(link);
   let home: ReturnType<ModelHomeService['connect']> | undefined;
+  // Studio's editor on a project of this model home, where Python serves Studio (E) and the page holds the engine's
+  // token (a tab's; a notebook's channel carries none): the link's first load trades the token for Studio's cookie
+  const token = link.authorization?.startsWith('Bearer ') ? link.authorization.slice('Bearer '.length) : undefined;
+  const studio = apps.includes('studio') && token !== undefined
+    ? (project: string, workspace: string): string => `${link.baseUrl}/studio/demo/index.html?token=${encodeURIComponent(token)}`
+      + `#/edit/${encodeURIComponent(project)}/${encodeURIComponent(workspace)}`
+    : undefined;
   return {
+    ...(studio ? { studio } : {}),
     // the clients fetched the first time a model action asks, as the tab's model home's are: the page's startup carries
     // neither
     connect: () => (home ??= Promise.all([
@@ -544,7 +555,7 @@ export function pythonServices(o: PythonServicesOptions): Services {
       },
     },
     pages: Promise.resolve(pythonPages(link, o.offers)),
-    ...(o.offers.modelHome ? { modelHome: pythonModelHome(link, o.offers.modelHome.where) } : {}),
+    ...(o.offers.modelHome ? { modelHome: pythonModelHome(link, o.offers.modelHome.where, o.offers.apps ?? []) } : {}),
     ...(o.offers.warehouse ? { warehouse: pythonWarehouse(link) } : {}),
     live: {
       watch: o.watch,

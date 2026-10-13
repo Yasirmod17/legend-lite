@@ -586,9 +586,11 @@ class Engine:
         model_home = {'where': str(self.model_home_folder())}
         # where the query store keeps the saved queries (B5), and whose they are
         queries = {'where': str(queries_folder()), 'user': _QUERY_USER}
-        # a warehouse's tables (C3): Python signs in to one as this user and reads its tables Live
+        # a warehouse's tables (C3): Python signs in to one as this user and reads its tables Live; and the apps it
+        # serves (E), whose links a page may give (Studio's, over the model home's projects)
+        apps = [app for app in _APPS if _app_site(app) is not None]
         return {'files': self.takes_files(), 'remote': self.takes_remote(), 'pages': pages, 'modelHome': model_home,
-                'queries': queries, 'warehouse': True, 'plane': plane, 'planes': [plane]}
+                'queries': queries, 'warehouse': True, 'apps': apps, 'plane': plane, 'planes': [plane]}
 
     def pages_folder(self) -> Path:
         """Where the page's saved pages are kept: the folder given, else this user's (``home()/pages``), as it is now."""

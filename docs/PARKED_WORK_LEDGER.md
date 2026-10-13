@@ -915,8 +915,8 @@ Python's page, its rows as the tab shows them.
 **Why parked.** It is a design of its own (a mapping planned on Python; a project's data made without the page's
 SQL); B5 lands the store itself.
 
-**When.** With PARK-35 (a project's queries on Python and legend-lite's server), whose mechanism it is: E (Query from
-Python) landed without it.
+**When.** Planned with PARK-35, whose mechanism it is: the program's C5, pull request 7
+(docs/ONE_PLATFORM_PROGRAM_2026_10_12.md §6). E (Query from Python) landed without it.
 
 **Anchor.** `const queries = local ? services.queries : undefined;` in `datacube/src/app/sources.ts` (ParkedWorkLedgerTest
 reads core only; checked by hand).
@@ -974,7 +974,8 @@ statements (Pure, never the page's SQL: R4), kept per project and version, and c
 The cost while parked: on Python (and on legend-lite's server), Query and Studio build, show and save a project's
 query but give no rows for it; a tab of either app in its own browser plane does.
 
-**When.** Asked of the user with E's landing (the design question: where a project's database lives, and its life).
+**When.** Planned: the program's C5, pull request 7 (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md §6), after its design
+question (where a project's database lives, and its life) is the user's.
 
 **Anchor.** The refusal's text in `PureV1Api.hosted` ("a project's queries run only in a browser tab for now"),
 `ParkedWorkLedgerTest`.

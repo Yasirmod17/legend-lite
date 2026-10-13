@@ -60,6 +60,7 @@ const engine = spawn(fixture, ['--site', site], {
   env: { ...process.env, LEGEND_LITE_LIBRARY: runfileFromEnv('LEGEND_LITE_LIBRARY'),
     LEGEND_LITE_DATACUBE: runfileFromEnv('LEGEND_LITE_DATACUBE'),
     LEGEND_LITE_DUCKDB_EXTENSIONS: runfileFromEnv('LEGEND_LITE_DUCKDB_EXTENSIONS'), LEGEND_LITE_HOME: home, PYTHONUTF8: '1',
+    LEGEND_LITE_STUDIO_SITE: runfileFromEnv('STUDIO_SITE'),
     PYTHONDONTWRITEBYTECODE: '1' },
 });
 // the engine's own account, in this test's log: a server-side reason is then never invisible
@@ -229,10 +230,29 @@ try {
   const classSaid = classShown ? (await cube.locator('.dc-class .dc-picker-status').textContent()) ?? '' : '(no window)';
   const repository = readdirSync(join(home, 'projects', 'refs', 'heads'), { recursive: true });
   const madeClass = /^Created \S+::domain::Book in the project \S+ \(workspace \S+\), in this user's folder/.test(classSaid)
-    && (await cube.locator('.dc-class-studio').count()) === 0 && repository.length > 0;
+    && repository.length > 0;
   console.log(`${madeClass ? 'ok  ' : 'FAIL'} Create a Class… on Python's page makes its class in Python's model home, a git repository`);
   if (!madeClass) {
     console.log(`  the window said: ${classSaid}; the repository's branches: ${JSON.stringify(repository)}`);
+    failed = true;
+  }
+  // AND OPENS IN STUDIO, served by the same Python (E): the window's link, its token traded for Studio's cookie on the
+  // first load, onto the project's workspace with the class in it
+  const studioHref = classShown && (await cube.locator('.dc-class-studio').count()) > 0
+    ? await cube.locator('.dc-class-studio').getAttribute('href') : null;
+  let inStudio = false;
+  if (studioHref !== null && /\/studio\/demo\/index\.html\?token=[^#]+#\/edit\/[^/]+\/[^/]+$/.test(studioHref)) {
+    const studio = await browser.newPage();
+    studio.on('pageerror', (e) => { console.log(`studio error: ${e.message}`); failed = true; });
+    await studio.goto(studioHref);
+    inStudio = await studio.waitForFunction(() => /\bBook\b/.test(document.body.innerText) && !location.search.includes('token='),
+      undefined, { timeout: 60_000 }).then(() => true, () => false);
+    if (!inStudio) console.log(`  Studio showed: ${(await studio.evaluate(() => document.body.innerText.slice(0, 300)))}`);
+    await studio.close();
+  }
+  console.log(`${inStudio ? 'ok  ' : 'FAIL'} the class opens in Studio, served by the same Python, from the window's link`);
+  if (!inStudio) {
+    console.log(`  the link: ${studioHref}`);
     failed = true;
   }
   if (classShown) {
@@ -348,6 +368,61 @@ try {
   console.log(`${icebergRead ? 'ok  ' : 'FAIL'} an Iceberg table opened on Python's page is read by Python's DuckDB, through the iceberg it carries`);
   if (!icebergRead) {
     console.log(`  the page showed: ${(await cube.evaluate(() => document.body.innerText.slice(0, 300)))}`);
+    failed = true;
+  }
+
+  // A WAREHOUSE TABLE ON PYTHON'S PAGE (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C3), by the app's own Database section:
+  // Python signs in as rita, the table opens Live (its rows the warehouse's, its receipt saying so), the grid's plane
+  // button snaps it into Python's DuckDB (the button and the receipt saying where the copy is), and goes live again
+  await cube.click('.dc-titlebar-menu');
+  await cube.locator('.dc-menu .dc-menu-item', { has: cube.locator(':scope > .dc-menu-label:text-is("New")') }).hover();
+  await cube.locator('.dc-menu .dc-menu-item', { has: cube.locator(':scope > .dc-menu-label:text-is("Blank Page")') }).click();
+  await cube.locator('.dc-blank .dc-primary').click();
+  await cube.locator('.dc-picker-tab[data-section="database"]').click();
+  await cube.getByLabel('Address').fill(warehouseUrl);
+  await cube.getByLabel('User').fill('rita');
+  await cube.getByLabel('Password').fill('rita-pw');
+  await cube.click('.dc-picker-form .dc-primary');
+  await cube.click('.dc-picker-row[data-object="main.POSITIONS"]', { timeout: 60_000 });
+  // the plane button and the receipt of the grid on screen (an earlier page's are in the document too, hidden)
+  const plane = () => cube.evaluate(() => {
+    const shown = (e) => e !== null && e.offsetParent !== null;
+    const toggle = [...document.querySelectorAll('.dc-titlebar-toggle')].find(shown);
+    const receipt = [...document.querySelectorAll('.dc-status-receipt')].find(shown);
+    return { text: toggle?.textContent?.trim() ?? '', title: toggle?.getAttribute('title') ?? '', receipt: receipt?.textContent ?? '',
+      rows: /\b3 rows\b/.test(document.body.innerText), picker: document.querySelector('.dc-picker') !== null };
+  });
+  const until = async (want) => {
+    const t0 = Date.now();
+    for (;;) {
+      const p = await plane();
+      if (want(p) || Date.now() - t0 > 60_000) return p;
+      await cube.waitForTimeout(200);
+    }
+  };
+  const live = await until((p) => !p.picker && p.rows && p.text === 'Live' && /the warehouse/.test(p.receipt));
+  const liveOk = !live.picker && live.rows && live.text === 'Live' && /the warehouse/.test(live.receipt) && /rita/.test(live.receipt)
+    && /snap a copy of your rows into Python's database/.test(live.title);
+  console.log(`${liveOk ? 'ok  ' : 'FAIL'} a warehouse table opened on Python's page reads Live on the warehouse, as rita, its Snap offered into Python's database`);
+  if (!liveOk) {
+    console.log(`  the grid said: ${JSON.stringify(live)}`);
+    failed = true;
+  }
+  await cube.locator('.dc-titlebar-toggle:visible').click();
+  const snapped = await until((p) => p.text === 'Snapped' && /Python's copy/.test(p.receipt));
+  const snappedOk = snapped.text === 'Snapped' && /Python's copy/.test(snapped.receipt) && /a copy in Python's database/.test(snapped.title)
+    && /3 rows/.test(snapped.title) && snapped.rows;
+  console.log(`${snappedOk ? 'ok  ' : 'FAIL'} its plane button snaps it into Python's DuckDB, the button and the receipt saying where the copy is`);
+  if (!snappedOk) {
+    console.log(`  the grid said: ${JSON.stringify(snapped)}`);
+    failed = true;
+  }
+  await cube.locator('.dc-titlebar-toggle:visible').click();
+  const back = await until((p) => p.text === 'Live' && /the warehouse/.test(p.receipt));
+  const backOk = back.text === 'Live' && /the warehouse/.test(back.receipt) && back.rows;
+  console.log(`${backOk ? 'ok  ' : 'FAIL'} clicked again, it reads Live on the warehouse once more, the copy let go`);
+  if (!backOk) {
+    console.log(`  the grid said: ${JSON.stringify(back)}`);
     failed = true;
   }
 
