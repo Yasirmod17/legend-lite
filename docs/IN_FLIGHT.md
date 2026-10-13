@@ -858,11 +858,11 @@ mapping from our platform names to DuckDB's extension names, spelled by hand in 
 `warehouse/defs.bzl`, is one constant in `tools/platforms/defs.bzl`; the same five repositories on the same five
 platforms. Audited; the DataCube line approved python's part. No announcement went first: no `core/` file, no behaviour.
 
-**Landed 2026-10-13 -- one `//tools/teavm:api` (branch `build/one-teavm-api`; run 38406686025; GATES entry "One
-`//tools/teavm:api`: TeaVM's compile-time annotations in one library"):** a Bazel-only tidy-up: the four identical
-neverlink libraries in wasm, sdlc-server, query-store and warehouse are one in `tools/teavm`, visible to those four
-packages; the same two jars on the same compile classpaths. Audited; the DataCube and Studio lines approved their
-packages' parts. No announcement went first: no `core/` file, no behaviour.
+**Landed 2026-10-13 -- one `//tools/teavm:api` (branch `build/one-teavm-api`; run 38406686025, main's own run on the
+landing 38409010126 green; GATES entry "One `//tools/teavm:api`: TeaVM's compile-time annotations in one library"):** a
+Bazel-only tidy-up: the four identical neverlink libraries in wasm, sdlc-server, query-store and warehouse are one in
+`tools/teavm`, visible to those four packages; the same two jars on the same compile classpaths. Audited; the DataCube
+and Studio lines approved their packages' parts. No announcement went first: no `core/` file, no behaviour.
 
 **Announced 2026-10-12 -- the semi-structured step: jsonb, LATERAL, set-returning functions** (the user's ask: JSON
 and Variant are what lite's DuckDB users do; branch `claude/loving-euler-gjta59`, three commits over main c03ac6b; the
