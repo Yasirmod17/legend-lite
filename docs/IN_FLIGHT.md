@@ -189,7 +189,46 @@ with the compiler's plan/execution split**, in this order:
    the Studio line's, reviewed by it); `native/` (`lite_saved_queries` over a folder, as `lite_sdlc_handle` is);
    `python/` (Python serves `/api/pure/v1/query` from `ll.home()/queries` under the folder's lock); `datacube/` and
    `query/demo/main.ts` (the store's factory). Reviews: the Studio line (query-store, query), the Compiler Rewrite line
-   (the BUILD files, the TeaVM target), an audit; the acceptance test is the Studio line's L1 saved-query differential. **Step 2's second landing announced 2026-10-11 (rule 5; branch `datacube-m3`; the design's §15.6a,
+   (the BUILD files, the TeaVM target), an audit; the acceptance test is the Studio line's L1 saved-query differential.
+   B5 built and approved there (Studio, Compiler Rewrite, the audit's fixes). **B6 announced 2026-10-13 (same branch):
+   DataCube's saved pages on one implementation.** Files: new `core/src/main/java/com/legend/queries/`
+   `{SavedCubes,FileCubeRecords,MemoryCubeRecords}.java` (the rules of `datacube/src/cube-store.ts`'s `RuleStore`, moved
+   to Java beside the saved queries' and in the same `//core:saved_queries`), `core/.../server/LegendHttpServer.java`
+   (`/api/pure/v1/query/dataCube` answered from `--query-store DIR/dataCube`); `query-store/java/.../QueriesPage.java`
+   (a `cubes` export on the same module), `query-store/src/wasm-server.ts` (its type), `query-store/test/lite-server.ts`
+   (the server's start and stop out of `lite.test.ts`, for both suites) and `query-store/BUILD.bazel` (visibility to
+   `//datacube`) -- the Studio line's; `native/` (`lite_saved_cubes`), `python/` (Python's dataCube routes over
+   `ll.home()/pages`, `page.save()`), `datacube/` (the one client), `gates/BUILD.bazel` (the new test's lane). Reviews:
+   the Studio line, the Compiler Rewrite line, an audit. B6 built and approved there (Studio, Compiler Rewrite, the
+   audit's fixes). **PR 4 announced 2026-10-13 (same branch): C1 + C2 + C4, one engine path.** Files: C1 --
+   `core/src/main/java/com/legend/server/PureV1Api.java` (`jsonPlan`, execute's plan half in the engine's JSON, beside
+   `arrowPlan`, one planning step shared), `wasm/src/main/java/planner/{Boundary,TabExports}.java` (its export),
+   `engine-client/src/legend/{browser-engine,wasm-grammar,planner-answer}.ts` (the tab's execute answered by that Java,
+   its rows the tab's; return type and execution plan through the tab's pure/v1), the callers in `query/demo/main.ts`,
+   `studio/src/app/app.ts` and `studio/test/engine.test.ts`; C2 -- one planner protocol in `engine-client` answered by
+   the tab's worker and `python/legend_lite/_planner.py` (DataCube's, Query's and Studio's planners on it); C4 -- one
+   table of the site's file types, one saved-query context reader (DataCube's and Query's). Reviews: the Plan Gen /
+   Exec Split line (the boundary), the Compiler Rewrite line, the Studio line (Query, Studio), an audit. PR 4 built and
+   approved there (files beyond the announcement: `//site:types`, a Java table of the site's media types the warehouse's
+   server and Python read; `query-store/src/context.ts`; `native/` entries). **PR 6 announced 2026-10-13 (same branch;
+   PR 5, C3, after it): G11 + E, Studio and Query from Python.** Files: G11 -- `sdlc-server/.../{GitStorage,SdlcServer}.java`
+   (the repository's own lock, which the model home's server and Python's native library take; the Studio line's),
+   `native/.../ModelHome.java`; E -- `python/` (Query's and Studio's sites served by Python's engine with a
+   `config.json` each pointing at Python, `ll.query()`, `ll.studio()`, the token exchanged for a cookie on the first
+   load, `/api/server/v1/currentUser` and `/api/lite/v1/*`), `python/BUILD.bazel` (the two sites in the wheel), and what
+   Query's and Studio's clients need to carry it. Reviews: the Studio line (its apps' configuration), the Compiler
+   Rewrite line (the wheel), an audit. PR 6 built and approved there (files beyond the announcement: `core/.../server/
+   PureV1Api.java`'s refusal text and a `ParkedWorkLedgerTest` row, PARK-35: a project's queries run only in a tab).
+   **PR 5 announced 2026-10-13 (same branch): C3, warehouse tables on Python's pages.** Files: `warehouse/` -- the
+   one binding's JSON surface `sqlapi/SqlApiCalls.java` beside `NativeBinding` (which gains the key sign-in and the
+   poll), `ApiJson`'s readers checked by kind, `CatalogColumn`'s structured fields, a page module
+   `//warehouse:sqlapi_page`, a recorded corpus, `warehouse/BUILD.bazel`; `native/` (`lite_warehouse_call`,
+   `lite_warehouse_read`); `engine-client/src/warehouse.ts` (the tab's driver over that binding, its hand spelling of
+   the API gone) and `engine-client/src/snap.ts` (a host's snap beside the page's); the callers in
+   `query/demo/main.ts` and `query/BUILD.bazel` (the module at `vendor/warehouse/`); `python/` (`legend_lite/warehouse.py`,
+   the twin driver; Python signs in, writes and holds a table's model, runs its plans Live and snaps it into its
+   DuckDB); `datacube/` (a table opened through its host). Reviews: the Compiler Rewrite line (the warehouse's and the
+   native library's BUILD), the Studio line (Query, engine-client), an audit. **Step 2's second landing announced 2026-10-11 (rule 5; branch `datacube-m3`; the design's §15.6a,
    agreed with the user): a cross-area edit in `core/`** -- the route renamed and two more beside it,
    `/api/lite/v1/model/createClass` (was `/api/lite/v1/relational/promoteRelationToModel`), `createAssociation`,
    `createDataSpace`, one atomic writer under them. Core files: `core/src/main/java/com/legend/server/`
