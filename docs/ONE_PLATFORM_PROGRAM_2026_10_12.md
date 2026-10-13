@@ -636,7 +636,7 @@ engine, as `ll.show()` opens DataCube.
 - **What the cookie costs, and its guard (E's audit).** SameSite is by host, not by port, so a page of any other server
   on 127.0.0.1 sends the cookie too. The cookie therefore admits a call only when the browser marks it the page's own
   (`Sec-Fetch-Site: same-origin`), or, a browser that marks none, when its `Origin` is the engine's. A form or a
-  `no-cors` fetch from another port is refused (`AppsServed`). The header is read by hand: it carries every local
+  `no-cors` fetch from another port is refused (`AppsServed`; in Chromium, the evidence walk's last check: 401). The header is read by hand: it carries every local
   server's cookies, and `http.cookies` drops the whole header at the first value it cannot read. What stays: while the
   browser runs, the token goes in that header to every server on 127.0.0.1 the browser visits, and any of them can
   overwrite the cookie (the app then answers 401 until the link is opened again). It also passes once in an address,

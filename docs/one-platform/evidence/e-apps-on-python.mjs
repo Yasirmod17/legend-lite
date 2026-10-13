@@ -4,7 +4,9 @@
 //      cookie is SameSite=Strict, and the page's own calls are same-site, so they carry it;
 //   1. Studio: "Load demo projects" writes the demo's four projects into Python's repository and publishes each;
 //   2. Studio: a published project viewed read-only and compiled (F9);
-//   3. Query: the landing lists the Depot's projects; one opened at HEAD; a class's query built (two columns) and run.
+//   3. Query: the landing lists the Depot's projects; one opened at HEAD; a class's query built (two columns) and run;
+//   4. a page of another server on 127.0.0.1 (another port: the same site, so the browser sends it the cookie) POSTs a
+//      saved query, no-cors: the engine refuses it (E's audit, B1), and the app's own calls still answer.
 //
 // Run, after `bazel build //python:wheel` and installing it into a virtual environment, with Python serving:
 //   LEGEND_LITE_HOME=<empty folder> <venv>/bin/python -c "import json, time, legend_lite as ll; \
@@ -13,7 +15,7 @@
 // (22.16) and DataCube's Playwright (`bazel build //datacube:node_modules` for bazel-bin/datacube/node_modules; its
 // Chromium, Playwright's own download, not the chain's pinned headless shell):
 //   node docs/one-platform/evidence/e-apps-on-python.mjs '<the printed JSON>' "$PWD/bazel-bin/datacube/node_modules/"
-// Measured 2026-10-13 (Apple silicon laptop): all seven checks ok -- the demo published in 292 ms, the Depot's four
+// Measured 2026-10-13 (Apple silicon laptop): all eight checks ok -- the demo published in 293 ms, the Depot's four
 // projects listed -- with no page error and no failed call, but the last run's
 // execute, refused 500 as PARK-35 says ("a project's queries run only in a browser tab for now").
 import { createRequire } from 'node:module';
@@ -64,4 +66,18 @@ const refusal = /a project's queries run only in a browser tab/.test(await text(
 step('Query: the run refused as PARK-35 says', refusal && failed.length === before + 1, failed.slice(before).join(', '));
 step('no page error, and no failed call but the run', errors.length === 0 && failed.length === before + 1,
   JSON.stringify({ errors, failed }));
+
+const origin = new URL(links.query).origin;
+const elsewhere = http.createServer((_, r) => { r.setHeader('Content-Type', 'text/html'); r.end('<p>another server</p>'); });
+await new Promise((ok) => elsewhere.listen(0, '127.0.0.1', ok));
+const another = await page.context().newPage();
+const answered = [];
+another.on('response', (r) => answered.push(r.status()));
+await another.goto(`http://127.0.0.1:${elsewhere.address().port}/`);
+await another.evaluate((o) => fetch(`${o}/api/pure/v1/query`, { method: 'POST', mode: 'no-cors', credentials: 'include',
+  headers: { 'Content-Type': 'text/plain' }, body: '{}' }), origin);
+const own = await page.evaluate(async (o) => (await fetch(`${o}/api/server/v1/currentUser`)).status, origin);
+step('another port\'s POST refused, the page\'s own call answered', answered.at(-1) === 401 && own === 200,
+  JSON.stringify({ other: answered.at(-1), own }));
+elsewhere.close();
 await browser.close();
