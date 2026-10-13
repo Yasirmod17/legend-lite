@@ -15,7 +15,10 @@ processes share (two notebooks at once).
 
 The page's own settings (the grids' defaults, kept between visits: the browser keeps them per site) are kept here too,
 one file (``home()/settings/datacube.json``): every notebook and run of this user's shows them, where the browser's
-storage would lose them with each run's new address (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B2)."""
+storage would lose them with each run's new address (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B2).
+
+And the model home (B3): the SDLC's projects, a git repository (``home()/projects``) the native library's SDLC writes
+as the model home's server writes its own, each call under the folder's lock."""
 
 from __future__ import annotations
 
@@ -119,7 +122,7 @@ class SavedPages:
         return record
 
     def _locked(self) -> contextlib.AbstractContextManager[None]:
-        return _locked(self.folder)
+        return locked(self.folder)
 
 
 class Settings:
@@ -132,7 +135,7 @@ class Settings:
     def read(self) -> dict[str, Any] | None:
         """What the page last kept, or None: none kept, or a file that is not one (said on standard error)."""
         path = self.folder / 'datacube.json'
-        with _locked(self.folder):
+        with locked(self.folder):
             if not path.is_file():
                 return None
             try:
@@ -146,7 +149,7 @@ class Settings:
         """The page's settings, kept whole: to a file beside them, then moved over them."""
         if not isinstance(values, dict):
             raise ValueError("DataCube's settings are one object")
-        with _locked(self.folder):
+        with locked(self.folder):
             written = tempfile.NamedTemporaryFile('w', encoding='utf-8', dir=self.folder, suffix='.part', delete=False)
             try:
                 with written:
@@ -158,7 +161,7 @@ class Settings:
 
 
 @contextlib.contextmanager
-def _locked(folder: Path) -> Iterator[None]:
+def locked(folder: Path) -> Iterator[None]:
     """A folder of this user's held for one call, across every Python process of this user (a lock file in it). The
     folder and the one it is in are made private to this user when this makes them."""
     folder.parent.mkdir(mode=0o700, parents=True, exist_ok=True)

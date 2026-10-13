@@ -231,8 +231,9 @@ export interface QueryService {
 export interface ModelHomeService {
   /** The SDLC and its Depot, connected the first time they are asked for. */
   connect(): Promise<ModelHome>;
-  /** Studio, opened on a project's workspace, where the host serves it. */
-  studio(project: string, workspace: string): string;
+  /** Studio, opened on a project's workspace, where the host serves it; absent where none is (Python's, until it serves
+   *  Studio: docs/ONE_PLATFORM_PROGRAM_2026_10_12.md E). */
+  studio?(project: string, workspace: string): string;
 }
 
 // ------------------------------------------------------------------------------------------------------ the warehouse

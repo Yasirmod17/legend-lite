@@ -991,7 +991,8 @@ export async function openDataCube(o: OpenDataCube): Promise<DataCubeApp> {
         pageName: current.name ?? ((page.suggestedName || sourceName).replace(/\.[A-Za-z0-9]+$/, '') || 'page'),
         model: current.model,
         client: home.client,
-        studio: (project, workspace) => modelHome.studio(project, workspace),
+        where: home.where,
+        ...(modelHome.studio ? { studio: (project: string, workspace: string) => modelHome.studio!(project, workspace) } : {}),
         persist,
       });
       if (!model) return;
@@ -1024,8 +1025,9 @@ export async function openDataCube(o: OpenDataCube): Promise<DataCubeApp> {
           pageName: current.name ?? ((page.suggestedName || sourceName).replace(/\.[A-Za-z0-9]+$/, '') || 'page'),
           model: current.model,
           client: home.client,
+          where: home.where,
           grids,
-          studio: (project, workspace) => modelHome.studio(project, workspace),
+          ...(modelHome.studio ? { studio: (project: string, workspace: string) => modelHome.studio!(project, workspace) } : {}),
           persist,
           duplicate: duplicateLambda,
           call: (path) => fn(path),

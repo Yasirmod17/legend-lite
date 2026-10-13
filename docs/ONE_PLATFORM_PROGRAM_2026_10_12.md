@@ -82,6 +82,17 @@ built here and reviewed by that line (Compiler Rewrite for Bazel, Plan Gen for t
    `/depot/api`, headless calls them in-process. The SDLC's conformance suite (`sdlc-client/test/conformance.ts`)
    runs against the server, the browser's module and Python. Python's pages get Create a Class… and the rest.
    - Build: `GitStorage` its own target, `sdlc-server`'s rules visible to `//native` (the Studio line's file).
+   - **Built 2026-10-12.**
+     - The native library's `ModelHome.java`: `lite_sdlc_handle` and `lite_depot_handle`, the rules over `GitStorage`
+       in `ll.home()/projects`. The library grew from 52.8 to 54.3 MB on macOS.
+     - Python serves both APIs under its token, a lock across processes around each call, DELETE for the model home
+       only.
+     - The SDLC's conformance suite, 28 tests, passes against Python (`//datacube:python_model_home_test`), as it does
+       against the page's module and the server.
+     - Python's pages get a model home service; no Studio link until E.
+     - Create a Class… runs on Python's page end to end (`python_engine_test`).
+     - A page-sent model is planned only when every table it declares is one Python serves (the user's option (c);
+       `Frames.model_for`).
 4. **Python's own `grid.create_class`, `page.create_association`, `page.create_data_space`,** back from
    `datacube/python-model-parked` on this home, as the cores of the same actions (one-app design §8). The page
    document records the revision a page is pinned to (owed: `PageModelRef`).
@@ -132,6 +143,9 @@ engine. Needs B3 and B5.
 8. The upload's SQL into the dialect (D9, with the dialect program).
 9. One result-typing table for the Java, TypeScript and Python executors (the Plan Gen line's phase 3).
 10. Sign-in where a store is shared (§2's last point).
+11. The model home's lock in the repository itself (the Studio line's review of B3): Python holds a lock across its
+    processes around each SDLC call, but `GitStorage` and `sdlc-server` take none. Before a second kind of process opens
+    the same repository (E: Studio from Python could), the lock moves into the repository.
 
 ### H. Publishing
 

@@ -54,6 +54,9 @@ _CATALOG_FIELDS = ('name', 'dataType', 'logicalType', 'precision', 'scale', 'not
 # the field metadata that carries a result column's type, as the compiler typed it
 TYPE_KEY = b'legend.type'
 
+# how many models a page sent Python holds at once (Frames.model_for): a page's project, as its revisions move
+_ADMITTED = 8
+
 
 class UntypedColumn(RuntimeError):
     """A result column its plan does not type: the plan and the database disagree about the query's shape."""
@@ -256,6 +259,10 @@ class Frames:
         # §4.3), each by its name: its name as written, its model, whether it is a view, and its model held (planned
         # against while it is kept, as a frame's is: §15.3)
         self._files: dict[str, tuple[str, str, bool, compiler.HeldModel]] = {}
+        # the models a page sent that read only what Python serves (model_for), each held with the tables it declares
+        # (checked again at each use: a table no longer served is no longer read), while recent: a page's project, most
+        # recent last
+        self._admitted: dict[str, tuple[compiler.HeldModel, frozenset[str]]] = {}
 
     def register(self, name: str, frame: Any, mode: str = LIVE) -> Table:
         """Registers a frame (or a function returning one) as the table ``name``, Live or Snapped, and
@@ -330,6 +337,39 @@ class Frames:
                 if kept == model:
                     return held
         return None
+
+    def model_for(self, model: str) -> compiler.HeldModel | None:
+        """The model a page's query may be planned over (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B3; the user's ruling,
+        option (c)): one held for a frame or a page's file (``held_for``), or a model the page sent -- its project's, say
+        -- every table of whose Databases is one Python serves, so the SQL planned over it reads only what Python showed
+        the page, never another table of this database (a person's own, an attached database's). Held while recent;
+        None when it declares a table Python does not serve, or does not read as a model."""
+        with self._lock:
+            held = self.held_for(model)
+            if held is not None:
+                return held
+            served = set(self._tables) | set(self._files)
+            if model in self._admitted:
+                held, tables = self._admitted.pop(model)
+                self._admitted[model] = (held, tables)
+                return held if tables <= served else None
+            try:
+                elements = compiler.model_elements(model)
+            except compiler.LegendError:
+                return None
+            tables: set[str] = set()
+            for element in elements:
+                for schema in element.get('schemas', []) if element.get('_type') == 'relational' else []:
+                    if schema.get('name') not in ('default', 'main') and schema.get('tables'):
+                        return None
+                    tables |= {str(t.get('name', '')).lower() for t in schema.get('tables', [])}
+            if not tables <= served:
+                return None
+            held = compiler.HeldModel(model)
+            self._admitted[model] = (held, frozenset(tables))
+            while len(self._admitted) > _ADMITTED:
+                self._admitted.pop(next(iter(self._admitted)))[0].close()
+            return held
 
     @contextlib.contextmanager
     def reading_file(self, asked: str, view: bool = False) -> Iterator[str]:
@@ -430,8 +470,11 @@ class Frames:
                 for name, _model, view, _held in files:
                     self.connection.execute(f'DROP {"VIEW" if view else "TABLE"} IF EXISTS main."{name}"')
             finally:
-                # every model let go, a drop that failed or not
+                # every model let go, a drop that failed or not, and every model a page sent
                 for _name, _model, _view, held in files:
+                    held.close()
+                admitted, self._admitted = list(self._admitted.values()), {}
+                for held, _tables in admitted:
                     held.close()
 
     def __getitem__(self, name: str) -> Table:

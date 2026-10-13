@@ -40,8 +40,10 @@ export interface CreateClassOf {
   readonly model: PageModelRef | undefined;
   /** The model home's SDLC. */
   readonly client: SdlcClient;
-  /** Studio's editor on a workspace, on this page's own address. */
-  readonly studio: (project: string, workspace: string) => string;
+  /** Where the model home keeps the projects, as a person reads it (its `where`: this browser, this user's folder). */
+  readonly where: string;
+  /** Studio's editor on a workspace, where the host serves Studio. */
+  readonly studio?: (project: string, workspace: string) => string;
   /** Ask the browser to keep this origin's storage: whether it promised. */
   readonly persist: () => Promise<boolean>;
 }
@@ -95,8 +97,8 @@ export async function createClassOf(o: CreateClassOf): Promise<PageModelRef | un
       const kept = await o.persist();
       return {
         className: made.classes[0]?.class ?? c.className,
-        where: `the project ${after.project} (workspace ${after.workspace}), in this browser`,
-        studio: o.studio(after.project, after.workspace),
+        where: `the project ${after.project} (workspace ${after.workspace}), in ${o.where}`,
+        ...(o.studio ? { studio: o.studio(after.project, after.workspace) } : {}),
         notes: [
           ...made.notes,
           ...(kept ? [] : ['This browser has not promised to keep its storage: it may clear the project.']),

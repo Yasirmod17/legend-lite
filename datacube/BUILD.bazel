@@ -501,6 +501,8 @@ typescript.tsc_test(
         "//engine-client:typescript_sources",
         "//depot-client:depot_client",
         "//sdlc-client:sdlc_client",
+        # the one SDLC suite, which test/python-engine/model-home.test.ts holds Python's model home to
+        "//sdlc-client:conformance",
         "//pure-protocol:typescript_sources",
         "//tools/js:runfiles",
         "//query-store:typescript_sources",
@@ -951,6 +953,33 @@ browser_test(
     },
     # as //python:headless_test sets it: Python reads the architecture from it where it cannot ask WMI, and mini-racer's
     # V8 (a page's file read in Python) needs it; a test's environment on Windows does not carry it
+    platform_env = select({
+        "//tools/platforms:windows_x86_64": {"PROCESSOR_ARCHITECTURE": "AMD64"},
+        "//conditions:default": {},
+    }),
+)
+
+# PYTHON'S MODEL HOME HELD TO THE ONE SDLC SUITE (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B3): the native library's SDLC,
+# served by Python's engine over a git repository in the test's own folder, answering sdlc-client's conformance suite
+# as the page's SDLC and sdlc-server do. In the warehouse lane beside python_engine_test (the compiler's library).
+node_test(
+    name = "python_model_home_test",
+    size = "medium",
+    data = [
+        "test/python-engine/model-home.test.ts",
+        ":dist",
+        ":engine_fixture",
+        ":headless_bundle",
+        "//native:compiler",
+        "//sdlc-client:conformance",
+    ],
+    entry_point = "test/python-engine/model-home.test.ts",
+    env = {
+        "DATACUBE_SITE": "$(rlocationpath :dist)",
+        "ENGINE_FIXTURE": "$(rlocationpath :engine_fixture)",
+        "LEGEND_LITE_DATACUBE": "$(rlocationpath :headless_bundle)",
+        "LEGEND_LITE_LIBRARY": "$(rlocationpath //native:compiler)",
+    },
     platform_env = select({
         "//tools/platforms:windows_x86_64": {"PROCESSOR_ARCHITECTURE": "AMD64"},
         "//conditions:default": {},

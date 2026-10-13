@@ -54,7 +54,7 @@ import pyarrow.ipc
 from . import _json, _planner, compiler
 from ._library import library
 from .frames import Frames, UntypedColumn
-from ._home import SavedPages, Settings
+from ._home import SavedPages, Settings, home, locked
 
 _API = '/api/pure/v1/'
 _EXECUTE = _API + 'execution/execute'
@@ -71,6 +71,9 @@ _SAVED = '/saved-pages.json'
 # the page's own settings, kept between visits as the browser keeps them (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B2):
 # GET what was kept, POST them whole
 _SETTINGS = '/settings.json'
+# PYTHON'S MODEL HOME (B3): the SDLC's API and the Depot's, as the model home's server mounts them, answered by the
+# native library's SDLC over this user's git repository of projects
+_SDLC_API, _DEPOT_API = '/sdlc/api/', '/depot/api/'
 # PLANANDRUN (docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md §15): a page's grid planned against the model Python holds and
 # run on its DuckDB, in one call; and the planner protocol's other requests, answered as the tab's worker answers them
 _PLAN_AND_RUN, _PLANNER = '/plan-and-run.json', '/planner.json'
@@ -207,8 +210,14 @@ def _duckdb_platform() -> str:
 def private(path: str) -> bool:
     """Whether a call reads the engine's data -- the API, a frame's cube, its version -- and so, over HTTP, carries the
     token. The site's files are the page's own and carry no secret."""
-    return path.startswith(_API) or path in ('/cube.json', '/version.json', '/page.json', _FILE_IN, _FILE_PART, _FILE_OUT, _REMOTE,
-                                             _SAVED, _SETTINGS, _SERVICES, _PLAN_AND_RUN, _PLANNER)
+    return path.startswith(_API) or _model_home(path) or path in (
+        '/cube.json', '/version.json', '/page.json', _FILE_IN, _FILE_PART, _FILE_OUT, _REMOTE, _SAVED, _SETTINGS, _SERVICES,
+        _PLAN_AND_RUN, _PLANNER)
+
+
+def _model_home(path: str) -> bool:
+    """A call of the model home's: the SDLC's API or the Depot's."""
+    return path.startswith(_SDLC_API) or path.startswith(_DEPOT_API)
 
 
 def _arrow_requested(query: str) -> bool:
@@ -318,6 +327,8 @@ class Engine:
         """One call: ``POST`` to the API, or ``GET`` of a frame's cube (``cube.json``), its version (``version.json``) or
         a file of the site. It waits for its answer, which the compiler's threads compute when it needs the compiler,
         so it is called from a thread of the caller's own (a connection's, a message's), never a compiler thread."""
+        if _model_home(path):
+            return _workers().submit(self._model_home, method, path, query, body or '').result()
         if method == 'POST':
             if path == '/page.json':
                 return self._page_said(query, body or '')
@@ -363,12 +374,42 @@ class Engine:
         # where the page's saved pages are, and whose: the folder's one owner, this user (as the browser's store is
         # 'this browser''s)
         pages = {'where': str(self.saved_pages().folder), 'user': 'this user'}
-        return {'files': self.takes_files(), 'remote': self.takes_remote(), 'pages': pages, 'plane': plane,
-                'planes': [plane]}
+        # where the model home keeps the projects (B3): Create a Class… and the rest are offered over it
+        model_home = {'where': str(self.model_home_folder())}
+        return {'files': self.takes_files(), 'remote': self.takes_remote(), 'pages': pages, 'modelHome': model_home,
+                'plane': plane, 'planes': [plane]}
 
     def saved_pages(self) -> SavedPages:
         """Where the page's saved pages are kept: the folder given, else this user's (``home()``), as it is now."""
         return self._saved_pages if self._saved_pages is not None else SavedPages()
+
+    def model_home_folder(self) -> Path:
+        """Where the model home's projects are: a git repository in this user's folder, as it is now."""
+        return home() / 'projects'
+
+    def _model_home(self, method: str, path: str, query: str, body: str) -> Answer:
+        """One call of the model home (B3): answered by the native library's SDLC or Depot -- the rules the page's
+        in-page SDLC and the model home's server run -- over this user's repository, under its lock (several Python
+        processes share it: two notebooks at once). Never a dropped call: a failure of the library's is said (500)."""
+        if method not in ('GET', 'POST', 'DELETE'):
+            return _said(405, "the model home answers GET, POST and DELETE")
+        sdlc = path.startswith(_SDLC_API)
+        root = _SDLC_API if sdlc else _DEPOT_API
+        target = '/' + path[len(root):] + (f'?{query}' if query else '')
+        folder = self.model_home_folder()
+        try:
+            with locked(folder):
+                said = library().call('lite_sdlc_handle' if sdlc else 'lite_depot_handle', str(folder), method, target, body)
+        except Exception as failure:
+            traceback.print_exc()
+            return _said(500, f'{type(failure).__name__}: {failure}')
+        tag, _, rest = said.partition('\n')
+        if tag != 'OK':
+            return _said(500, rest.partition('\n')[2] or rest)
+        status, _, answered = rest.partition('\n')
+        if not answered:
+            return Answer(int(status), 'text/plain; charset=utf-8', b'')
+        return Answer(int(status), 'application/json', answered.encode('utf-8'))
 
     def _settings_kept(self, body: str) -> Answer:
         """The page's settings kept whole (one JSON object, the page's own: never read here), in this user's folder, so
@@ -644,10 +685,10 @@ class Engine:
             return _said(400, 'a plan-and-run is {"lambda", "model", "runtime"}, each a string')
         with self.frames.serving() as models:
             self._noted(models)
-            held = self.frames.held_for(asked['model'])
+            held = self.frames.model_for(asked['model'])
             if held is None:
-                return _planned({'plan': 'ERR\nMODEL\nthis engine serves no source of that model: a page plans only over '
-                                           'the frames and files Python holds'})
+                return _planned({'plan': 'ERR\nMODEL\nthis engine plans only over the tables it serves: a page\'s frames '
+                                           'and files, and a model that reads only them (its project\'s)'})
             planned = library().call('lite_plan_json_held', held.handle, asked['lambda'], asked['runtime'])
             if not planned.startswith('OK\n'):
                 return _planned({'plan': planned})
@@ -678,7 +719,7 @@ class Engine:
             model = asked.pop('model', None)
             with self.frames.serving() as models:
                 self._noted(models)
-                held = self.frames.held_for(model) if isinstance(model, str) else None
+                held = self.frames.model_for(model) if isinstance(model, str) else None
                 if held is None:
                     said = {'ok': True, 'answer': 'ERR\nMODEL\nthis engine serves no source of that model'}
                 else:
@@ -995,8 +1036,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         url = urlsplit(self.path)
         # the API, an open page saying what it is now (page.json: Python's page.read()), a page's file in or out, the
         # saved pages, the page's settings, and PlanAndRun's calls
-        if not (url.path.startswith(_API) or url.path in ('/page.json', _FILE_IN, _FILE_PART, _FILE_OUT, _REMOTE, _SAVED,
-                                                          _SETTINGS, _PLAN_AND_RUN, _PLANNER)):
+        if not (url.path.startswith(_API) or _model_home(url.path) or url.path in (
+                '/page.json', _FILE_IN, _FILE_PART, _FILE_OUT, _REMOTE, _SAVED, _SETTINGS, _PLAN_AND_RUN, _PLANNER)):
             self._refuse_unread(404, f'no such path: {url.path}')
             return
         if not self._admitted(url.path):
@@ -1031,6 +1072,25 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if self._admitted(url.path):
             self.server.answering(self.connection)
             self._send(self.server.web.engine.answer('GET', url.path, url.query, None))
+
+    def do_DELETE(self) -> None:  # noqa: N802
+        """The model home's one DELETE (the SDLC's: a workspace, a review), with the token; its body, when it has one."""
+        url = urlsplit(self.path)
+        if not _model_home(url.path):
+            self._refuse_unread(405, 'this engine answers DELETE for its model home only')
+            return
+        if not self._admitted(url.path):
+            return
+        length = self._length() or 0
+        if length > _MAX_BODY:
+            self._send(_said(413, f'a request body is at most {_MAX_BODY} bytes'))
+            return
+        try:
+            raw = self.rfile.read(length) if length else b''
+        except OSError:
+            return
+        self.server.answering(self.connection)
+        self._send(self.server.web.engine.answer('DELETE', url.path, url.query, raw.decode('utf-8', errors='replace')))
 
     def do_OPTIONS(self) -> None:  # noqa: N802
         # no cross-origin request is answered: only the engine's own page calls it

@@ -81,8 +81,11 @@ export interface ModelActionsOf {
   readonly pageName: string;
   readonly model: PageModelRef | undefined;
   readonly client: SdlcClient;
+  /** Where the model home keeps the projects, as a person reads it (its `where`: this browser, this user's folder). */
+  readonly where: string;
   readonly grids: readonly PageGrid[];
-  readonly studio: (project: string, workspace: string) => string;
+  /** Studio's editor on a workspace, where the host serves Studio. */
+  readonly studio?: (project: string, workspace: string) => string;
   readonly persist: () => Promise<boolean>;
   /** The query that finds a column's first value held twice (query.ts duplicateLambda). */
   readonly duplicate: (relation: ValueSpecification, column: string) => Lambda;
@@ -153,8 +156,8 @@ export async function createAssociationOf(o: ModelActionsOf, first?: string): Pr
         const at = model.ref!;
         return {
           className: made.associations[0]?.association ?? 'the association',
-          where: `the project ${at.project} (workspace ${at.workspace}), in this browser`,
-          studio: o.studio(at.project, at.workspace),
+          where: `the project ${at.project} (workspace ${at.workspace}), in ${o.where}`,
+          ...(o.studio ? { studio: o.studio(at.project, at.workspace) } : {}),
           notes: kept ? [] : ['This browser has not promised to keep its storage: it may clear the project.'],
         };
       },
@@ -238,8 +241,8 @@ export async function createDataSpaceOf(o: ModelActionsOf): Promise<PageModelRef
         const at = model.ref ?? ref;
         return {
           className: made.dataSpace ?? choice.name,
-          where: `the project ${at.project} (workspace ${at.workspace}), in this browser`,
-          studio: o.studio(at.project, at.workspace),
+          where: `the project ${at.project} (workspace ${at.workspace}), in ${o.where}`,
+          ...(o.studio ? { studio: o.studio(at.project, at.workspace) } : {}),
           notes: kept ? [] : ['This browser has not promised to keep its storage: it may clear the project.'],
         };
       },

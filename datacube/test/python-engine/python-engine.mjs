@@ -107,9 +107,12 @@ try {
   cube.on('pageerror', (e) => { console.log(`engine page error: ${e.message}`); failed = true; });
   cube.on('requestfailed', (r) => console.log(`engine page request failed: ${r.url()} ${r.postData() ?? ''} -- ${r.failure()?.errorText ?? ''}`));
   cube.on('console', (m) => console.log(`engine page console ${m.type()}: ${m.text()}`));
-  // every file and call the page asks for is answered: a refusal (a missing file, a refused call) fails the test
+  // every file and call the page asks for is answered: a refusal (a missing file, a refused call) fails the test -- but
+  // for the SDLC's own "not there yet": the page asks for its workspace before it makes one, and the SDLC answers a
+  // workspace not yet made 404, as legend-sdlc does (the in-page SDLC answers the same, inside the tab)
   cube.on('response', (r) => {
-    if (r.status() >= 400) {
+    const notYet = r.status() === 404 && r.request().method() === 'GET' && new URL(r.url()).pathname.startsWith('/sdlc/api/');
+    if (r.status() >= 400 && !notYet) {
       failed = true;
       // with the engine's reason, as the page was told it
       void r.text().then((t) => t, () => '').then((t) => console.log(`FAIL engine page answer ${r.status()}: ${r.url()} ${t.slice(0, 600)}`));
@@ -177,6 +180,34 @@ try {
     console.log(`  the page showed: ${(await cube.evaluate(() => `${document.body.innerText.slice(0, 300)} | sql: ${document.getElementById('sql')?.textContent?.slice(0, 200)}`))}`);
     failed = true;
   }
+  // CREATE A CLASS… ON PYTHON'S PAGE (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B1, B3): the app's own action over Python's
+  // services -- the class's sample read where the grid's rows are (PlanAndRun on Python), written by Python's native
+  // library, its project made in Python's model home (the same SDLC rules, a git repository in this test's own folder)
+  const menuItem = (label) => cube.locator('.dc-menu .dc-menu-item', { has: cube.locator(`:scope > .dc-menu-label:text-is(${JSON.stringify(label)})`) }).first();
+  await cube.locator('.dc-tile-menu').last().click();
+  await menuItem('Create a Class…').click();
+  const classShown = await cube.waitForFunction(() => document.querySelectorAll('.dc-class-file').length > 0
+    || document.querySelector('.dc-class .dc-picker-status.dc-failed') !== null, undefined, { timeout: 60_000 }).then(() => true, () => false);
+  if (classShown) {
+    await cube.locator('.dc-class .dc-primary').click();
+    await cube.waitForFunction(() => document.querySelector('.dc-class .dc-picker-status.dc-ok, .dc-class .dc-picker-status.dc-failed') !== null,
+      undefined, { timeout: 60_000 }).catch(() => undefined);
+  }
+  const classSaid = classShown ? (await cube.locator('.dc-class .dc-picker-status').textContent()) ?? '' : '(no window)';
+  const repository = readdirSync(join(home, 'projects', 'refs', 'heads'), { recursive: true });
+  const madeClass = /^Created \S+::domain::Book in the project \S+ \(workspace \S+\), in this user's folder/.test(classSaid)
+    && (await cube.locator('.dc-class-studio').count()) === 0 && repository.length > 0;
+  console.log(`${madeClass ? 'ok  ' : 'FAIL'} Create a Class… on Python's page makes its class in Python's model home, a git repository`);
+  if (!madeClass) {
+    console.log(`  the window said: ${classSaid}; the repository's branches: ${JSON.stringify(repository)}`);
+    failed = true;
+  }
+  if (classShown) {
+    await cube.locator('.dc-class .dc-primary').click();
+    await cube.locator('.dc-class').waitFor({ state: 'detached', timeout: 10_000 }).catch(() => undefined);
+  }
+  // the page changed (its model made): the next page asks first whether to leave it, as the tab's does -- answered yes
+  cube.once('dialog', (d) => { console.log(`     (asked: ${d.message().slice(0, 160)})`); void d.accept(); });
   // AN EXAMPLE goes the same way: generated in the page, read into Python's DuckDB as a file is (and the file before it
   // let go of: its grid gone, its table dropped in Python -- forget.json, every answer here a success)
   await cube.click('.dc-titlebar-menu');

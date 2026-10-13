@@ -17,9 +17,13 @@
 //   writes its model; the grid's rows are then Python's over that model, as a frame's are. Offered where Python says it
 //   takes files (`services.json`: the datacube extra).
 //
-// What Python does not answer yet is a service it does not give, and the app does not offer what reads it (§3.4): its
-// page store (Save, Open…: step 2d), a remote file (2b's second part), the other planes (2c), its model home and saved
-// queries (step 3). A share link needs an address others can open; Python's is this machine's loopback.
+// - ITS MODEL HOME (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B3): the SDLC and the Depot Python serves (`/sdlc/api`,
+//   `/depot/api`), the same rules the browser's in-page SDLC runs, over a git repository in this user's folder; the
+//   model actions write through Python's native library (ModelWriting), so Create a Class… and the rest are offered.
+//
+// What Python does not answer yet is a service it does not give, and the app does not offer what reads it (§3.4): the
+// other planes (2c), saved queries (B5), a warehouse (C3), Studio (E). A share link needs an address others can open;
+// Python's is this machine's loopback.
 
 import { arrowIpcAnswer } from '../../../engine-client/src/arrow-ipc.ts';
 import { toRawTable } from '../../../engine-client/src/duckdb.ts';
@@ -39,7 +43,8 @@ import type { InferredModel } from '../infer.ts';
 import type { S3Credentials } from '../remote.ts';
 import { fileParts, type UploadResult } from '../upload.ts';
 import type {
-  BrowserService, DatabaseService, FrameModel, LivePage, PageService, Plane, PlaneService, PlaneWord, Services, Versions,
+  BrowserService, DatabaseService, FrameModel, LivePage, ModelHomeService, PageService, Plane, PlaneService, PlaneWord,
+  Services, Versions,
 } from '../app/services.ts';
 
 /** How the page reaches Python's engine. */
@@ -69,6 +74,8 @@ export interface PythonOffers {
   readonly remote: boolean;
   /** Where it keeps the page's saved pages (this user's folder), and whose they are. */
   readonly pages: { readonly where: string; readonly user: string };
+  /** Where its model home keeps the projects (B3: the native library's SDLC over a git repository), when it has one. */
+  readonly modelHome?: { readonly where: string };
   readonly plane: PythonPlane;
   readonly planes: readonly PythonPlane[];
 }
@@ -290,7 +297,8 @@ function pythonBrowser(link: PythonLink, browser: BrowserService, kept: Record<s
 /** What Python's host offers the page (`services.json`), or why it did not say. */
 export async function askedOffers(link: PythonLink): Promise<PythonOffers> {
   const said = JSON.parse(await asked(link, 'services.json')) as {
-    files?: unknown; remote?: unknown; pages?: { where?: unknown; user?: unknown }; plane?: unknown; planes?: unknown;
+    files?: unknown; remote?: unknown; pages?: { where?: unknown; user?: unknown }; modelHome?: { where?: unknown };
+    plane?: unknown; planes?: unknown;
   };
   if (typeof said.files !== 'boolean' || typeof said.remote !== 'boolean') {
     throw new Error(`the engine did not say which of a page's files it reads: ${JSON.stringify(said)}`);
@@ -301,7 +309,31 @@ export async function askedOffers(link: PythonLink): Promise<PythonOffers> {
   if (!Array.isArray(said.planes)) throw new Error(`the engine did not say which planes it offers: ${JSON.stringify(said)}`);
   return {
     files: said.files, remote: said.remote, pages: { where: said.pages.where, user: said.pages.user },
+    ...(typeof said.modelHome?.where === 'string' ? { modelHome: { where: said.modelHome.where } } : {}),
     plane: planeOf(said.plane), planes: said.planes.map(planeOf),
+  };
+}
+
+/**
+ * PYTHON'S MODEL HOME (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B3): the SDLC and its Depot Python serves
+ * (`/sdlc/api`, `/depot/api`), the very rules the browser's in-page SDLC runs, over a git repository in this user's
+ * folder; reached by the same clients, each call carrying the engine's token. No Studio link until Python serves Studio
+ * (the program's E).
+ */
+function pythonModelHome(link: PythonLink, where: string): ModelHomeService {
+  const withToken: typeof fetch = (input, init) =>
+    link.fetch(input, { ...init, headers: { ...(init?.headers as Record<string, string> | undefined), ...headers(link) } });
+  let home: ReturnType<ModelHomeService['connect']> | undefined;
+  return {
+    // the clients fetched the first time a model action asks, as the tab's model home's are: the page's startup carries
+    // neither
+    connect: () => (home ??= Promise.all([
+      import('../../../sdlc-client/src/client.ts'), import('../../../depot-client/src/client.ts'),
+    ]).then(([{ SdlcClient }, { DepotClient }]) => ({
+      client: new SdlcClient(`${link.baseUrl}/sdlc/api`, withToken),
+      depot: new DepotClient(`${link.baseUrl}/depot/api`, withToken),
+      where: `this user's folder (${where})`,
+    }))),
   };
 }
 
@@ -441,6 +473,7 @@ export function pythonServices(o: PythonServicesOptions): Services {
       },
     },
     pages: Promise.resolve(pythonPages(link, o.offers)),
+    ...(o.offers.modelHome ? { modelHome: pythonModelHome(link, o.offers.modelHome.where) } : {}),
     live: {
       watch: o.watch,
       ...('page' in o.shows ? { page: livePage(link, o.shows.page) } : {}),
