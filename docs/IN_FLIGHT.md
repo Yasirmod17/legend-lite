@@ -250,7 +250,7 @@ with the compiler's plan/execution split**, in this order:
    planner-protocol kind `projectData`), `native/` (`lite_project_data`), engine-client, Query, Studio, DataCube,
    `python/`. Reviews: the Compiler Rewrite line (core), Plan Gen (the boundary), the Studio line (engine-client, Query,
    Studio), an audit. Then D5 (no SQL text in TypeScript or Python's host, claimed in the dialect program's section),
-   stacked on it; then F. **Step 2's second landing announced 2026-10-11 (rule 5; branch `datacube-m3`; the design's §15.6a,
+   stacked on it -- **announced 2026-10-13 there (item 3)**; then F. **Step 2's second landing announced 2026-10-11 (rule 5; branch `datacube-m3`; the design's §15.6a,
    agreed with the user): a cross-area edit in `core/`** -- the route renamed and two more beside it,
    `/api/lite/v1/model/createClass` (was `/api/lite/v1/relational/promoteRelationToModel`), `createAssociation`,
    `createDataSpace`, one atomic writer under them. Core files: `core/src/main/java/com/legend/server/`
@@ -1138,6 +1138,25 @@ pause for the user's review after Phase 1.
      `DuckDb.java`; this program folds them in when it consolidates. Each file is announced here before it lands on
      main. This program keeps D4 (the warehouse) and D6 (the dead code). If this line objects, the DataCube + Python
      line stops at C5.
+
+     **D5 announced 2026-10-13 (branch `datacube/d5-host-operations`, stacked on C5; the one-platform runbook's D5).**
+     Core files: new `sql/dialect/HostOperation.java` (the operations as sealed records, data only: a relation made,
+     rows put in, a drop, a schema, a count, a secret, extensions, the extension folder or directory, the file search
+     path, a transaction step, the catalog questions, Iceberg's metadata) and `sql/dialect/PostgresHostOperations.java`
+     (the count, with the alias Postgres before 16 requires; every other refused by name); `HostOperations.java` gains
+     `statements(HostOperation)` and `DuckDbHostOperations.java` its statements (one exhaustive switch, each the
+     statement the host spelled before); tests `sql/dialect/HostOperationsTest` (more cases) and the new
+     `HostOperationsPostgresTest` on the embedded Postgres 16 (`//core:host_operations_postgres_test`, in core's BUILD
+     and the core lane). Not touched: `DuckDb.java`, `SqlDialect.java`, `exec/Sessions.java`,
+     `server/ConnectionResolver.java` beyond C5. Beyond core: `wasm/` (new `planner/HostOperationsJson.java`, Boundary,
+     TabExports: the planner-protocol kind `hostOperations`), `native/` (`lite_host_operations`), engine-client,
+     DataCube, Query, Studio, `python/`; the demos' rows as Data (`query/demo/models/trading-data.pure`); and the guard
+     in `tools/guards/` (new `HostSqlTest.java` and `host_sql.txt`, a BUILD target; `//python:host_sql_test`; both in
+     the checks lane). One change from item 3 above: the guard is a test over the sources -- every product `.ts` and
+     `legend_lite` module, each string literal that begins a statement refused, three sites kept with their reasons --
+     not a statement type, which would run through every engine and test that runs SQL (the runbook's D5). Reviews: the
+     Compiler Rewrite line (core, the BUILD files, `tools/guards/`), Plan Gen (the boundary), the Studio line
+     (engine-client, Query, Studio), an audit.
 
 ## Rules between sessions
 
