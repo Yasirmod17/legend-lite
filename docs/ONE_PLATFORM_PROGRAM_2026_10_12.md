@@ -617,6 +617,42 @@ engine, as `ll.show()` opens DataCube.
 
 **Reviews.** The Studio line (its apps' configuration), Compiler Rewrite (the wheel), an audit.
 
+**Built 2026-10-13 (branch `datacube/python-parity`):**
+- **The sites.** The wheel carries `//query:site` and `//studio:site` (`//python:wheel_query_site`,
+  `:wheel_studio_site`, at `legend_lite/_apps/<app>`, each tree as built), without DuckDB-WASM's builds (Python's
+  DuckDB runs the queries: about 75 MB left out) and the demo's own configuration and models. Studio's demo projects
+  stay (84 KB). The wheel is 52 MB. `LEGEND_LITE_QUERY_SITE` and `LEGEND_LITE_STUDIO_SITE` point elsewhere, as
+  `LEGEND_LITE_SITE` does for DataCube's.
+- **The configs.** `engine.py` writes `/<app>/demo/config.json` itself, every address at the origin the page was loaded
+  from: Query's `execution: server` at `/api`, no projects, its Depot at `/sdlc/api` and `/depot/api`; Studio's
+  `sdlc`, `depot`, `engine`, `vendor`, `worker`. Query has no `planner`: Python's pure/v1 answers the grammar, so there
+  is one planner, Python's.
+- **The token (the runbook's recommendation, taken without asking: asked at landing).** `ll.query()` and `ll.studio()`
+  open `/<app>/demo/index.html?token=<the engine's token>`. That first load answers 303 to the same address without
+  the token, setting a cookie `legend-lite-<port>` (HttpOnly, SameSite=Strict, Path=/); every private path admits the
+  cookie as it admits the Bearer header. The cookie is named by the port because a browser sends a host's cookies to
+  every port: two Python engines would otherwise replace each other's. Every `/api/` path is private now, not only
+  pure/v1's. The token passes once in an address on this machine, into the browser's history, and dies with the
+  process.
+- **The routes.** `/api/server/v1/currentUser` answers this user (`"this user"`, as the stores name it), and POST
+  `/api/lite/v1/*` goes to the planner's pure/v1, which answers it as legend-lite's server does (`PureV1Api.route`).
+  Execute as JSON landed with C1 and C2; saved queries with B5.
+- **The calls.** `ll.query(browser=True)` and `ll.studio(browser=True)` (`datacube.py`, beside `show`) print the link,
+  open it, and return it.
+- **Measured.** `python/tests/test_engine.py` `AppsServed` (each app's files, the trade, the configs, the cookie's
+  checks, lite's routes); `//python:wheel_test` (from the installed wheel: both apps served, traded, configured,
+  answering with the cookie alone; Studio's demo projects shipped; no DuckDB-WASM). And by hand in Chromium, from the
+  installed wheel on a fresh home (`docs/one-platform/evidence/e-apps-on-python.mjs`): Studio's "Load demo projects"
+  publishes the four projects into Python's repository (360 ms); a published project opens and compiles, 0 errors;
+  Query lists the four from Python's Depot, opens `trading` at HEAD, and builds a query on `Party`. No page error, no
+  failed call but the run's.
+- **The one call that fails: running a project's query (PARK-35).** A project's rows are its `###Data` elements', which
+  only a browser tab loads, into its own DuckDB. Python refuses a model its frames did not write (500, "a project's
+  queries run only in a browser tab for now"). legend-lite's server has the same gap: it opens the runtime's own
+  connection, an empty in-memory DuckDB. The fix is one design for both server hosts, with PARK-33's, and goes to the
+  user: a database per project and version, filled from its Data by the planner's statements (Pure, not the page's
+  SQL), and when it closes.
+
 ### F. The model plan's remaining steps
 
 From `docs/DATACUBE_MODEL_DESIGN_2026_10_10.md` §13. Each lands once, in the one app, so on both hosts.

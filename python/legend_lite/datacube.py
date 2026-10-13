@@ -477,6 +477,31 @@ def show(frame: Any, name: str | None = None, *, mode: str = LIVE, browser: bool
     return cube
 
 
+def query(*, browser: bool = True) -> str:
+    """Legend Query in a browser tab, served by this Python (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md E): its queries
+    planned by this Python's planner and run on its DuckDB, its saved queries those kept beside its pages, its projects
+    those in this Python's Depot. Returns the tab's link (``browser=False`` opens none)."""
+    return _app('query', browser)
+
+
+def studio(*, browser: bool = True) -> str:
+    """Legend Studio in a browser tab, served by this Python (E): its projects in this Python's SDLC and Depot (the
+    repository ``ll.home`` keeps), compiled and run here. Returns the tab's link (``browser=False`` opens none)."""
+    return _app('studio', browser)
+
+
+def _app(app: str, browser: bool) -> str:
+    """An app's link on this Python's engine: its first load trades the link's token for the cookie its page then
+    carries (engine.py, E)."""
+    session = _current()
+    web = session.web()
+    url = f'{web.url}/{app}/demo/index.html?token={web.token}'
+    print(f'Legend {app.capitalize()}: {url}', flush=True)
+    if browser and webbrowser.open(url):
+        session.opened = True
+    return url
+
+
 def _show_page(page: Page, *, browser: bool, inline: bool | None) -> PageTab | PageCube:
     """A page (``ll.Page``) shown: under the cell in a notebook's kernel, as the cell's output in marimo (as a frame is),
     else in a browser tab; live from then on."""

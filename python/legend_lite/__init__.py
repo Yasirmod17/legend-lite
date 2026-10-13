@@ -56,6 +56,10 @@ def __getattr__(name: str):
     if name == 'planner':
         from .datacube import planner
         return planner
+    if name in ('query', 'studio'):
+        # Legend Query and Studio served by this Python (E)
+        from . import datacube
+        return getattr(datacube, name)
     if name == 'DataCube':
         from .notebook import DataCube
         return DataCube

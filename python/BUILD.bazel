@@ -472,6 +472,35 @@ copy_to_directory(
     root_paths = ["datacube/dist"],
 )
 
+# QUERY AND STUDIO SERVED BY PYTHON (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md E: ll.query(), ll.studio()): each app's site
+# as it is built, its tree kept (a page names ../src/ui/app.css), but DuckDB-WASM's builds, which a page whose engine
+# is Python's never loads (Python's DuckDB runs its queries: about 75 MB), and the demo's own configuration and models
+# (Python writes each app's config.json, pointing at itself). Studio's demo projects stay (84 KB): "Load demo projects"
+# writes them into this Python's repository, where Query then opens them by name
+_APP_SITE_LEFT_OUT = [
+    "**/duckdb-*.wasm",
+    "**/duckdb-browser-*.worker.js",
+    "**/duckdb/**",
+    "demo/config*.json",
+    "demo/models/**",
+]
+
+copy_to_directory(
+    name = "wheel_query_site",
+    srcs = ["//query:site"],
+    out = "legend_lite/_apps/query",
+    exclude_srcs_patterns = _APP_SITE_LEFT_OUT,
+    root_paths = ["query"],
+)
+
+copy_to_directory(
+    name = "wheel_studio_site",
+    srcs = ["//studio:site"],
+    out = "legend_lite/_apps/studio",
+    exclude_srcs_patterns = _APP_SITE_LEFT_OUT,
+    root_paths = ["studio"],
+)
+
 # DUCKDB'S EXTENSIONS for Python's DuckDB, carried by the wheel and never downloaded where it runs (MODULE.bazel pins
 # each per platform): httpfs, through which a page on Python reads a remote file
 # (docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md, step 2b), and iceberg with the avro it reads manifests with, through
@@ -586,7 +615,9 @@ py_wheel(
         ":wheel_datacube",
         ":wheel_duckdb",
         ":wheel_package",
+        ":wheel_query_site",
         ":wheel_site",
+        ":wheel_studio_site",
     ] + select({
         "@platforms//os:linux": [":wheel_library_linux"],
         "@platforms//os:macos": [":wheel_library_macos"],

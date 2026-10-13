@@ -31,8 +31,10 @@ import binascii
 import contextlib
 import functools
 import hmac
+import http.cookies
 import http.server
 import json
+import os
 import secrets
 import socket
 import socketserver
@@ -45,7 +47,7 @@ from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import Any, NamedTuple, Protocol
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlsplit
+from urllib.parse import parse_qs, parse_qsl, unquote, urlencode, urlsplit
 
 import duckdb
 import pyarrow as pa
@@ -82,6 +84,14 @@ _CUBES = _QUERIES + '/dataCube'
 # PLANANDRUN (docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md §15): a page's grid planned against the model Python holds and
 # run on its DuckDB, in one call; and the planner protocol's other requests, answered as the tab's worker answers them
 _PLAN_AND_RUN, _PLANNER = '/plan-and-run.json', '/planner.json'
+# QUERY AND STUDIO SERVED BY PYTHON (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md E): each app's site at /<app>/ (its page
+# /<app>/demo/index.html, its tree as built), on this engine's SDLC, Depot, saved queries and pure/v1; and the cookie the
+# link's token is exchanged for on the app's first load, which every call of its page then carries (its clients send
+# no token of their own): same-site strict, unreadable by the page's script, and named by the engine's port (a browser
+# sends a host's cookies to its every port: two engines' would otherwise replace each other's)
+_APPS = ('query', 'studio')
+_CURRENT_USER = '/api/server/v1/currentUser'
+_LITE_API = '/api/lite/v1/'
 # the planner protocol's kinds a page on Python sends to planner.json (DataCube's LitePlanner): every kind but the
 # page's own (hold, release) and those only another host's apps send (Query's unheld plan, execute's halves, a warm);
 # the held kinds plan over the models Python serves only
@@ -216,7 +226,7 @@ def _duckdb_platform() -> str:
 def private(path: str) -> bool:
     """Whether a call reads the engine's data -- the API, a frame's cube, its version -- and so, over HTTP, carries the
     token. The site's files are the page's own and carry no secret."""
-    return path.startswith(_API) or _model_home(path) or path in (
+    return path.startswith('/api/') or _model_home(path) or path in (
         '/cube.json', '/version.json', '/page.json', _FILE_IN, _FILE_PART, _FILE_OUT, _REMOTE, _SETTINGS, _SERVICES,
         _PLAN_AND_RUN, _PLANNER)
 
@@ -243,6 +253,19 @@ def _stored(entry: str, folder: Path, *asked: str) -> Answer:
 def _saved_cube(path: str) -> bool:
     """A call of DataCube's saved pages' (``/api/pure/v1/query/dataCube``, ``.../{id}``, ``.../search``)."""
     return path == _CUBES or path.startswith(_CUBES + '/')
+
+
+def _app_of(path: str) -> str | None:
+    """The app whose site a path is in (``/query/...``, ``/studio/...``), or None."""
+    head = path.split('/', 2)[1] if path.startswith('/') else ''
+    return head if head in _APPS and path.startswith(f'/{head}/') else None
+
+
+def _app_site(app: str) -> Path | None:
+    """An app's built site: LEGEND_LITE_<APP>_SITE, else the one shipped inside this package (``_apps/<app>``)."""
+    explicit = os.environ.get(f'LEGEND_LITE_{app.upper()}_SITE')
+    site = Path(explicit) if explicit else Path(__file__).with_name('_apps') / app
+    return site if site.is_dir() else None
 
 
 def _model_home(path: str) -> bool:
@@ -407,7 +430,13 @@ class Engine:
             # on the caller's thread: it waits for the repository's lock (another process's call) holding no compiler
             # thread, and only the library's call goes to one
             return self._model_home(method, path, query, body or '')
+        if path == _CURRENT_USER and method == 'GET':
+            # who a page's caller is: this user (the stores name the same; there is no sign-in)
+            return Answer(200, 'application/json', json.dumps(_QUERY_USER).encode('utf-8'))
         if method == 'POST':
+            if path.startswith(_LITE_API):
+                # legend-lite's own routes (its whole-model compile), answered as its server answers them
+                return _workers().submit(self._api, path, query, body or '').result()
             if path == '/page.json':
                 return self._page_said(query, body or '')
             if path == _FILE_PART:
@@ -982,11 +1011,29 @@ class Engine:
                          if cube.get('cube', {}).get('source', {}).get('_type') == 'frame'})
         return {'version': served[0], 'frames': {frame: self.version(frame) for frame in frames}}
 
+    def app_config(self, app: str, origin: str) -> Answer:
+        """An app's ``config.json`` as this engine serves the app (E): every service it reads at this engine's own
+        addresses, ``origin`` the one its page was loaded from -- Query's execution, saved queries and projects by name
+        (a Depot), Studio's SDLC, Depot and engine."""
+        api, sdlc, depot = f'{origin}/api', f'{origin}/sdlc/api', f'{origin}/depot/api'
+        config: dict[str, Any] = (
+            {'execution': {'kind': 'server', 'engine': api}, 'projects': [], 'depot': {'sdlc': sdlc, 'depot': depot,
+                                                                                         'vendor': './vendor/'}}
+            if app == 'query' else
+            {'sdlc': sdlc, 'depot': depot, 'vendor': './vendor/', 'worker': './planner-worker.js', 'engine': api})
+        return Answer(200, 'application/json', json.dumps(config).encode('utf-8'))
+
     def _file(self, path: str) -> Answer:
-        """A file of the site, by its path under it."""
-        relative = 'index.html' if path == '/' else unquote(path).lstrip('/')
+        """A file of the site, by its path under it -- or of an app's (``/query/...``, ``/studio/...``), under its own."""
+        app = _app_of(path)
+        if app is not None:
+            relative = unquote(path[len(app) + 2:])
+            site = _app_site(app)
+        else:
+            relative = 'index.html' if path == '/' else unquote(path).lstrip('/')
+            site = self.site
         parts = relative.split('/')
-        file = self.site / relative if self.site is not None else None
+        file = site / relative if site is not None else None
         # the path as written, never resolved: a built site's files are links into the build's output (Bazel's), as
         # the warehouse serves them (WarehouseServer.site)
         # a part holding ':' would be a drive on Windows ('C:/x' replaces the root), one holding NUL no file name
@@ -1156,18 +1203,27 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if self.headers.get('Host') not in web._hosts:
             self._refuse_unread(403, 'this engine answers requests to 127.0.0.1 and localhost only')
             return False
-        if private(path):
-            given = self.headers.get('Authorization', '')
-            if not hmac.compare_digest(given.encode('utf-8'), web._authorization):
-                self._refuse_unread(401, "this engine answers its own page only: the request did not carry the engine's token")
-                return False
+        if private(path) and not (hmac.compare_digest(self.headers.get('Authorization', '').encode('utf-8'), web._authorization)
+                                  or self._carries_cookie()):
+            self._refuse_unread(401, "this engine answers its own page only: the request did not carry the engine's token")
+            return False
         return True
+
+    def _carries_cookie(self) -> bool:
+        """Whether the request carries the cookie an app's page holds the engine's token in (E)."""
+        jar = http.cookies.SimpleCookie()
+        try:
+            jar.load(self.headers.get('Cookie', ''))
+        except http.cookies.CookieError:
+            return False
+        held = jar.get(self.server.web.cookie)
+        return held is not None and hmac.compare_digest(held.value.encode('utf-8'), self.server.web.token.encode('utf-8'))
 
     def do_POST(self) -> None:  # noqa: N802 -- the stdlib's name
         url = urlsplit(self.path)
         # the API, an open page saying what it is now (page.json: Python's page.read()), a page's file in or out, the
         # saved pages, the page's settings, and PlanAndRun's calls
-        if not (url.path.startswith(_API) or _model_home(url.path) or url.path in (
+        if not (url.path.startswith(_API) or url.path.startswith(_LITE_API) or _model_home(url.path) or url.path in (
                 '/page.json', _FILE_IN, _FILE_PART, _FILE_OUT, _REMOTE, _SETTINGS, _PLAN_AND_RUN, _PLANNER)):
             self._refuse_unread(404, f'no such path: {url.path}')
             return
@@ -1200,6 +1256,27 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         """A frame's cube or version (with the token), or a file of the engine's site (DataCube's built pages), to a
         Host naming this machine."""
         url = urlsplit(self.path)
+        app = _app_of(url.path)
+        if app is not None and self._admitted(url.path):
+            self.server.answering(self.connection)
+            token = parse_qs(url.query).get('token')
+            if token is not None:
+                # the app's first load (ll.query(), ll.studio()): the link's token exchanged for the cookie every call of
+                # the page then carries, and the address without it
+                if not hmac.compare_digest(token[0].encode('utf-8'), self.server.web.token.encode('utf-8')):
+                    self._send(_said(401, "this engine answers its own page only: the link did not carry the engine's token"))
+                    return
+                rest = urlencode([(k, v) for k, v in parse_qsl(url.query, keep_blank_values=True) if k != 'token'])
+                self._send(Answer(303, 'text/plain; charset=utf-8', b'', {
+                    'Location': f'{url.path}?{rest}' if rest else url.path,
+                    'Set-Cookie': f'{self.server.web.cookie}={token[0]}; Path=/; HttpOnly; SameSite=Strict',
+                }))
+                return
+            if url.path == f'/{app}/demo/config.json':
+                self._send(self.server.web.engine.app_config(app, f'http://{self.headers.get("Host")}'))
+                return
+            self._send(self.server.web.engine.answer('GET', url.path, url.query, None))
+            return
         if self._admitted(url.path):
             self.server.answering(self.connection)
             self._send(self.server.web.engine.answer('GET', url.path, url.query, None))
@@ -1259,6 +1336,7 @@ class WebServer:
         port = self._server.server_address[1]
         self.url = f'http://127.0.0.1:{port}'
         self._hosts = frozenset({f'127.0.0.1:{port}', f'localhost:{port}'})
+        self.cookie = f'legend-lite-{port}'
         self._thread = threading.Thread(target=self._server.serve_forever, name='legend-lite-engine', daemon=True)
         self._thread.start()
 

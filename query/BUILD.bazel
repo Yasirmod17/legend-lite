@@ -149,8 +149,12 @@ filegroup(
 # Everything a browser fetches.
 filegroup(
     name = "site",
-    # served beside the other app from one origin (//site): they share the browser's query store
-    visibility = ["//site:__pkg__"],
+    # served beside the other app from one origin (//site): they share the browser's query store; and by Python's
+    # engine, from the wheel (//python:wheel_query_site; docs/ONE_PLATFORM_PROGRAM_2026_10_12.md E)
+    visibility = [
+        "//python:__pkg__",
+        "//site:__pkg__",
+    ],
     srcs = glob([
         "demo/*.html",
         "demo/*.json",

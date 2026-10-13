@@ -462,10 +462,12 @@ public final class PureV1Api {
         String model = modelText(request.getObj("model"));
         if (!models.contains(model)) {
             // a host's models change (Python's: a Live frame whose columns changed is written a new model), so
-            // the refusal says what to do
+            // the refusal says what to do; and a project's model (Query's or Studio's, served by Python) is not one:
+            // its rows are its Data elements', which only a browser tab's own DuckDB loads (PARK-35)
             throw new IllegalArgumentException("this engine runs queries over the models it serves only, "
                     + "and the request's model is not one of them: if the engine's model changed since it was "
-                    + "read (a frame whose columns changed), read it again");
+                    + "read (a frame whose columns changed), read it again; a project's queries run only in a "
+                    + "browser tab for now, where its test data is loaded (PARK-35)");
         }
         LambdaFunction lambda = ProtocolReader.lambda(
                 boundParameters(request.getObj("function"), request.getArrOr("parameterValues", null)));

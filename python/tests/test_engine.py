@@ -13,6 +13,7 @@ import tempfile
 import threading
 import time
 import unittest
+import unittest.mock
 from pathlib import Path
 import urllib.error
 import urllib.request
@@ -23,7 +24,7 @@ import pyarrow.ipc
 
 import legend_lite as ll
 from legend_lite.engine import Engine, NativePlanner, WebServer
-from legend_lite._home import locked
+from legend_lite._home import THIS_USER, locked
 
 GROUP = "->filter(x|$x.qty > 5)->groupBy(~[desk], ~[q: x|$x.qty : y|$y->sum()])->sort(~desk->ascending())"
 
@@ -672,6 +673,111 @@ class Site(unittest.TestCase):
             connection.close()
         finally:
             bare.close()
+
+
+class AppsServed(unittest.TestCase):
+    """Legend Query and Studio served by Python (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md E): each app's site under its
+    name, its config naming this engine's own services, and the link's token traded on the first load for the cookie
+    its page's calls then carry."""
+
+    def setUp(self):
+        self.sites = Path(tempfile.mkdtemp(dir=os.environ.get('TEST_TMPDIR')))
+        self.kept = {k: os.environ.get(k) for k in ('LEGEND_LITE_QUERY_SITE', 'LEGEND_LITE_STUDIO_SITE', 'LEGEND_LITE_SITE')}
+        # DataCube's own site, as the session's engine needs one (the wheel's; this test's package has none)
+        os.environ['LEGEND_LITE_SITE'] = str(self.sites)
+        for app in ('query', 'studio'):
+            (self.sites / app / 'demo').mkdir(parents=True)
+            (self.sites / app / 'demo' / 'index.html').write_text(f'<!doctype html>{app}')
+            os.environ[f'LEGEND_LITE_{app.upper()}_SITE'] = str(self.sites / app)
+        self.server = WebServer(Engine(ll.Frames()))
+        self.port = int(self.server.url.rsplit(':', 1)[1])
+
+    def tearDown(self):
+        self.server.close()
+        for k, v in self.kept.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def call(self, method, path, headers=None, body=None):
+        connection = http.client.HTTPConnection('127.0.0.1', self.port, timeout=30)
+        try:
+            connection.request(method, path, body=body, headers={'Host': f'127.0.0.1:{self.port}', **(headers or {})})
+            r = connection.getresponse()
+            return r.status, dict(r.getheaders()), r.read()
+        finally:
+            connection.close()
+
+    def cookie(self, token=None, name=None):
+        return {'Cookie': f'{name or self.server.cookie}={token or self.server.token}'}
+
+    def test_each_apps_files_under_its_name(self):
+        for app in ('query', 'studio'):
+            status, headers, body = self.call('GET', f'/{app}/demo/index.html')
+            self.assertEqual((status, headers['Content-Type'], body), (200, 'text/html; charset=utf-8',
+                                                                       f'<!doctype html>{app}'.encode()))
+        self.assertEqual(self.call('GET', '/query/../studio/demo/index.html')[0], 404)
+        self.assertEqual(self.call('GET', '/queryx/demo/index.html')[0], 404)
+        os.environ['LEGEND_LITE_QUERY_SITE'] = str(self.sites / 'nowhere')
+        self.assertEqual(self.call('GET', '/query/demo/index.html')[0], 404, 'no site built: nothing served')
+
+    def test_the_links_token_traded_for_the_cookie_and_the_address_without_it(self):
+        status, headers, body = self.call('GET', f'/studio/demo/index.html?token={self.server.token}')
+        self.assertEqual(status, 303)
+        self.assertEqual(headers['Location'], '/studio/demo/index.html')
+        self.assertEqual(headers['Set-Cookie'],
+                         f'legend-lite-{self.port}={self.server.token}; Path=/; HttpOnly; SameSite=Strict')
+        # any other parameter stays
+        self.assertEqual(self.call('GET', f'/query/demo/index.html?config=x.json&token={self.server.token}')[1]['Location'],
+                         '/query/demo/index.html?config=x.json')
+        self.assertEqual(self.call('GET', '/query/demo/index.html?token=wrong')[0], 401)
+
+    def test_each_apps_config_names_this_engines_services(self):
+        origin = f'http://127.0.0.1:{self.port}'
+        status, headers, body = self.call('GET', '/query/demo/config.json')
+        self.assertEqual((status, headers['Content-Type']), (200, 'application/json'))
+        self.assertEqual(json.loads(body), {'execution': {'kind': 'server', 'engine': f'{origin}/api'}, 'projects': [],
+                                            'depot': {'sdlc': f'{origin}/sdlc/api', 'depot': f'{origin}/depot/api',
+                                                      'vendor': './vendor/'}})
+        self.assertEqual(json.loads(self.call('GET', '/studio/demo/config.json')[2]), {
+            'sdlc': f'{origin}/sdlc/api', 'depot': f'{origin}/depot/api', 'vendor': './vendor/',
+            'worker': './planner-worker.js', 'engine': f'{origin}/api'})
+
+    def test_the_apps_calls_carry_the_cookie(self):
+        self.assertEqual(self.call('GET', '/api/server/v1/currentUser'), (401, unittest.mock.ANY, unittest.mock.ANY))
+        # another engine's cookie (another port's), or this one's with another token: refused
+        self.assertEqual(self.call('GET', '/api/server/v1/currentUser', self.cookie(name='legend-lite-1'))[0], 401)
+        self.assertEqual(self.call('GET', '/api/server/v1/currentUser', self.cookie(token='wrong'))[0], 401)
+        status, _, body = self.call('GET', '/api/server/v1/currentUser', self.cookie())
+        self.assertEqual((status, json.loads(body)), (200, THIS_USER))
+        # the store, the model home and pure/v1, as the token reads them
+        self.assertEqual(self.call('POST', '/api/pure/v1/query/search', self.cookie(), '{}')[0], 200)
+        self.assertEqual(self.call('GET', '/sdlc/api/projects', self.cookie())[0], 200)
+        self.assertEqual(self.call('GET', '/sdlc/api/projects')[0], 401)
+
+    def test_lites_own_routes_answered_as_its_server_answers_them(self):
+        model = json.dumps({'_type': 'text', 'code': 'Class demo::A { x: Integer[1]; y: Nope[1]; }'})
+        status, headers, body = self.call('POST', '/api/lite/v1/compilation/compile',
+                                          {**self.cookie(), 'Content-Type': 'application/json'}, model)
+        self.assertEqual(status, 200, body)
+        self.assertEqual(len(json.loads(body)['errors']), 1)
+        self.assertEqual(self.call('POST', '/api/lite/v1/compilation/compile', {'Content-Type': 'application/json'},
+                                   model)[0], 401)
+        self.assertEqual(self.call('POST', '/api/lite/v1/nope', self.cookie(), '{}')[0], 404)
+
+    def test_ll_query_and_ll_studio_give_the_apps_links(self):
+        from legend_lite import datacube
+        kept, datacube._session = datacube._session, datacube._Session()
+        try:
+            for app, open_app in (('query', ll.query), ('studio', ll.studio)):
+                url = open_app(browser=False)
+                web = datacube._session._web
+                self.assertEqual(url, f'{web.url}/{app}/demo/index.html?token={web.token}')
+        finally:
+            if datacube._session._web is not None:
+                datacube._session._web.close()
+            datacube._session = kept
 
 
 class Cube(Served):
