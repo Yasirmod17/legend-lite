@@ -126,8 +126,7 @@ class OnAServer(unittest.TestCase):
             with self.subTest(plane=planner.plane):
                 answer = self.plan_and_run(planner)
                 self.assertEqual(answer.status, 200, answer.body[:300])
-                # its rows sent as they come (G2): the stream's parts joined
-                read = pyarrow.ipc.open_stream(answer.whole()).read_all()
+                read = pyarrow.ipc.open_stream(answer.body).read_all()
                 rows[planner.plane] = read.to_pylist()
                 # the plan the page reads, in the shape its planner on this plane reads
                 said = planner.read(read.schema.metadata[b'legend.plan'].decode('utf-8'))

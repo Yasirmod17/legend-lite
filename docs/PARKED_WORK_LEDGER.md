@@ -979,3 +979,34 @@ question (where a project's database lives, and its life) is the user's.
 
 **Anchor.** The refusal's text in `PureV1Api.hosted` ("a project's queries run only in a browser tab for now"),
 `ParkedWorkLedgerTest`.
+
+## PARK-36 — a page on Python reads a query's rows whole, never as they come
+
+**Recorded** 2026-10-13 by the DataCube + Python line, at the user's ruling on the program's G2
+(`docs/ONE_PLATFORM_PROGRAM_2026_10_12.md` §5 G2): "is this chunking thing worth it - seems like we've spent too much
+time and ended up in bit of hack solution instead of true streaming"; "drop it".
+
+**What happens today.** Python's plan-and-run reads a result whole into memory and answers it whole, and the page's
+`pythonRunner` hands it to the cube as one chunk. The tab's own DuckDB streams its batches.
+
+**Why the first attempt was dropped.** Built and dropped the same day:
+- it still read a frame's result whole under the frames' lock, then sent it in parts, so it saved no memory;
+- only a warehouse table's chunks were passed through as they came;
+- a stream cut short looked complete (an HTTP/1.0 body ends at the connection's close), and was fixed only by counting
+  rows on the page: a patch over a transport that says no end.
+
+**The fix, a design of its own:**
+- read from DuckDB as it goes (a record batch reader), on a connection of the query's own (G6: Python's one shared
+  connection would hold every other query for the duration);
+- a transport that says its end (HTTP/1.1 chunked, its last chunk), so a cut answer fails as a cut answer;
+- the grid drawing rows as they come, without which the gain is not felt.
+
+**Acceptance.** A result larger than Python's memory reaches the page, its first rows shown before its last are read;
+a stream cut in Python fails on the page in words.
+
+**Cost while parked.** A large result's first row waits for its last on Python's pages; memory holds the whole result.
+
+**When.** When a result too large for memory, or a slow first row from a large warehouse table, makes it worth it.
+
+**Anchor.** `the whole result as one chunk: streamed back in chunks is a follow-up` in
+`datacube/src/services/python-host.ts` (ParkedWorkLedgerTest reads core only; checked by hand).

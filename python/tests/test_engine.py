@@ -249,18 +249,6 @@ class PlanAndRunRoutes(Served):
             'runtime': self.table.runtime,
         }))
 
-    def test_the_rows_sent_as_they_come_a_batch_at_a_time(self):
-        # G2: the schema (with the plan) first, then a batch at a time, over HTTP with no length; each batch typed alike
-        with mock.patch('legend_lite.engine._ROWS_PER_BATCH', 1):
-            status, headers, body = self.plan_and_run('->select(~[desk, qty])')
-        self.assertEqual(status, 200, body[:300])
-        self.assertNotIn('Content-Length', headers)
-        reader = pyarrow.ipc.open_stream(pa.py_buffer(body))
-        batches = list(reader)
-        self.assertEqual([b.num_rows for b in batches], [1] * len(self.df))
-        self.assertIn(b'legend.plan', reader.schema.metadata)
-        self.assertEqual(pa.Table.from_batches(batches).column('desk').to_pylist(), self.df['desk'].tolist())
-
     def test_a_grid_is_planned_over_the_model_held_run_here_and_typed_by_its_plan(self):
         status, headers, body = self.plan_and_run(GROUP)
         self.assertEqual((status, headers['Content-Type']), (200, 'application/vnd.apache.arrow.stream'), body[:300])
@@ -995,8 +983,7 @@ class WarehouseOnPython(unittest.TestCase):
     def plan_and_run(self, m, runtime):
         a = self.engine.answer('POST', '/plan-and-run.json', '', json.dumps(
             {'lambda': self.query(m), 'model': m['model'], 'runtime': runtime}))
-        # the rows sent as they come (G2), read whole here
-        return a._replace(body=a.whole(), stream=None)
+        return a
 
     def test_the_shapes_refused_and_a_table_only_once_signed_in(self):
         self.assertEqual(self.call({})[0], 400)
@@ -1017,10 +1004,7 @@ class WarehouseOnPython(unittest.TestCase):
 
     def test_live_rows_from_the_warehouse_with_its_receipt(self):
         m = self.opened()
-        # sent on as the warehouse's chunks come, a batch at a time (G2)
-        with mock.patch('legend_lite.engine._ROWS_PER_BATCH', 1):
-            a = self.plan_and_run(m, m['runtime'])
-        self.assertEqual([b.num_rows for b in pyarrow.ipc.open_stream(a.body)], [1, 1, 1])
+        a = self.plan_and_run(m, m['runtime'])
         self.assertEqual(a.status, 200, a.body)
         rows = pyarrow.ipc.open_stream(a.body).read_all()
         self.assertEqual(sorted(zip(rows['desk'].to_pylist(), rows['qty'].to_pylist())), [('EQ', 5), ('FX', 3), ('FX', 10)])

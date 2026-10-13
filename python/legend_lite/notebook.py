@@ -90,7 +90,7 @@ class _EngineWidget(anywidget.AnyWidget):
             return
         try:
             self.send({'kind': 'answer', 'id': call.get('id'), 'status': answer.status, 'type': answer.content_type,
-                       'headers': dict(answer.headers)}, [answer.whole()])
+                       'headers': dict(answer.headers)}, [answer.body])
         except AttributeError:
             # closed while it answered (ipywidgets drops its channel between its check and its send): no one to tell
             if not self._closed:

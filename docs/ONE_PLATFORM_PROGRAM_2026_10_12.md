@@ -931,23 +931,14 @@ From `docs/DATACUBE_MODEL_DESIGN_2026_10_10.md` §13. Each lands once, in the on
    - Python writes record batches, each typed by the plan; the plan stays in the schema, which is sent first.
    - The page reads the body with a `RecordBatchReader`, chunk by chunk, as the tab's DuckDB streams.
    - Today `Frames.run`, `_plan_and_run` and `pythonRunner` each take the result whole.
-   - **Built 2026-10-13 (branch `datacube/python-parity-2`):**
-     - **Python.** An `Answer` may carry its body as a stream, and the HTTP handler writes it as it is made, with no
-       length: its end is the connection's close. A notebook's channel sends one message, so it takes the body whole
-       (`Answer.whole()`). Plan-and-run sends the schema first, with the plan and where the rows were read in its
-       metadata, then the rows a batch at a time (131,072 rows, whole DuckDB vectors), each typed by the plan.
-     - **A warehouse table's chunks** are sent on as they come, each typed by the plan. The first chunk is read before
-       the answer starts, so a failure before any row is still said by its status; a failure after is the stream cut
-       short, which the page's reader says.
-     - **A frame's rows** are read whole under the frames' lock, as before, then sent in batches outside it, so a slow
-       page holds no lock.
-     - **The page.** `pythonRunner`'s `stream` reads the answer with Arrow's stream reader: the plan from the schema,
-       then each batch typed by it, none kept (`engine-client/src/arrow-ipc.ts` `arrowIpcBatches`). The whole read
-       (`run`) is unchanged.
-     - **Measured:**
-       - `python/tests/test_engine.py`: a frame's rows over HTTP, one row a batch, with no length; a warehouse table's
-         chunk split into batches.
-       - `//datacube:python_engine_test`: the streamed rows equal the whole answer's.
+   - **Built 2026-10-13, then dropped the same day (the user: "is this chunking thing worth it ... ended up in bit of
+     hack solution instead of true streaming"; "drop it"):**
+     - it read a frame's result whole anyway, so it saved no memory;
+     - it passed only a warehouse's chunks through;
+     - a stream cut short looked complete, since HTTP/1.0's body ends at the connection's close. That was fixed only by
+       counting rows, a patch over a transport that says no end.
+
+     True streaming is a design of its own: PARK-36.
 3. **One DuckDB 1.5 release everywhere,** the corpus tests' included. Today the tab's engine is v1.5.4 and Python's
    1.5.5.
 4. **Text encodings:** UTF-16, gzipped files, and Latin-1 read as Latin-1. Today a text file is decoded as UTF-8 in

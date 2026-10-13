@@ -26,7 +26,7 @@
 // the page's own compiler and database: PARK-33), a warehouse (C3), Studio (E). A share link needs an address others
 // can open; Python's is this machine's loopback.
 
-import { arrowIpcAnswer, arrowIpcBatches } from '../../../engine-client/src/arrow-ipc.ts';
+import { arrowIpcAnswer } from '../../../engine-client/src/arrow-ipc.ts';
 import { toRawTable } from '../../../engine-client/src/duckdb.ts';
 import { typedByPlan } from '../../../engine-client/src/engine.ts';
 import type { Plan } from '../../../engine-client/src/relation-type.ts';
@@ -35,7 +35,7 @@ import type { ResultTable } from '../../../engine-client/src/result.ts';
 import { toJson, type Lambda } from '../../../pure-protocol/src/index.ts';
 import { LitePlanner } from '../lite-planner.ts';
 import { readServerPlan, UpstreamPlanner, type ModelOptions } from '../planner.ts';
-import type { PlannerWorker, Request, Response as PlannerResponse } from '../../../engine-client/src/legend/planner-protocol.ts';
+import type { PlannerWorker, Request, Response } from '../../../engine-client/src/legend/planner-protocol.ts';
 import { ExactNumber, fromJson, type ValueSpecification } from '../../../pure-protocol/src/index.ts';
 import { base64 } from '../headless/web.ts';
 import { CubeStoreClient } from '../cube-store.ts';
@@ -165,7 +165,7 @@ function pythonWorker(link: PythonLink): PlannerWorker {
     onmessage: null,
     onerror: null,
     postMessage(message: Request): void {
-      const reply = (response: PlannerResponse): void => { if (alive) worker.onmessage?.({ data: response }); };
+      const reply = (response: Response): void => { if (alive) worker.onmessage?.({ data: response }); };
       const { id, base: _base, ...body } = message;
       if (body.kind === 'hold') {
         const handle = next++;
@@ -230,8 +230,8 @@ export function pythonRunner(link: PythonLink, model: string, runtime: string, p
       throw new QueryFailure(e, query);
     }
   };
-  /** The rows' answer, or its refusal thrown: the planner's (read as it reads every refusal), or its SQL's, and why. */
-  const answered = async (query: Lambda, signal?: AbortSignal): Promise<Response> => {
+  const planAndRun = async (query: Lambda, epoch: number, signal?: AbortSignal): Promise<{ plan: Plan; rows: ResultTable }> => {
+    const started = performance.now();
     const answer = await link.fetch(`${link.baseUrl}/plan-and-run.json`, {
       method: 'POST',
       headers: { ...headers(link), 'Content-Type': 'application/json' },
@@ -241,44 +241,35 @@ export function pythonRunner(link: PythonLink, model: string, runtime: string, p
       if (signal?.aborted) throw e;
       throw new QueryFailure(new Error(`the engine did not answer: ${String(e)}`), query);
     });
-    if (answer.ok && !(answer.headers.get('Content-Type') ?? '').startsWith('application/json')) return answer;
-    const text = await answer.text();
-    const said = (() => {
-      try {
-        return JSON.parse(text) as { plan?: string; error?: string; expired?: { baseUrl: string; principal: string } };
-      } catch {
-        return {};
-      }
-    })();
-    if (said.plan === undefined) throw new QueryFailure(new Error(`the engine answered ${answer.status}: ${text}`), query);
-    const plan = readPlan(said.plan, query);
-    // a warehouse's session ended (a table Python reads, C3): the tab's own error, so the cube offers to sign in again
-    const cause = said.expired ? new SessionExpired(said.expired.baseUrl, said.expired.principal)
-      : new Error(said.error ?? `the engine answered ${answer.status}`);
-    throw new QueryFailure(cause, query, plan.sql);
-  };
-  /** The plan the rows are of, and where they were read, from their schema's metadata. */
-  const described = (metadata: ReadonlyMap<string, string>, query: Lambda): { plan: Plan; receipt: Receipt } => {
+    if (!answer.ok || (answer.headers.get('Content-Type') ?? '').startsWith('application/json')) {
+      // no rows: the planner refused (its own answer, read as it reads every refusal), or its SQL did (and why)
+      const text = await answer.text();
+      const said = (() => {
+        try {
+          return JSON.parse(text) as { plan?: string; error?: string; expired?: { baseUrl: string; principal: string } };
+        } catch {
+          return {};
+        }
+      })();
+      if (said.plan === undefined) throw new QueryFailure(new Error(`the engine answered ${answer.status}: ${text}`), query);
+      const plan = readPlan(said.plan, query);
+      // a warehouse's session ended (a table Python reads, C3): the tab's own error, so the cube offers to sign in again
+      const cause = said.expired ? new SessionExpired(said.expired.baseUrl, said.expired.principal)
+        : new Error(said.error ?? `the engine answered ${answer.status}`);
+      throw new QueryFailure(cause, query, plan.sql);
+    }
+    // a body cut short or not Arrow: said as every other failure here is, never thrown raw at the cube
+    const { table, metadata } = await answer.arrayBuffer().then((bytes) => arrowIpcAnswer(new Uint8Array(bytes))).catch((e: unknown) => {
+      if (signal?.aborted) throw e;
+      throw new QueryFailure(new Error(`the engine's rows could not be read: ${e instanceof Error ? e.message : String(e)}`), query);
+    });
     const said = metadata.get('legend.plan');
     if (said === undefined) throw new QueryFailure(new Error('the engine answered rows without the plan they are of'), query);
+    const plan = readPlan(said, query);
     // where the rows were read, as Python says it: a warehouse table's on the warehouse, its statement its own (C3)
     const theirs = metadata.get('legend.receipt');
-    return {
-      plan: readPlan(said, query),
-      receipt: theirs !== undefined ? JSON.parse(theirs) as Receipt : { plane: 'engine', where: `the engine at ${hostOf(link.baseUrl)}` },
-    };
-  };
-  const unreadable = (e: unknown, query: Lambda, signal?: AbortSignal): never => {
-    if (signal?.aborted) throw e;
-    throw new QueryFailure(new Error(`the engine's rows could not be read: ${e instanceof Error ? e.message : String(e)}`), query);
-  };
-  const planAndRun = async (query: Lambda, epoch: number, signal?: AbortSignal): Promise<{ plan: Plan; rows: ResultTable }> => {
-    const started = performance.now();
-    const answer = await answered(query, signal);
-    // a body cut short or not Arrow: said as every other failure here is, never thrown raw at the cube
-    const { table, metadata } = await answer.arrayBuffer().then((bytes) => arrowIpcAnswer(new Uint8Array(bytes)))
-      .catch((e: unknown) => unreadable(e, query, signal));
-    const { plan, receipt } = described(metadata, query);
+    const receipt: Receipt = theirs !== undefined ? JSON.parse(theirs) as Receipt
+      : { plane: 'engine', where: `the engine at ${hostOf(link.baseUrl)}` };
     try {
       const rows = typedByPlan(toRawTable(table, epoch, performance.now() - started), plan);
       return { plan, rows: { ...rows, receipt } };
@@ -286,25 +277,12 @@ export function pythonRunner(link: PythonLink, model: string, runtime: string, p
       throw new QueryFailure(e, query, plan.sql);
     }
   };
-  /** The rows a batch at a time, as Python sends them (G2): each typed by the plan, none kept. */
-  const stream = async (query: Lambda, epoch: number, onChunk: (chunk: ResultTable) => void, signal?: AbortSignal): Promise<void> => {
-    const started = performance.now();
-    const answer = await answered(query, signal);
-    const { metadata, tables } = await arrowIpcBatches(answer).catch((e: unknown) => unreadable(e, query, signal));
-    const { plan, receipt } = described(metadata, query);
-    try {
-      for await (const table of tables) onChunk({ ...typedByPlan(toRawTable(table, epoch, performance.now() - started), plan), receipt });
-    } catch (e) {
-      if (signal?.aborted) throw e;
-      throw new QueryFailure(e, query, plan.sql);
-    }
-  };
   return new PlanAndRun({
     name: 'python',
     planner,
     planAndRun,
-    // the rows as Python sends them, a batch at a time (G2)
-    stream,
+    // the whole result as one chunk: streamed back in chunks is a follow-up (§15.7, 3)
+    stream: async (query, epoch, onChunk, signal) => { onChunk((await planAndRun(query, epoch, signal)).rows); },
   });
 }
 
