@@ -439,9 +439,9 @@ copy_to_directory(
 
 # DUCKDB'S EXTENSIONS for Python's DuckDB, carried by the wheel and never downloaded where it runs (MODULE.bazel pins
 # each per platform): httpfs, through which a page on Python reads a remote file
-# (docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md, step 2b), and iceberg with the avro it reads manifests with, through which
-# it reads an Iceberg table (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md G5) -- only when every file the table's snapshot
-# names is remote too, since its metadata names them by path (R4, engine.py).
+# (docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md, step 2b), and iceberg with the avro it reads manifests with, through
+# which it reads an Iceberg table (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md G5) -- only when every file the table's
+# snapshot names is remote too, since its metadata names them by path (R4, engine.py).
 # Gunzipped by the Java action the warehouse's postgres extension uses (//warehouse:postgres_extension: Bazel 9.2's own
 # .gz unpacking fails on Windows), each into DuckDB's own extension folder layout (v1.5.5/<DuckDB's platform>/, the
 # names DUCKDB_PLATFORMS gives: //tools/platforms), which Python points its DuckDB at (engine.py): DataCube's INSTALL
@@ -463,7 +463,10 @@ _DUCKDB_EXTENSIONS = ["httpfs", "iceberg", "avro"]
 ) for bazel, duckdb in DUCKDB_PLATFORMS.items() for extension in _DUCKDB_EXTENSIONS]
 
 _DUCKDB_CARRIED, _DUCKDB_CARRIED_COMPATIBLE = platform_select(
-    {bazel: [":duckdb_" + extension + "_" + duckdb for extension in _DUCKDB_EXTENSIONS] for bazel, duckdb in DUCKDB_PLATFORMS.items()},
+    {
+        bazel: [":duckdb_" + extension + "_" + duckdb for extension in _DUCKDB_EXTENSIONS]
+        for bazel, duckdb in DUCKDB_PLATFORMS.items()
+    },
     "DuckDB's httpfs, iceberg and avro extensions (MODULE.bazel, duckdb_*_extension_*)",
 )
 

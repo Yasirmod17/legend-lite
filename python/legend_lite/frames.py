@@ -223,22 +223,34 @@ class Table:
     def plan(self, query: str | dict[str, Any]) -> compiler.Plan:
         """The plan for a query over this table (Pure text, a tree, or ``->...`` applied to it), by the planner the
         frames plan with (``Frames.planner``: Python's own unless a server was chosen)."""
+        planner = self._frames.planner
+        if planner is not None:
+            return self._on_server(planner, query)
         with self._frames._lock:
             self._ready()
-            return self._planned(query)
+            return self._model().plan(self._tree(query), self.runtime)
 
     def execute(self, query: str | dict[str, Any]) -> pa.Table:
         """Runs a query over this table (as ``plan`` takes it) and answers as an Arrow table, typed by its plan."""
+        planner = self._frames.planner
+        if planner is not None:
+            plan = self._on_server(planner, query)
+            with self._frames._lock:
+                # read for this query already (_on_server): only still this table's
+                if self._closed:
+                    raise ValueError(f'the frame {self.name!r} was registered again or unregistered: use the new table')
+                return self._frames.run(plan)
         with self._frames._lock:
             self._ready()
-            return self._frames.run(self._planned(query))
+            return self._frames.run(self._model().plan(self._tree(query), self.runtime))
 
-    def _planned(self, query: str | dict[str, Any]) -> compiler.Plan:
-        planner = self._frames.planner
-        if planner is None:
-            return self._model().plan(self._tree(query), self.runtime)
-        # the planner chosen (R3): a server plans over this table's model, and its SQL is run here
-        return planner.read(planner.plan(_json.dumps(self._tree(query)), self._model(), self.runtime))
+    def _on_server(self, planner: Any, query: str | dict[str, Any]) -> compiler.Plan:
+        """The planner chosen (R3) is a server's: it plans over this table's model, its answer awaited holding none of
+        the frames' locks (the audit of G1), and its SQL is run here."""
+        with self._frames._lock:
+            self._ready()
+            held, tree = self._model(), self._tree(query)
+        return planner.read(planner.plan(_json.dumps(tree), held, self.runtime))
 
 
 class Frames:

@@ -572,7 +572,9 @@ class Engine:
         must be a remote URL (``remote_url``), or a remote table could make this DuckDB read this machine's files (R4).
         Each level is read only once the level that names it is checked, and only through the functions that report a
         file they cannot read: DuckDB 1.5.5's ``iceberg_scan`` ends the process instead, so no view of a table is made
-        before every manifest it reads has been read here."""
+        before every manifest it reads has been read here. Manifest lists of format versions 1 and 2 are read together,
+        by name (measured 2026-10-13). A table refused keeps the keys its page gave on the connection, scoped to its own
+        URL, as a mount that fails does (PARK-29)."""
         connection = self.frames.connection
         lists = [row[0] for row in connection.execute('SELECT manifest_list FROM iceberg_snapshots(?)', [url]).fetchall()]
         named = lists
@@ -745,15 +747,27 @@ class Engine:
             return _said(400, 'a plan-and-run is {"lambda", "model", "runtime"}, as JSON')
         if not (isinstance(asked, dict) and all(isinstance(asked.get(k), str) for k in ('lambda', 'model', 'runtime'))):
             return _said(400, 'a plan-and-run is {"lambda", "model", "runtime"}, each a string')
+        refused = self.planner.refused_plan('this engine plans only over the tables it serves: a page\'s frames and '
+                                            'files, and a model that reads only them (its project\'s)')
+        local = self.planner.plane == 'local'
+        planned = None
+        if not local:
+            # a server's plan awaited holding no lock of the frames' (the audit of G1): the model checked first, and
+            # again before its SQL runs
+            with self.frames.serving() as models:
+                self._noted(models)
+                held = self.frames.model_for(asked['model'])
+            if held is None:
+                return _planned({'plan': refused})
+            planned = self.planner.plan(asked['lambda'], held, asked['runtime'])
         with self.frames.serving() as models:
             self._noted(models)
             held = self.frames.model_for(asked['model'])
             if held is None:
-                return _planned({'plan': self.planner.refused_plan(
-                    'this engine plans only over the tables it serves: a page\'s frames and files, and a model that reads '
-                    'only them (its project\'s)')})
-            # by the planner chosen (R3): Python's own, or a server's -- which plans only, the SQL run here
-            planned = self.planner.plan(asked['lambda'], held, asked['runtime'])
+                return _planned({'plan': refused})
+            if planned is None:
+                # by the planner chosen (R3): Python's own, over the model this process holds
+                planned = self.planner.plan(asked['lambda'], held, asked['runtime'])
             try:
                 plan = self.planner.read(planned)
             except LegendError:

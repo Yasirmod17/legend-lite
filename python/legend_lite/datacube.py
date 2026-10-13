@@ -162,9 +162,8 @@ class _Session:
         self.pages: list[PageTab | PageCube] = []
         self._engine: Engine | None = None
         # where the session plans (R3): the planner chosen (``choose_planner``; a server's, the program's G1), or None,
-        # Python's own; and whether it was chosen yet -- once an engine plans, it is, and never changes behind its pages
+        # Python's own -- chosen for good once the engine is made, and never changed behind its pages
         self._planner: Any = None
-        self._chosen = False
         self._web: WebServer | None = None
         # DataCube's own code over these frames, headless (legend_lite._headless): made on first use
         self._headless: Any = None
@@ -179,14 +178,14 @@ class _Session:
                 # a page's file is read into the frames' database by DataCube's own code, headless (file.json); every
                 # query planned by the planner chosen, chosen for good from here
                 self._engine = Engine(self.frames, site=_site(), headless=self.headless, planner=self._planner)
-                self._chosen = True
             return self._engine
 
     def choose_planner(self, word: str, server: str | None) -> None:
         """Where this session plans, chosen once (R3): ``local``, Python's own; ``remote``, legend-lite's server at
         ``server``; ``engine``, legend-engine at ``server``. A server plans only: Python runs its SQL on its own DuckDB
-        (R4). The same choice again changes nothing; another, once the session plans, is refused -- its pages show
-        where they plan -- and a server that does not answer is said, never substituted."""
+        (R4). Chosen again before the first cube is shown, the last choice holds; once the session's engine is made
+        (a cube shown), the same choice changes nothing and another is refused -- its pages show where they plan --
+        and a server that does not answer is said, never substituted."""
         from . import upstream
         if word == 'local':
             if server is not None:
@@ -200,7 +199,7 @@ class _Session:
         wanted = (word, server.rstrip('/') if server else None)
         with self._lock:
             current = ('local', None) if self._planner is None else (self._planner.plane, self._planner.url)
-            if self._chosen:
+            if self._engine is not None:
                 if current == wanted:
                     return
                 where = 'locally' if current[0] == 'local' else f'on {current[0]} at {current[1]}'
@@ -211,7 +210,7 @@ class _Session:
                 refused = planner.answering()
                 if refused is not None:
                     raise ConnectionError(f'{refused}: nothing is planned elsewhere in its place')
-            self._planner, self._chosen = planner, True
+            self._planner = planner
             self.frames.planner = planner
 
     def headless(self) -> Any:

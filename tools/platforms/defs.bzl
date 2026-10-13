@@ -53,9 +53,10 @@ COMPILER_LIBRARY_PLATFORMS = ["linux_aarch64", "linux_x86_64", "macos_arm64", "m
 
 # DuckDB's spelling of the platforms its extensions are published for (extensions.duckdb.org/v1.5.5/<name>/), by ours:
 # the one mapping behind every extension MODULE.bazel pins as duckdb_*_extension_<name> -- the warehouse's postgres
-# extension (warehouse/defs.bzl) and Python's httpfs (//python:wheel_duckdb). 2026-10-12: the two hand-spelled copies
-# made one. MODULE.bazel cannot load this file, so its two pin tables spell the same five DuckDB names by hand and
-# must keep listing these. Not the JDBC jar's library names (//warehouse: both macOS builds are osx_universal there).
+# extension (warehouse/defs.bzl) and Python's httpfs, iceberg and avro (//python:wheel_duckdb). 2026-10-12: the two
+# hand-spelled copies made one. MODULE.bazel cannot load this file, so its pin tables spell the same five DuckDB names
+# by hand and must keep listing these. Not the JDBC jar's library names (//warehouse: both macOS builds are
+# osx_universal there).
 DUCKDB_PLATFORMS = {
     "linux_aarch64": "linux_arm64",
     "linux_x86_64": "linux_amd64",

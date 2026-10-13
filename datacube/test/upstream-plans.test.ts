@@ -12,9 +12,9 @@ import { PlanError, readServerPlan, serverPlan } from '../src/planner.ts';
 import { runfileFromEnv } from '../../tools/js/runfiles.mts';
 
 interface Corpus {
-  readonly requests: readonly { name: string; query: unknown; model: string; runtime: string; request: unknown }[];
+  readonly requests: readonly { name: string; query: unknown; model: string; runtime: string; text: string }[];
   readonly refused: readonly { name: string; query: unknown }[];
-  readonly plans: readonly { name: string; answer: unknown; sql: string; columns: readonly [string, string][] }[];
+  readonly plans: readonly { name: string; answer: unknown; database: string; sql: string; columns: readonly [string, string][] }[];
   readonly refusals: readonly { name: string; answer: unknown; message: string }[];
 }
 
@@ -37,7 +37,8 @@ describe('a server planning for a page: the requests', () => {
       const { client, bodies } = caught(c.model, c.runtime);
       await client.generatePlan(readLambda(c.query));
       assert.equal(bodies.length, 1);
-      assert.equal(bodies[0], toJson(c.request));
+      // the bytes Python's twin sends (python/tests/test_upstream.py holds it to the same text)
+      assert.equal(bodies[0], c.text);
     });
   }
   for (const c of CORPUS.refused) {
@@ -53,11 +54,12 @@ describe('a server planning for a page: the plans', () => {
   const query = readLambda(CORPUS.requests[0]!.query);
   for (const c of CORPUS.plans) {
     it(`${c.name}: read as its SQL and its columns`, () => {
-      const plan = serverPlan(c.answer, query);
+      const plan = serverPlan(c.answer, query, new Set(), c.database);
       assert.equal(plan.sql, c.sql);
       // the page reads each type by legend-lite's lattice (relation-type.ts); Python keeps it as the server says it
+      // (PARK-31), and carries each column's SQL type (sqlTypes), which the tab's columns do not yet (G9)
       assert.deepEqual(plan.columns.map((col) => [col.name, col.type]), c.columns.map(([n, t]) => [n, pureType(t)]));
-      assert.deepEqual(readServerPlan(toJson(c.answer), query), plan);
+      assert.deepEqual(readServerPlan(toJson(c.answer), query, new Set(), c.database), plan);
     });
   }
   for (const c of CORPUS.refusals) {

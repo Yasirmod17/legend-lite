@@ -37,6 +37,13 @@ class Column:
     type: str
     raw: dict[str, Any] = field(hash=False, compare=False)
 
+    @property
+    def sql_type(self) -> str | None:
+        """Its SQL type, when the plan says it (a server's ``tdsColumns`` carry ``relationalType``: the one typing
+        table's pair, the program's G9)."""
+        found = self.raw.get('relationalType') if isinstance(self.raw, dict) else None
+        return found if isinstance(found, str) else None
+
 
 @dataclass(frozen=True)
 class Answer:

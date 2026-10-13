@@ -784,6 +784,9 @@ reads, each level only once the level naming it is checked, and refuses the tabl
    report the same failure. The check reads every manifest through those first, so a table that fails them is
    refused; one whose manifest stops answering between the check and the view still ends the process. The tab's
    DuckDB (WebAssembly) is likely the same; not measured.
+3. **A refused table keeps its keys.** The page's S3 keys are put on the shared connection before the check (the
+   mount's access step), scoped to the table's own URL, and are not taken off when it is refused, as a mount that fails
+   leaves them (the audit's S5).
 
 **The fix.** DuckDB itself refusing this machine's paths on the connection legend-lite owns, for every read
 (`enable_external_access = false` with `allowed_directories` naming the remote schemes and the headless engine's own
@@ -827,3 +830,37 @@ answers as its page does, its SQL the server's.
 
 **Anchor.** `with the native library (PARK-30)` in `python/legend_lite/engine.py`'s `Planner` (ParkedWorkLedgerTest reads
 core only; checked by hand).
+
+## PARK-31 — a server planning for Python: what its one query may read, and the threads its answer holds
+
+**Recorded** 2026-10-13 by the DataCube + Python line, from the audit of G1 (`docs/ONE_PLATFORM_PROGRAM_2026_10_12.md`:
+a server planning for Python's pages). On a server's plane, the server writes the SQL Python's DuckDB runs (R4 as
+amended that day: the planner the person chose writes it).
+
+**What happens today.**
+1. **One query, but any query.** `upstream.runnable` runs a server's plan only as one SELECT (DuckDB runs every
+   statement of a text, so a server could otherwise write files, attach databases or replace a frame's view). That one
+   SELECT may still read this machine's files (`read_csv('/...')`), and on plain `http://` with no sign-in (G10) so may
+   anyone between Python and the server. In the tab the same SQL runs inside the browser's sandbox.
+2. **A server's answer is awaited on a compiler thread.** Plan-and-run runs on the compiler's pool of four threads
+   (`engine.py` `_workers`), and on a server's plane its HTTP call is made there, for up to a minute (`_TIMEOUT`): a
+   server that hangs ties up those threads. The frames' lock is not held while it waits (the audit's S2, fixed).
+3. **Python's own results keep a server's types as it gives them.** On legend-engine's plane, `Table.execute` and
+   `to_pandas` carry precise types (`meta::pure::precisePrimitives::Int`) and a BIT column's TinyInt; the page reads
+   them by legend-lite's lattice (relation-type.ts), which Python has no copy of.
+
+**The fix.** For 1: PARK-29's (DuckDB refusing this machine's paths on legend-lite's connection, with G6), and
+sign-in over TLS (G10). For 2: plan-and-run on a server's plane made on the connection's own thread, the compiler's
+threads asked only for the compiler's own calls (holding a model, reading the plan), which needs the frames' lock and
+the pool kept apart. For 3: the one typing table (G9), which Python and the tab read alike.
+
+**Acceptance.** `python/tests/test_upstream.py`: a server's SQL reading a local file refused at the read; a hung
+server holds no compiler thread (four plan-and-runs against it, then a local one answered at once); on legend-engine's
+plane an Integer column an int64 and a BIT column a boolean in `to_pandas()`.
+
+**Why parked.** Each needs a design of its own (the connection's access, the pool's ownership, the typing table); G1
+lands the plane, its one-query guard and its lock fix.
+
+**When.** 1 with G6 and G10; 2 with G2 (streaming results back, which changes how plan-and-run answers); 3 with G9.
+
+**Anchor.** `def runnable(` in `python/legend_lite/upstream.py` (ParkedWorkLedgerTest reads core only; checked by hand).

@@ -30,7 +30,8 @@ class Cases(unittest.TestCase):
         for case in CORPUS['requests']:
             with self.subTest(case=case['name']):
                 built = upstream.generate_plan_request(case['query'], case['model'], case['runtime'])
-                self.assertEqual(_json.dumps(built), _json.dumps(case['request']))
+                # the bytes the tab's client sends (the TypeScript test holds it to the same text)
+                self.assertEqual(_json.protocol(built), case['text'])
 
     def test_a_query_that_is_not_one_relation_expression_is_refused(self):
         for case in CORPUS['refused']:
@@ -41,9 +42,10 @@ class Cases(unittest.TestCase):
     def test_each_plan_is_read_as_its_sql_and_its_columns(self):
         for case in CORPUS['plans']:
             with self.subTest(case=case['name']):
-                plan = upstream.read_plan(_json.dumps(case['answer']))
+                plan = upstream.read_plan(_json.dumps(case['answer']), case['database'])
                 self.assertEqual(plan.sql, case['sql'])
                 self.assertEqual([[c.name, c.type] for c in plan.columns], case['columns'])
+                self.assertEqual([c.sql_type for c in plan.columns], case['sqlTypes'])
 
     def test_a_refusal_is_raised_in_the_servers_words(self):
         for case in CORPUS['refusals']:
@@ -51,6 +53,30 @@ class Cases(unittest.TestCase):
                 with self.assertRaises(LegendError) as raised:
                     upstream.read_plan(_json.dumps(case['answer']))
                 self.assertEqual(raised.exception.message, case['message'])
+
+
+class RunHere(unittest.TestCase):
+    """A server's plan is run here as one query: DuckDB runs every statement of a text, so a server's SQL could
+    otherwise write a file, attach a database or replace a frame's view (the audit of G1)."""
+
+    def test_more_than_one_statement_or_another_kind_is_refused(self):
+        planner = upstream.RemotePlanner('remote', 'http://127.0.0.1:1')
+        plan = CORPUS['plans'][0]['answer']
+        for sql, said in (("SELECT 1; COPY (SELECT 1) TO 'x.csv'", "['SELECT', 'COPY']"),
+                          ("ATTACH 'x.db' AS x", "['ATTACH']"), ('CREATE OR REPLACE VIEW trades AS SELECT 1', "['CREATE']")):
+            with self.subTest(sql=sql):
+                answer = json.loads(json.dumps(plan))
+                answer['rootExecutionNode']['executionNodes'][0]['sqlQuery'] = sql
+                with self.assertRaisesRegex(LegendError, 'run here as one query') as raised:
+                    planner.read(json.dumps(answer))
+                self.assertIn(said, raised.exception.message)
+        self.assertEqual(planner.read(json.dumps(plan)).sql, CORPUS['plans'][0]['sql'])
+
+    def test_execute_is_not_sent_to_the_server(self):
+        planner = upstream.RemotePlanner('remote', 'http://127.0.0.1:1')
+        answer = planner.answer('/api/pure/v1/execution/execute', '', '{}')
+        self.assertEqual(answer.status, 500)
+        self.assertIn('plan-and-run', answer.body)
 
 
 class OnAServer(unittest.TestCase):
@@ -146,12 +172,14 @@ class ChosenOnce(unittest.TestCase):
             session.choose_planner('remote', dead)
         self.assertIsNone(session.frames.planner)
 
-    def test_a_choice_is_made_once(self):
+    def test_before_the_first_cube_the_last_choice_holds(self):
         session = _Session()
         session.choose_planner('local', None)
         session.choose_planner('local', None)
-        with self.assertRaisesRegex(ValueError, 'chosen once'):
+        # a server not answering is refused; the choice before it holds
+        with self.assertRaises(ConnectionError):
             session.choose_planner('engine', 'http://127.0.0.1:1')
+        self.assertIsNone(session.frames.planner)
 
     def test_an_engine_made_has_chosen_its_planner(self):
         from unittest import mock

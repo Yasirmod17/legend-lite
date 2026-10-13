@@ -57,7 +57,9 @@ Where a step says "ask the user", stop and ask, with a recommendation. Everywher
    - A feature that needs legend-lite's own routes (Create a Class…) is offered only where those routes answer, as
      every action is (one-app design §3.4).
 4. **Python's DuckDB reads only what it was given (R4).** The page sends Pure, never SQL.
-   - Python's planner writes every line of SQL Python runs.
+   - The planner the person chose writes every line of SQL Python runs: Python's own, or a server's (G1, the user's
+     ruling of 2026-10-13: "planner arg is fine"). A server's plan is run as one query, a SELECT, never several
+     statements (the audit of G1); what that one query may still read on this machine is PARK-31's.
    - Python plans only over a model every table of whose Databases is one Python serves: its frames, a page's files,
      and the page's projects over them (the user's option (c), `Frames.model_for`).
    - A remote file is read only from a remote URL, matched exactly against `<scheme>://`. An Iceberg table's data files
@@ -457,6 +459,11 @@ From `docs/DATACUBE_MODEL_DESIGN_2026_10_10.md` §13. Each lands once, in the on
      (`_Session.choose_planner`); the page on a server's plane plans with the tab's `UpstreamPlanner` at Python's
      address (`python-host.ts` `planning`) and reads the plan by `planner.ts` `readServerPlan`. A headless grid still
      plans with the native library: PARK-30. Execute through a server's plan on Python is refused in words (C1).
+   - **Reviewed:** the readers accept one shape, a `relationalTdsInstantiation` over one `sql` node written for the
+     database it runs on, with no `${` placeholder, and refuse the rest by name (the Plan Gen line); both are INTERIM,
+     until core reads a legend-engine plan (`docs/EXECUTION_PLAN_BOUNDARY_2026_10_05.md` §8, phase 2), the fixture then
+     its cases. Python runs a server's plan as one SELECT, awaits it holding no lock of the frames', and keeps each
+     column's SQL type (`Column.sql_type`, for G9); what remains is PARK-31.
 2. **Streaming results back from Python.**
    - Python writes record batches, each typed by the plan; the plan stays in the schema, which is sent first.
    - The page reads the body with a `RecordBatchReader`, chunk by chunk, as the tab's DuckDB streams.
@@ -537,8 +544,10 @@ PyPI; the npm packages' third-party notices; the FINOS name; the copyright-holde
 - One DataCube app on every host. Python's pages give services; Python's model home is an SDLC (one-app design R1 to
   R6).
 - PlanAndRun for every grid. Each host's executor types its results by the plan.
-- R4 as §1.4 states it, including option (c), the accepted `sourceUrl('file:...')`, and remote-only files and Iceberg
-  data files.
+- R4 as §1.4 states it, including option (c), the accepted `sourceUrl('file:...')`, remote-only files and Iceberg
+  data files, and a server's plan run as one query (G1).
+- Python plans on the planner chosen once per session: `ll.show(df, planner='local' | 'remote' | 'engine',
+  server='http://...')` or `ll.planner(...)` before the first cube; a server's sign-in waits for G10.
 - The two DuckDB versions, accepted until G3. Python's one shared connection, a feature.
 - Python's model home:
   - the place `Python` (the tab's `Browser`);

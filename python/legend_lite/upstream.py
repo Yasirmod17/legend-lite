@@ -2,7 +2,7 @@
 plane) or legend-engine (``engine``), over legend-engine's ``pure/v1`` API, the twin of the tab's planner on a server
 (datacube/src/planner.ts ``UpstreamPlanner``, over engine-client's ``PureV1Client``). Each request is written as the tab
 writes it and each plan read as the tab reads it (one corpus holds the two alike:
-engine-client/test/fixtures/upstream-plans.json). The server holds nothing -- every request carries its model -- and
+datacube/test/fixtures/upstream-plans.json). The server holds nothing -- every request carries its model -- and
 plans only: Python runs the plan's SQL on its own DuckDB, the page sending Pure, never SQL (R4). Over the standard
 library's HTTP; a server's sign-in is not here yet (the program's G10)."""
 
@@ -43,24 +43,38 @@ def generate_plan_request(query: dict[str, Any], model: str, runtime: str) -> di
             'model': {'_type': 'text', 'code': model}, 'context': {'_type': 'BaseExecutionContext'}}
 
 
-def sql_of(plan: dict[str, Any]) -> str | None:
-    """The plan's first SQL node's statement, breadth first from its root (planner.ts ``sqlOf``)."""
-    work: list[Any] = [plan.get('rootExecutionNode')]
-    while work:
-        node = work.pop(0)
-        if not isinstance(node, dict):
-            continue
-        if node.get('_type') == 'sql' and isinstance(node.get('sqlQuery'), str):
-            return node['sqlQuery']
-        work.extend(node.get('executionNodes') or [])
-    return None
+def sql_node(plan: dict[str, Any], database: str) -> dict[str, Any]:
+    """The plan's one SQL node, from the one shape read here: a root ``relationalTdsInstantiation`` with exactly one
+    ``sql`` node under it, written for ``database`` (its connection's type: ``DuckDB`` where Python runs it), with no
+    placeholder the engine fills in at execution (``${``). Anything else is refused by name, never run in part
+    (planner.ts ``serverPlan``, by the same rule)."""
+    root = plan.get('rootExecutionNode')
+    found = root.get('_type') if isinstance(root, dict) else None
+    children = (root.get('executionNodes') or []) if isinstance(root, dict) else []
+    if found != 'relationalTdsInstantiation' or len(children) != 1 or not isinstance(children[0], dict) \
+            or children[0].get('_type') != 'sql' or children[0].get('executionNodes'):
+        shape = _json.dumps([found, *[c.get('_type') if isinstance(c, dict) else None for c in children]])
+        raise LegendError(f'a plan read here is a relationalTdsInstantiation over one sql node, not {shape}', 'PLAN')
+    node = children[0]
+    if not isinstance(node.get('sqlQuery'), str):
+        raise LegendError('the plan carries no SQL node', 'PLAN')
+    connection = node.get('connection')
+    written = connection.get('type') if isinstance(connection, dict) else None
+    written = written if isinstance(written, str) else 'none'
+    if written != database:
+        raise LegendError(f'the plan\'s SQL is written for {written}, and it would run on {database}', 'PLAN')
+    if '${' in node['sqlQuery']:
+        raise LegendError('the plan\'s SQL holds a placeholder the engine fills in at execution (${...})', 'PLAN')
+    return node
 
 
 def tds_columns(plan: dict[str, Any]) -> tuple[Column, ...]:
     """The plan's result columns (its root's ``resultType.tdsColumns``), each its name and its type as the server says
-    it (relation-type.ts ``tdsColumns``: the page reads these types itself, by legend-lite's lattice)."""
+    it, its SQL type in ``raw['relationalType']`` (``Column.sql_type``). The page reads the types itself, by
+    legend-lite's lattice (relation-type.ts ``tdsColumns``); Python keeps them as given (PARK-31)."""
     root = plan.get('rootExecutionNode')
-    columns = root.get('resultType', {}).get('tdsColumns') if isinstance(root, dict) else None
+    result = root.get('resultType') if isinstance(root, dict) else None
+    columns = result.get('tdsColumns') if isinstance(result, dict) else None
     if not isinstance(columns, list):
         raise LegendError('the plan carries no tdsColumns', 'PLAN')
     out = []
@@ -71,9 +85,11 @@ def tds_columns(plan: dict[str, Any]) -> tuple[Column, ...]:
     return tuple(out)
 
 
-def read_plan(text: str) -> Plan:
-    """A server's ``generatePlan`` answer as a Plan: its SQL and its columns; a refusal (the engine's error shape) or
-    a plan with no SQL raised, in the server's words."""
+def read_plan(text: str, database: str = 'DuckDB') -> Plan:
+    """A server's ``generatePlan`` answer as a Plan: its SQL and its columns (``sql_node``'s one shape); a refusal (the
+    engine's error shape) raised in the server's words. INTERIM: core reads no legend-engine plan into its own
+    ExecutionPlan yet; when it does (docs/EXECUTION_PLAN_BOUNDARY_2026_10_05.md §8, phase 2) Python reads a server's
+    plan through the native library and this reader and the tab's go, test/fixtures/upstream-plans.json their cases."""
     try:
         plan = _json.loads(text)
     except ValueError:
@@ -83,16 +99,27 @@ def read_plan(text: str) -> Plan:
         kind = plan.get('errorType') if isinstance(plan, dict) else None
         raise LegendError(message if isinstance(message, str) else f'the server answered no plan: {text[:300]}',
                           kind if isinstance(kind, str) else 'PLAN')
-    sql = sql_of(plan)
-    if sql is None:
-        raise LegendError('the plan carries no SQL node', 'PLAN')
-    return Plan(sql, tds_columns(plan))
+    return Plan(sql_node(plan, database)['sqlQuery'], tds_columns(plan))
+
+
+def runnable(plan: Plan) -> Plan:
+    """A server's plan as Python runs it: one statement, a query. DuckDB runs every statement of a text it is given, so
+    a server (or anyone between it and Python, over plain http with no sign-in) could otherwise make Python's DuckDB
+    write a file, attach a database or replace a frame's view (the audit of G1); what one query may still read is
+    PARK-31's."""
+    import duckdb
+    statements = duckdb.extract_statements(plan.sql)
+    if len(statements) != 1 or statements[0].type != duckdb.StatementType.SELECT:
+        kinds = [str(st.type).rsplit('.', 1)[-1] for st in statements]
+        raise LegendError(f'a server\'s plan is run here as one query, and its SQL is {kinds}', 'PLAN')
+    return plan
 
 
 class RemotePlanner:
     """The ``remote`` or ``engine`` plane on a Python host (engine.py's ``Planner``): the server at ``url`` answers
     every ``pure/v1`` call the page makes (a query's types, a parse, a print) and plans its grids' queries, whose SQL
-    Python runs (``plan``)."""
+    Python runs (``plan``), one query each (``runnable``). A server's answer is awaited on one of the compiler's threads,
+    for up to a minute (PARK-31)."""
 
     def __init__(self, plane: str, url: str) -> None:
         if plane not in PLANES:
@@ -120,7 +147,7 @@ class RemotePlanner:
         try:
             with urllib.request.urlopen(request, timeout=_TIMEOUT) as answer:
                 return compiler.Answer(answer.status, answer.headers.get('Content-Type', 'application/json'),
-                                       answer.read().decode('utf-8'))
+                                       answer.read().decode('utf-8', errors='replace'))
         except urllib.error.HTTPError as refused:
             return compiler.Answer(refused.code, refused.headers.get('Content-Type', 'application/json'),
                                    refused.read().decode('utf-8', errors='replace'))
@@ -128,7 +155,11 @@ class RemotePlanner:
             return self.refusal(f'{self.server} did not answer at {self.url}: {failure}')
 
     def answer(self, path: str, query: str, body: str) -> compiler.Answer:
-        """A ``pure/v1`` call of the page's, sent on to the server as it came (its path, its query string, its body)."""
+        """A ``pure/v1`` call of the page's, sent on to the server as it came (its path, its query string, its body) --
+        but execute, which the server would run on its own connections: on Python a grid is planned and run through
+        plan-and-run (``execute_plan``)."""
+        if path.endswith('/execution/execute'):
+            return self.execute_plan(body, [])
         content_type = 'text/plain' if '/grammar/grammarToJson/' in path else 'application/json'
         return self._post(path, query, body, content_type)
 
@@ -149,10 +180,11 @@ class RemotePlanner:
             request = generate_plan_request(_json.loads(query), held.model, runtime)
         except ValueError as refused:
             return self.refused_plan(str(refused))
-        return self._post('/api/pure/v1/execution/generatePlan', '', _json.dumps(request), 'application/json').body
+        # written as the tab's client writes it, byte for byte (pure-protocol's toJson: _json.protocol)
+        return self._post('/api/pure/v1/execution/generatePlan', '', _json.protocol(request), 'application/json').body
 
     def read(self, answer: str) -> Plan:
-        return read_plan(answer)
+        return runnable(read_plan(answer))
 
     def refused_plan(self, message: str) -> str:
         return _json.dumps({'message': message, 'errorType': 'PLAN'})
