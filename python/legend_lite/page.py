@@ -1161,11 +1161,11 @@ class Page:
             raise ValueError('a saved page has a name')
         id = self._saved if self._saved is not None else str(uuid.uuid4())
         record = _json.dumps({'id': id, 'name': named, 'content': self._doc}, indent=None)
-        status, said = (store_call('lite_saved_cubes', pages_folder(), 'PUT', f'/{id}', record, THIS_USER)
+        status, said = (store_call('lite_saved_cubes', pages_folder(), 'PUT', f'/{id}', '', record, THIS_USER)
                         if self._saved is not None else (404, ''))
         if status == 404:
             # never saved, or its saved copy deleted since (in DataCube's Open…): saved as a new one under its id
-            status, said = store_call('lite_saved_cubes', pages_folder(), 'POST', '', record, THIS_USER)
+            status, said = store_call('lite_saved_cubes', pages_folder(), 'POST', '', '', record, THIS_USER)
         if status != 200:
             try:
                 said = json.loads(said).get('message', said)

@@ -99,10 +99,11 @@ node_test(
     data = [
         ":query_store",
         "test/conformance.ts",
-        "test/lite-server.ts",
         "test/lite.test.ts",
+        # the server started for the file (test/lite-server.ts, with the server's runfiles); its launcher named here,
+        # as $(rlocationpath) needs it
+        ":lite_server",
         ":legend_server",
-        "//core:server",
     ],
     entry_point = "test/lite.test.ts",
     env = {"LEGEND_SERVER": "$(rlocationpath :legend_server)"},

@@ -305,6 +305,11 @@ class PlanAndRunRoutes(Served):
         for kind in ('hold', 'release'):
             self.assertEqual(self.post('/planner.json', json.dumps({'kind': kind, 'model': self.table.model, 'handle': '1'}))[0], 400)
 
+    def test_the_stores_need_the_token(self):
+        # the saved queries and the saved pages (B5, B6): this user's, so only a page holding the engine's token asks
+        for path in ('/api/pure/v1/query/search', '/api/pure/v1/query/dataCube/search'):
+            self.assertEqual(self.post(path, '{}', headers={'Authorization': 'Bearer nope'})[0], 401, path)
+
     def test_both_need_the_token_and_neither_is_a_get(self):
         for path in ('/plan-and-run.json', '/planner.json'):
             self.assertEqual(self.post(path, '{}', headers={'Authorization': 'Bearer nope'})[0], 401, path)
@@ -431,15 +436,20 @@ class SavedPagesKept(unittest.TestCase):
         kept = json.loads((self.folder / 'p-2.json').read_text(encoding='utf-8'))
         self.assertEqual((kept['owner'], kept['content']), ('this user', '{"kind":"datacube.page"}'))
         # every write whole: nothing half-written left beside the pages
-        self.assertEqual([p.name for p in self.folder.iterdir() if p.suffix == '.part'], [])
+        self.assertEqual([p.name for p in self.folder.iterdir() if p.suffix == '.tmp'], [])
 
     def test_a_file_that_is_not_a_page_is_left_out_and_the_others_open(self):
         self.assertEqual(self.call('POST', '', json.dumps({'id': 'good', 'name': 'G', 'content': {}})).status, 200)
         (self.folder / 'cut-short.json').write_text('{"id": "cut-sho', encoding='utf-8')
         (self.folder / 'a-list.json').write_text('[1, 2]', encoding='utf-8')
+        # a page under another file's name (copied by hand): its file's name is its id, so it is not that page
+        (self.folder / 'copied.json').write_text((self.folder / 'good.json').read_text(encoding='utf-8'), encoding='utf-8')
         self.assertEqual([q['id'] for q in json.loads(self.call('POST', '/search', '{}').body)], ['good'])
-        # asked for by its id, a file that is not a page is said
-        self.assertEqual(self.call('GET', '/cut-short').status, 500)
+        # asked for by its id, a file that is not a page is not found -- and a page saved under its id replaces it
+        self.assertEqual(self.call('GET', '/cut-short').status, 404)
+        self.assertEqual(self.call('GET', '/copied').status, 404)
+        self.assertEqual(self.call('POST', '', json.dumps({'id': 'cut-short', 'name': 'C', 'content': {}})).status, 200)
+        self.assertEqual(json.loads(self.call('GET', '/cut-short').body)['name'], 'C')
 
     def test_an_id_that_could_name_another_place_is_refused(self):
         for bad in ('..%2Fescape', '.lock', 'a.b', 'CON', 'nul', 'COM1', 'lpt9'):

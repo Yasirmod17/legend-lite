@@ -137,8 +137,8 @@ public class LegendHttpServer {
             String rest = exchange.getRequestURI().getRawPath().substring("/api/pure/v1/query".length());
             // DataCube's saved pages (SavedCubes, the program's B6), else the saved queries
             SavedQueries.Answer a = rest.equals("/dataCube") || rest.startsWith("/dataCube/")
-                    ? SavedCubes.answer(cubeStore, exchange.getRequestMethod(), rest.substring("/dataCube".length()), body,
-                            SavedQueries.ANONYMOUS)
+                    ? SavedCubes.answer(cubeStore, exchange.getRequestMethod(), rest.substring("/dataCube".length()),
+                            exchange.getRequestURI().getRawQuery(), body, SavedQueries.ANONYMOUS)
                     : SavedQueries.answer(queryStore, exchange.getRequestMethod(), rest,
                             exchange.getRequestURI().getRawQuery(), body, SavedQueries.ANONYMOUS);
             if (a.status() == 204) {

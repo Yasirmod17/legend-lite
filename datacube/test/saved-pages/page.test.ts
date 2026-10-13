@@ -35,24 +35,57 @@ describe("the page's own saved pages: what a server here cannot be asked", () =>
     await assert.rejects(theirs.update('p-1', { ...page, name: 'Mine now' }),
       (e: unknown) => e instanceof CubeStoreError && e.status === 403 && e.message === 'Only owner can update the query');
     await assert.rejects(theirs.delete('p-1'), (e: unknown) => e instanceof CubeStoreError && e.status === 403);
-    // and a search answers the caller's own first
+    // and a search answers the caller's own first, then the chosen sort among each's (newest first)
+    await new Promise((r) => setTimeout(r, 5));
     await theirs.create({ ...page, id: 'p-2', name: 'Theirs' });
-    assert.deepEqual((await mine.search({})).map((q) => q.id), ['p-1', 'p-2']);
-    assert.deepEqual((await theirs.search({})).map((q) => q.id), ['p-2', 'p-1']);
+    await new Promise((r) => setTimeout(r, 5));
+    await mine.create({ ...page, id: 'p-3', name: 'Mine again' });
+    assert.deepEqual((await mine.search({})).map((q) => q.id), ['p-1', 'p-3', 'p-2']);
+    assert.deepEqual((await theirs.search({})).map((q) => q.id), ['p-2', 'p-1', 'p-3']);
+    assert.deepEqual((await mine.search({ sortByOption: 'SORT_BY_CREATE' })).map((q) => q.id), ['p-3', 'p-1', 'p-2']);
+    assert.deepEqual((await theirs.search({ sortByOption: 'SORT_BY_CREATE' })).map((q) => q.id), ['p-2', 'p-3', 'p-1']);
   });
 
-  it('rows it cannot read: the engine 500, naming them, and nothing written', async () => {
+  it('a row that is not a page is left out, as every host leaves it: the others open, and a page saved under its id replaces it', async () => {
+    const records = new MemoryRecords();
+    await records.call(() => ({
+      changed: new Map([
+        ['p-1', { id: 'p-1', content: 5 } as unknown as ReturnType<typeof toRow>],
+        ['p-2', { id: 'elsewhere', name: 'Moved', content: '{}' } as unknown as ReturnType<typeof toRow>],
+        ['p-3', toRow({ id: 'p-3', name: 'Fine', content: { kind: 'datacube.page' }, owner: 'me' })],
+      ]),
+      answer: undefined,
+    }));
+    const client = new CubeStoreClient(LOCAL_CUBES_API, wasmCubeServer({ load, records, user: 'me' }).fetch, 'me');
+    assert.deepEqual((await client.search({})).map((q) => q.id), ['p-3']);
+    await assert.rejects(client.get('p-1'), (e: unknown) => e instanceof CubeStoreError && e.status === 404);
+    assert.equal((await client.get('p-3')).name, 'Fine');
+    await client.create({ ...page, name: 'Saved over it' });
+    assert.equal((await client.get('p-1')).name, 'Saved over it');
+  });
+
+  it('keeps upstream\'s fields only: a number outside the content is never kept as a page\'s', async () => {
+    const records = new MemoryRecords();
+    const client = new CubeStoreClient(LOCAL_CUBES_API, wasmCubeServer({ load, records, user: 'me' }).fetch, 'me');
+    const made = await client.create({ ...page, description: 'd', version: 9007199254740993 } as unknown as typeof page);
+    assert.deepEqual(Object.keys(made).sort(), ['content', 'createdAt', 'description', 'id', 'lastOpenAt', 'lastUpdatedAt', 'name', 'owner']);
+    assert.equal('version' in (await client.get('p-1')), false);
+  });
+
+  it('a module that fails (a trap, an exception out of it): the engine 500, naming it, and nothing written', async () => {
     let wrote = 0;
-    const odd: CubeRecords = {
+    const counted: CubeRecords = {
       call: async (f) => {
-        const said = f(new Map([['p-1', { id: 'p-1', content: 5 } as unknown as ReturnType<typeof toRow>]]));
+        const said = f(new Map());
         wrote += said.changed.size;
         return said.answer;
       },
     };
-    const r = await wasmCubeServer({ load, records: odd, user: 'me' }).fetch(`${LOCAL_CUBES_API}/pure/v1/query/dataCube/p-1`);
+    const broken = { exports: { ...module.exports, cubes: () => { throw new Error('illegal cast'); } } } as typeof module;
+    const r = await wasmCubeServer({ load: async () => broken, records: counted, user: 'me' })
+      .fetch(`${LOCAL_CUBES_API}/pure/v1/query/dataCube`, { method: 'POST', body: JSON.stringify(page) });
     assert.equal(r.status, 500);
-    assert.match(((await r.json()) as { message: string }).message, /the row of saved page 'p-1' is not one/);
+    assert.deepEqual(await r.json(), { code: -1, message: 'Error: illegal cast', status: 'error' });
     assert.equal(wrote, 0);
   });
 

@@ -378,25 +378,42 @@ the Studio line and Compiler Rewrite, and an audit.
 
 **Built 2026-10-13 (branch `datacube/python-parity`; announced in IN_FLIGHT on main, 5aa3dd817):**
 - The rules are `core/src/main/java/com/legend/queries/SavedCubes.java`, in `//core:saved_queries` beside the saved
-  queries' (RuleStore's, word for word: the client's id, the owner forced, `lastOpenAt` stamped, a search's light
-  records -- the caller's first, then the sort, then the limit). The user is the host's to say: the page's "this
-  browser", Python's "this user", the server's anonymous caller. Two things the TypeScript rules left to the host are
-  the rules' now: a page's id is one a page makes (letters, digits, "-", "_"; no Windows device name), refused alike
-  on every host where only Python's folder refused it; and a body or rows of the wrong shape are the engine's 500,
-  checked, not cast (B5's lesson: the page's WebAssembly has no ClassCastException).
+  queries': RuleStore's (the client's id, the owner forced, `lastOpenAt` stamped, a search's light records -- the
+  caller's first, then the sort, then the limit), with the user the host's to say: the page's "this browser", Python's
+  "this user", the server's anonymous caller. Each call takes the request's query string, as the saved queries' do.
 - Kept as rows, the content its exact JSON text, as before: `FileCubeRecords` (one `<id>.json` each: Python's
   `ll.home()/pages`, the layout its pages were already in, so they open as they were; the server's
-  `--query-store DIR/dataCube`) and `MemoryCubeRecords` (the page's IndexedDB rows, handed in).
+  `--query-store DIR/dataCube`) and `MemoryCubeRecords` (the page's IndexedDB rows, handed in). A row keeps upstream's
+  `DataCubeQuery` fields only (id, name, description, content, owner, the three times), so every host keeps a page
+  exactly (the page's rows are structured clones: a number past 2^53 outside the content would not be kept so). A row
+  that is not a page -- a file cut short, another id than its name, a row of another shape -- is left out on every
+  host: not listed, not found, every other page opening, and a page saved under its id replacing it.
+- Where the rules differ from RuleStore's, each on every host (reviewed: an audit of bf0efe899):
+  - a page's id is one a page makes (letters, digits, "-", "_"; no Windows device name), refused 400 where only
+    Python's folder refused it; an id or a name that is not a string is refused 400 (RuleStore took any truthy value);
+  - a content of `""`, `0` or `false` is kept (RuleStore refused a falsy content; only a missing or null one is now:
+    "Query content is missing");
+  - a limit below 1 answers none (RuleStore's `slice(0, -1)` dropped the last), one above 100 the cap of 100;
+  - a body or rows of the wrong shape are the engine's 500, checked, not cast (B5's lesson: the page's WebAssembly has
+    no ClassCastException); its fields in the engine's order on every host;
+  - the record's fields are in the order the client wrote them (its protocol JSON sorts the keys), the stamps last.
+- Not served yet, answered as paths the store has not (the Studio line's review): upstream's `dataCube/batch`,
+  `dataCube/events` and `dataCube/stats`, the routes that take a query string. L1's differential lists them expected.
 - The page: `QueriesPage.cubes`, an export of the saved queries' module (one module for both stores, fetched once, at
   the first call of either); `datacube/src/cube-store.ts` is now the one client (`CubeStoreClient`, the content read
   exactly, the times plain numbers), the page's adapter (`wasmCubeServer`) and its rows, each call one IndexedDB
   transaction (as B5's). `RuleStore` and `HostRecords` are gone; the IndexedDB layout is unchanged.
-- Python: `/api/pure/v1/query/dataCube` answered by the native library's `lite_saved_cubes` under the folder's lock
-  (`/saved-pages.json`, the records' four calls, gone); `page.save()` (D) keeps a page there.
+- Python: `/api/pure/v1/query/dataCube` answered by the native library's `lite_saved_cubes` under the folder's lock,
+  behind the engine's token (`/saved-pages.json`, the records' four calls, gone); `page.save()` (D) keeps a page there.
+  It differs from the tab's Save in two ways, recorded: saved over a copy deleted meanwhile, it saves it again (the
+  tab's Save answers the store's 404); and the page object knows only its own saves, so a page saved in the tab and
+  then with `page.save()` is two saved pages.
 - Proof: one suite (`datacube/test/saved-pages/conformance.ts`) on the page (`//datacube:saved_pages_page_test`), the
-  server (`:saved_pages_server_test`) and Python (`:python_saved_pages_test`, the warehouse lane); Python's folder's
-  own cases (`python/tests/test_engine.py` SavedPagesKept: a page kept before opens as it was); `python_engine_test`
-  saves on Python's page and opens it again, and opens a page saved from Python.
+  server (`:saved_pages_server_test`) and Python (`:python_saved_pages_test`, the warehouse lane); the page's own cases
+  (two users over one store, mine first under a sort, a row that is not a page, a field not upstream's, the module
+  failing); Python's folder's own cases (`python/tests/test_engine.py` SavedPagesKept: a page kept before opens as it
+  was); `python_engine_test` saves on Python's page and opens it again, and opens a page saved from Python. Measured
+  (the audit): a call over 200 pages of 100 kB (20 MB of rows) takes about 210 ms in the module, 50 of 10 kB 6 ms.
 
 #### B7. A remote git
 

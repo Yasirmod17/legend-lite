@@ -40,15 +40,17 @@ public final class QueriesPage {
     }
 
     /**
-     * One {@code /api/pure/v1/query/dataCube...} call ({@code rest}: the path after it) over DataCube's saved pages,
+     * One {@code /api/pure/v1/query/dataCube...} call ({@code rest}: the path after it, {@code rawQuery} its query
+     * string, as {@link #answer}'s) over DataCube's saved pages,
      * {@code rows} the page's ({@code {"id": row}}: each record with its content as exact JSON text), as {@code user}:
      * {@code {"status", "body", "changed"}} (each page written, its row, or null for one removed), JSON (the program's
      * B6: DataCube's saved pages on the same module as the saved queries, fetched once for both).
      */
     @org.teavm.jso.JSExport
-    public static String cubes(String method, String rest, String body, String user, String rows) {
+    public static String cubes(String method, String rest, String rawQuery, String body, String user, String rows) {
         MemoryCubeRecords held = MemoryCubeRecords.of(rows);
-        SavedQueries.Answer a = SavedCubes.answer(new SavedCubes(held, System::currentTimeMillis), method, rest, body, user);
+        SavedQueries.Answer a = SavedCubes.answer(new SavedCubes(held, System::currentTimeMillis), method, rest,
+                rawQuery.isEmpty() ? null : rawQuery, body, user);
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("status", a.status());
         out.put("body", a.json());

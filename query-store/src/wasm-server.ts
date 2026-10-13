@@ -23,7 +23,7 @@ export const LOCAL_API = 'http://this-browser.invalid/api';
 export interface QueriesModule {
   readonly exports: {
     answer(method: string, rest: string, rawQuery: string, body: string, user: string, records: string): string;
-    cubes(method: string, rest: string, body: string, user: string, rows: string): string;
+    cubes(method: string, rest: string, rawQuery: string, body: string, user: string, rows: string): string;
   };
 }
 

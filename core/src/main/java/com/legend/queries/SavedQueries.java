@@ -136,9 +136,17 @@ public final class SavedQueries {
         } catch (java.io.UncheckedIOException | IllegalArgumentException | ClassCastException e) {
             // the store's disk failing, or a body that is not the JSON the engine takes (a bad
             // integer, a field of the wrong kind): the engine's 500, naming the exception
-            return new Answer(500, Json.toCompact(Map.of("code", -1,
-                    "message", e.getClass().getSimpleName() + ": " + e.getMessage(), "status", "error")));
+            return failed(e);
         }
+    }
+
+    /** The engine's 500 for an exception, naming it: {@code {"code", "message", "status"}}, in that order. */
+    static Answer failed(RuntimeException e) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("code", -1);
+        out.put("message", e.getClass().getSimpleName() + ": " + e.getMessage());
+        out.put("status", "error");
+        return new Answer(500, Json.toCompact(out));
     }
 
     private static Answer ok(String json) {

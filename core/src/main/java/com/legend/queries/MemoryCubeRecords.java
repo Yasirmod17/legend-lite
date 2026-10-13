@@ -17,19 +17,18 @@ public final class MemoryCubeRecords implements SavedCubes.Records {
     private final Map<String, Json.@com.legend.base.Nullable Obj> changed = new LinkedHashMap<>();
 
     /**
-     * The rows as JSON: each page's row by its id. Their shape is checked, not cast: in the page's WebAssembly a failed
-     * cast stops the module, where rows of another shape must be the 500 every host answers.
+     * The rows as JSON: each page's row by its id. Their shape is checked, not cast (in the page's WebAssembly a failed
+     * cast stops the module): a row that is not a page is left out, as every host leaves it ({@link SavedCubes#isRow}),
+     * so the page's other pages still open and a page saved under its id replaces it.
      */
     public static MemoryCubeRecords of(String json) {
         MemoryCubeRecords out = new MemoryCubeRecords();
         // strip().isEmpty(), not isBlank(): TeaVM reads only a space as blank
         Json.Obj all = Json.parseObject(json.strip().isEmpty() ? "{}" : json);
         for (Map.Entry<String, Json.Node> e : all.fields().entrySet()) {
-            if (!(e.getValue() instanceof Json.Obj row && SavedCubes.isRow(row)
-                    && e.getKey().equals(((Json.Str) row.get("id")).value()))) {
-                throw new IllegalArgumentException("the row of saved page '" + e.getKey() + "' is not one");
+            if (e.getValue() instanceof Json.Obj row && SavedCubes.isRow(e.getKey(), row)) {
+                out.held.put(e.getKey(), row);
             }
-            out.held.put(e.getKey(), row);
         }
         return out;
     }

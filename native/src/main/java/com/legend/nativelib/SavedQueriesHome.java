@@ -48,14 +48,14 @@ final class SavedQueriesHome {
      *  {@code ll.home()/pages}, the layout its pages were kept in), answered as {@link #savedQueries}'. */
     @CEntryPoint(name = "lite_saved_cubes")
     static CCharPointer savedCubes(IsolateThread thread, CCharPointer folder, CCharPointer method, CCharPointer rest,
-            CCharPointer body, CCharPointer user) {
+            CCharPointer query, CCharPointer body, CCharPointer user) {
         String a;
         try {
-            String f = Compiler.text(folder), m = Compiler.text(method), r = Compiler.text(rest), b = Compiler.text(body),
-                    u = Compiler.text(user);
+            String f = Compiler.text(folder), m = Compiler.text(method), r = Compiler.text(rest), q = Compiler.text(query),
+                    b = Compiler.text(body), u = Compiler.text(user);
             a = Folded.of(() -> {
                 SavedQueries.Answer answer = SavedCubes.answer(new SavedCubes(new FileCubeRecords(Path.of(f)),
-                        System::currentTimeMillis), m, r, b, u);
+                        System::currentTimeMillis), m, r, q.isEmpty() ? null : q, b, u);
                 return answer.status() + "\n" + answer.json();
             });
         } catch (Throwable failure) {

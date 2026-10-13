@@ -65,11 +65,13 @@ public final class SavedCubes {
     }
 
     /**
-     * One {@code /api/pure/v1/query/dataCube...} request ({@code rest}: the path after it), as {@code user}: 200 with
-     * JSON, 204 for a delete, and a refusal as {@code {"message"}} with its status, as {@link SavedQueries}' are.
+     * One {@code /api/pure/v1/query/dataCube...} request ({@code rest}: the path after it; {@code rawQuery}: its query
+     * string, or null), as {@code user}: 200 with JSON, 204 for a delete, and a refusal as {@code {"message"}} with its
+     * status, as {@link SavedQueries}' are. Not served yet, and answered as paths it has not: upstream's
+     * {@code dataCube/batch}, {@code dataCube/events} and {@code dataCube/stats} (the ones that take a query string).
      */
     public static SavedQueries.Answer answer(@com.legend.base.Nullable SavedCubes store, String method, String rest,
-            String body, String user) {
+            @com.legend.base.Nullable String rawQuery, String body, String user) {
         if (store == null) {
             return new SavedQueries.Answer(500, "{\"code\":-1,\"message\":\"DataCube query store has not been configured"
                     + " properly (legend-lite: start the server with --query-store DIR)\",\"status\":\"error\"}");
@@ -96,9 +98,8 @@ public final class SavedCubes {
         } catch (SavedQueries.Refusal r) {
             return new SavedQueries.Answer(r.status, Json.toCompact(Map.of("message", String.valueOf(r.getMessage()))));
         } catch (java.io.UncheckedIOException | IllegalArgumentException | ClassCastException e) {
-            // the store's disk failing, or a body or rows of another shape: the engine's 500, naming the exception
-            return new SavedQueries.Answer(500, Json.toCompact(Map.of("code", -1,
-                    "message", e.getClass().getSimpleName() + ": " + e.getMessage(), "status", "error")));
+            // the store's disk failing, or a body of another shape: the engine's 500, naming the exception
+            return SavedQueries.failed(e);
         }
     }
 
@@ -127,7 +128,7 @@ public final class SavedCubes {
             boolean includeOwner = bool(term, "includeOwner");
             String lower = t.toLowerCase(java.util.Locale.ROOT);
             found.removeIf(q -> !(exact
-                    ? t.equals(text(q, "name")) || (includeOwner && t.equals(text(q, "owner")))
+                    ? t.equals(text(q, "name")) || (includeOwner && q.has("owner") && t.equals(text(q, "owner")))
                     : t.equals(text(q, "id")) || text(q, "name").toLowerCase(java.util.Locale.ROOT).contains(lower)
                             || text(q, "owner").toLowerCase(java.util.Locale.ROOT).contains(lower)));
         }
@@ -145,8 +146,9 @@ public final class SavedCubes {
             order = order.thenComparing(Comparator.comparingLong((Json.Obj q) -> time(q, field)).reversed());
         }
         found.sort(order);
-        int limit = Math.min(MAX_SEARCH, spec.has("limit") && spec.get("limit") instanceof Json.Num n
-                ? (int) Math.max(0, Math.min(Integer.MAX_VALUE, n.longValue())) : Integer.MAX_VALUE);
+        // clamped by its value as a double: a limit past a long's range (1e30) is the cap, never a wrapped count
+        int limit = spec.has("limit") && spec.get("limit") instanceof Json.Num n
+                ? (int) Math.max(0, Math.min(MAX_SEARCH, Math.floor(n.doubleValue()))) : MAX_SEARCH;
         List<Object> out = new ArrayList<>();
         for (Json.Obj q : found.subList(0, Math.min(limit, found.size()))) {
             LinkedHashMap<String, Json.Node> light = new LinkedHashMap<>(q.fields());
@@ -163,8 +165,10 @@ public final class SavedCubes {
             throw new SavedQueries.Refusal("Can't find query with ID '" + id + "'", 404);
         }
         Json.Obj opened = with(found, Map.of("lastOpenAt", Json.num(clock.getAsLong())));
+        // read for the wire first: a content that cannot be read is the 500 with nothing written
+        Json.Obj answer = wire(opened);
         records.put(opened);
-        return wire(opened);
+        return answer;
     }
 
     /** {@code POST dataCube}: made with the client's id, its owner this user. */
@@ -285,17 +289,35 @@ public final class SavedCubes {
     }
 
     /**
-     * Whether {@code row} is a page as the rules keep it: its id and its content's text, both strings. The records a
-     * host hands in are checked with it (they are the host's storage, never cast).
+     * Whether {@code row} is the page {@code id} as the rules keep it: its id that one, its content's text a string.
+     * The records a host keeps are checked with it, never cast: one that is not a page (a file written by something
+     * else, cut short; a row of another shape) is LEFT OUT on every host -- not listed, not found, so a page saved under
+     * its id replaces it -- and every other page still opens.
      */
-    static boolean isRow(Json.Obj row) {
-        return row.has("id") && row.get("id") instanceof Json.Str && row.has("content") && row.get("content") instanceof Json.Str;
+    static boolean isRow(String id, Json.Obj row) {
+        return row.has("id") && row.get("id") instanceof Json.Str s && s.value().equals(id)
+                && row.has("content") && row.get("content") instanceof Json.Str;
     }
 
-    /** A record from the wire as the row kept: its content the exact JSON text. */
+    /**
+     * A record from the wire as the row kept: upstream's {@code DataCubeQuery} fields only, in the record's order (the
+     * stamps the rules set after), its content the exact JSON text. Nothing else a body carries is kept: a page keeps
+     * only what each host keeps exactly (the page's rows are structured clones, which keep a string exactly, a number
+     * past 2^53 not).
+     */
     private static Json.Obj row(Json.Obj query) {
-        return with(query, Map.of("content", Json.str(Json.toCompact(query.get("content")))));
+        LinkedHashMap<String, Json.Node> kept = new LinkedHashMap<>();
+        for (Map.Entry<String, Json.Node> e : query.fields().entrySet()) {
+            if (FIELDS.contains(e.getKey())) {
+                kept.put(e.getKey(), e.getValue());
+            }
+        }
+        return with(new Json.Obj(kept), Map.of("content", Json.str(Json.toCompact(query.get("content")))));
     }
+
+    /** Upstream's {@code DataCubeQuery}: the fields a page's record has. */
+    private static final List<String> FIELDS = List.of("id", "name", "description", "content", "owner", "createdAt",
+            "lastUpdatedAt", "lastOpenAt");
 
     /** A row as the wire carries it: its content JSON again, its numbers as written. */
     private static Json.Obj wire(Json.Obj row) {

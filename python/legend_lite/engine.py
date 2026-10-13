@@ -382,7 +382,7 @@ class Engine:
         so it is called from a thread of the caller's own (a connection's, a message's), never a compiler thread."""
         if _saved_cube(path):
             # on the caller's thread, as the saved queries': it waits for the folder's lock holding no compiler thread
-            return self._saved_cubes(method, path, body or '')
+            return self._saved_cubes(method, path, query, body or '')
         if _saved_query(path):
             # on the caller's thread, as the model home's: it waits for the folder's lock holding no compiler thread
             return self._saved_queries(method, path, query, body or '')
@@ -483,13 +483,13 @@ class Engine:
             return _said(405, 'the query store answers GET, POST, PUT and DELETE')
         return _stored('lite_saved_queries', queries_folder(), method, path[len(_QUERIES):], query, body)
 
-    def _saved_cubes(self, method: str, path: str, body: str) -> Answer:
+    def _saved_cubes(self, method: str, path: str, query: str, body: str) -> Answer:
         """One call of DataCube's saved pages (B6): answered by legend-lite's saved-page rules in the native library --
         the ones its server runs and the page runs compiled to WebAssembly -- over this user's folder (``home()/pages``,
         one file each, as the page's records were kept), under its lock. Its caller is this user: there is no sign-in."""
         if method not in ('GET', 'POST', 'PUT', 'DELETE'):
             return _said(405, "DataCube's saved pages answer GET, POST, PUT and DELETE")
-        return _stored('lite_saved_cubes', self.pages_folder(), method, path[len(_CUBES):], body)
+        return _stored('lite_saved_cubes', self.pages_folder(), method, path[len(_CUBES):], query, body)
 
     def _settings_kept(self, body: str) -> Answer:
         """The page's settings kept whole (one JSON object, the page's own: never read here), in this user's folder, so

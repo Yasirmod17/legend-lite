@@ -203,7 +203,7 @@ export function wasmCubeServer(o: { readonly load: () => Promise<QueriesModule>;
     return o.records.call((rows) => {
       let said: { status: number; body: string; changed: Record<string, CubeRow | null> };
       try {
-        said = JSON.parse(m.exports.cubes(request.method, rest, body, o.user, rowsJson(rows))) as typeof said;
+        said = JSON.parse(m.exports.cubes(request.method, rest, url.search.replace(/^\?/, ''), body, o.user, rowsJson(rows))) as typeof said;
       } catch (e) {
         // rows the rules cannot read are an exception out of the module (and a bug in them a trap): the engine's
         // 500, naming it, as the server answers its own -- and nothing written
