@@ -293,6 +293,42 @@ class PlanAndRunRoutes(Served):
             self.assertNotEqual(status, 200, path)
 
 
+class SettingsKept(Served):
+    """The page's own settings, kept by Python in this user's folder (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B2): what
+    the browser keeps per address, and Python's address is new each run."""
+
+    def get(self, path):
+        request = urllib.request.Request(self.server.url + path, headers={'Authorization': self.server.authorization})
+        try:
+            with urllib.request.urlopen(request, timeout=30) as r:
+                return r.status, r.read()
+        except urllib.error.HTTPError as e:
+            return e.code, e.read()
+
+    def test_kept_whole_and_read_back_by_the_next_page(self):
+        from unittest import mock
+        home = tempfile.TemporaryDirectory()
+        self.addCleanup(home.cleanup)
+        with mock.patch.dict(os.environ, {'LEGEND_LITE_HOME': home.name}):
+            self.assertEqual(self.get('/settings.json'), (200, b'null'), 'none kept yet')
+            values = {'dataCube.grid.rowBuffer': 30, 'dataCube.debugger.enableDebugMode': True}
+            self.assertEqual(self.post('/settings.json', json.dumps(values))[0], 204)
+            self.assertEqual(json.loads(self.get('/settings.json')[1]), values)
+            self.assertEqual(json.loads(Path(home.name, 'settings', 'datacube.json').read_text()), values)
+            # a write is whole: the next replaces it
+            self.assertEqual(self.post('/settings.json', json.dumps({'dataCube.grid.rowBuffer': 40}))[0], 204)
+            self.assertEqual(json.loads(self.get('/settings.json')[1]), {'dataCube.grid.rowBuffer': 40})
+
+    def test_only_an_object_and_only_with_the_token(self):
+        for body in ('not json', '[1]', '"x"'):
+            self.assertEqual(self.post('/settings.json', body)[0], 400, body)
+        self.assertEqual(self.post('/settings.json', '{}', headers={'Authorization': 'Bearer nope'})[0], 401)
+        request = urllib.request.Request(self.server.url + '/settings.json')
+        with self.assertRaises(urllib.error.HTTPError) as refused:
+            urllib.request.urlopen(request, timeout=30)
+        self.assertEqual(refused.exception.code, 401)
+
+
 class SavedPagesKept(unittest.TestCase):
     """The page's saved pages (step 2d): the browser's records, kept whole, one file each in this user's folder, the
     store's rules the page's own -- the engine answers only all, find, put and remove."""

@@ -72,8 +72,11 @@ built here and reviewed by that line (Compiler Rewrite for Bazel, Plan Gen for t
    today need the tab's own planner (`services.engine.local`), skip a grid whose rows come from a runner (every Python
    grid since PlanAndRun) and name the place `Browser` in the code. Instead: a model writer and sample rows through
    PlanAndRun from every host, the place named by the host. Then sweep the app for every other host-only check.
-2. **Python's page keeps its origin.** A fixed port per user (or the host's own settings), so what the browser keeps
-   per origin survives a run.
+2. **The page's settings kept by Python, not by its address.** The app already reads and writes its settings through
+   the browser service (`readSettings`, `writeSettings`); on Python they are Python's (`settings.json`, in
+   `ll.home()/settings`, under the folder's lock), so every notebook and run of the user's shows them. Chosen over a
+   fixed port: two notebooks at once would still have two addresses. Built 2026-10-12 (the warehouse address the tab
+   remembers waits for C3, where Python's pages get a warehouse).
 3. **The SDLC and the Depot in Python's native library,** the same Java over `GitStorage` in this user's folder
    (`ll.home()/projects`), a lock held across Python processes around each call. Python serves `/sdlc/api` and
    `/depot/api`, headless calls them in-process. The SDLC's conformance suite (`sdlc-client/test/conformance.ts`)

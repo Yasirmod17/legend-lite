@@ -54,7 +54,7 @@ import pyarrow.ipc
 from . import _json, _planner, compiler
 from ._library import library
 from .frames import Frames, UntypedColumn
-from ._home import SavedPages
+from ._home import SavedPages, Settings
 
 _API = '/api/pure/v1/'
 _EXECUTE = _API + 'execution/execute'
@@ -68,6 +68,9 @@ _FILE_IN, _FILE_OUT, _REMOTE, _SERVICES = '/file.json', '/forget.json', '/remote
 _FILE_PART = '/file-part.json'
 # the page's saved pages, as the browser keeps its records (step 2d): all, one, put, remove
 _SAVED = '/saved-pages.json'
+# the page's own settings, kept between visits as the browser keeps them (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B2):
+# GET what was kept, POST them whole
+_SETTINGS = '/settings.json'
 # PLANANDRUN (docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md §15): a page's grid planned against the model Python holds and
 # run on its DuckDB, in one call; and the planner protocol's other requests, answered as the tab's worker answers them
 _PLAN_AND_RUN, _PLANNER = '/plan-and-run.json', '/planner.json'
@@ -205,7 +208,7 @@ def private(path: str) -> bool:
     """Whether a call reads the engine's data -- the API, a frame's cube, its version -- and so, over HTTP, carries the
     token. The site's files are the page's own and carry no secret."""
     return path.startswith(_API) or path in ('/cube.json', '/version.json', '/page.json', _FILE_IN, _FILE_PART, _FILE_OUT, _REMOTE,
-                                             _SAVED, _SERVICES, _PLAN_AND_RUN, _PLANNER)
+                                             _SAVED, _SETTINGS, _SERVICES, _PLAN_AND_RUN, _PLANNER)
 
 
 def _arrow_requested(query: str) -> bool:
@@ -328,6 +331,8 @@ class Engine:
                 return self._remote(body or '')
             if path == _SAVED:
                 return self._saved(body or '')
+            if path == _SETTINGS:
+                return self._settings_kept(body or '')
             if path == _PLAN_AND_RUN:
                 return _workers().submit(_answered, self._plan_and_run, body or '').result()
             if path == _PLANNER:
@@ -346,6 +351,8 @@ class Engine:
             return self._page(query)
         if path == _SERVICES:
             return Answer(200, 'application/json', json.dumps(self.services()).encode('utf-8'))
+        if path == _SETTINGS:
+            return Answer(200, 'application/json', json.dumps(Settings().read()).encode('utf-8'))
         return self._file(path)
 
     def services(self) -> dict[str, Any]:
@@ -362,6 +369,19 @@ class Engine:
     def saved_pages(self) -> SavedPages:
         """Where the page's saved pages are kept: the folder given, else this user's (``home()``), as it is now."""
         return self._saved_pages if self._saved_pages is not None else SavedPages()
+
+    def _settings_kept(self, body: str) -> Answer:
+        """The page's settings kept whole (one JSON object, the page's own: never read here), in this user's folder, so
+        every notebook and run shows them (B2): the browser's storage is the page's address's, and Python's address is
+        new each run."""
+        try:
+            values = json.loads(body)
+        except ValueError:
+            return _said(400, "DataCube's settings are one JSON object")
+        if not isinstance(values, dict):
+            return _said(400, "DataCube's settings are one JSON object")
+        Settings().write(values)
+        return Answer(204, 'text/plain; charset=utf-8', b'')
 
     def _saved(self, body: str) -> Answer:
         """The page's saved pages, as the browser keeps its records (``{"call": "all" | "find" | "put" | "remove", "id"?,
@@ -974,9 +994,9 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802 -- the stdlib's name
         url = urlsplit(self.path)
         # the API, an open page saying what it is now (page.json: Python's page.read()), a page's file in or out, the
-        # saved pages, and PlanAndRun's calls
+        # saved pages, the page's settings, and PlanAndRun's calls
         if not (url.path.startswith(_API) or url.path in ('/page.json', _FILE_IN, _FILE_PART, _FILE_OUT, _REMOTE, _SAVED,
-                                                          _PLAN_AND_RUN, _PLANNER)):
+                                                          _SETTINGS, _PLAN_AND_RUN, _PLANNER)):
             self._refuse_unread(404, f'no such path: {url.path}')
             return
         if not self._admitted(url.path):

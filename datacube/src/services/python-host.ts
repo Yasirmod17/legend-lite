@@ -79,6 +79,12 @@ export interface PythonServicesOptions {
   /** What Python said it offers (`askedOffers`), asked once as the page starts. */
   readonly offers: PythonOffers;
   /**
+   * The page's settings as Python keeps them (`askedSettings`, asked once as the page starts), or none: Python keeps
+   * them in this user's folder, where the browser's own storage, its address's, would lose them with each run's new
+   * address (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B2).
+   */
+  readonly settings?: Record<string, unknown>;
+  /**
    * How the page is told that Python moved what it shows: at once of the versions now, then as they move, or why
    * Python no longer says (a string). A tab asks (`askedVersions`, about once a second); a notebook's widget is told
    * (its `versions`, or its frame's `version`). Returns what stops it.
@@ -259,6 +265,28 @@ async function frameOf(link: PythonLink, name: string): Promise<FrameModel> {
   return { model: said.model, runtime: said.runtime, source: said.source, version: said.version };
 }
 
+/** The page's settings as Python keeps them (`settings.json`), or none kept. */
+export async function askedSettings(link: PythonLink): Promise<Record<string, unknown> | undefined> {
+  const said = JSON.parse(await asked(link, 'settings.json')) as unknown;
+  return said !== null && typeof said === 'object' && !Array.isArray(said) ? (said as Record<string, unknown>) : undefined;
+}
+
+/**
+ * The browser's own things, its settings kept by Python: read from what Python said as the page started, written to it
+ * whole as they change. A write Python refuses leaves them for this visit, as a browser that refuses its storage does.
+ */
+function pythonBrowser(link: PythonLink, browser: BrowserService, kept: Record<string, unknown> | undefined): BrowserService {
+  let settings = kept;
+  return {
+    ...browser,
+    readSettings: () => settings,
+    writeSettings: (values) => {
+      settings = values;
+      void posted(link, 'settings.json', values).catch(() => undefined);
+    },
+  };
+}
+
 /** What Python's host offers the page (`services.json`), or why it did not say. */
 export async function askedOffers(link: PythonLink): Promise<PythonOffers> {
   const said = JSON.parse(await asked(link, 'services.json')) as {
@@ -417,6 +445,6 @@ export function pythonServices(o: PythonServicesOptions): Services {
       watch: o.watch,
       ...('page' in o.shows ? { page: livePage(link, o.shows.page) } : {}),
     },
-    browser: o.browser,
+    browser: pythonBrowser(link, o.browser, o.settings),
   };
 }
