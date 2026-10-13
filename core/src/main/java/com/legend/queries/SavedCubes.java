@@ -246,9 +246,14 @@ public final class SavedCubes {
         return id.value();
     }
 
+    /** Whether {@code id} is one a page makes ({@link #ID}). */
+    static boolean isPageId(String id) {
+        return ID.matcher(id).matches() && !DEVICE.matcher(id).matches();
+    }
+
     /** Refused unless {@code id} is one a page makes ({@link #ID}). */
     static void pageId(String id) {
-        if (!ID.matcher(id).matches() || DEVICE.matcher(id).matches()) {
+        if (!isPageId(id)) {
             throw new SavedQueries.Refusal("a saved page's id is letters, digits, \"-\" and \"_\" (as a page makes one),"
                     + " not '" + id + "'", 400);
         }

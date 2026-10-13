@@ -444,6 +444,9 @@ class SavedPagesKept(unittest.TestCase):
         (self.folder / 'a-list.json').write_text('[1, 2]', encoding='utf-8')
         # a page under another file's name (copied by hand): its file's name is its id, so it is not that page
         (self.folder / 'copied.json').write_text((self.folder / 'good.json').read_text(encoding='utf-8'), encoding='utf-8')
+        # and a file whose name is no page's id (a space in it), its row naming that id: get refuses the id, so no list
+        # names it
+        (self.folder / 'a b.json').write_text('{"id": "a b", "name": "S", "content": "{}"}', encoding='utf-8')
         self.assertEqual([q['id'] for q in json.loads(self.call('POST', '/search', '{}').body)], ['good'])
         # asked for by its id, a file that is not a page is not found -- and a page saved under its id replaces it
         self.assertEqual(self.call('GET', '/cut-short').status, 404)

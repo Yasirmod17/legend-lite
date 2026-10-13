@@ -35,9 +35,10 @@ public final class FileCubeRecords implements SavedCubes.Records {
         }
         try (var files = Files.list(directory)) {
             for (Path p : files.filter(f -> f.getFileName().toString().endsWith(".json")).toList()) {
-                // a page by its file's name, as find reads it
+                // a page by its file's name, as find reads it: a name that is no page's id is no page (get refuses it)
                 String name = p.getFileName().toString();
-                Json.Obj row = read(p, name.substring(0, name.length() - ".json".length()));
+                String id = name.substring(0, name.length() - ".json".length());
+                Json.Obj row = SavedCubes.isPageId(id) ? read(p, id) : null;
                 if (row != null) {
                     out.put(((Json.Str) row.get("id")).value(), row);
                 }
