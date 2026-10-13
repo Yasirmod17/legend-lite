@@ -813,6 +813,26 @@ basics could land with it.
   the study's §9.3), and three recorded.
 - **Next on the line:** regular expressions (`~`, `regexp_*`), then the HTTP route and the wire.
 
+**Announced 2026-10-13 -- the long tail: text, numbers, date spellings, aggregate and window permutations** (the user,
+after the basics landed: the functions first, "all the long tail ... including the date/time bucket", "all the
+string/math functions", and every permutation of window and aggregate functions; regular expressions last, if ever).
+Branch `claude/loving-euler-gjta59`, three commits over main acd7a1d (733fa90, d19b606, and one to come); the study's
+§9.4. It lands as a pull request, merged after its full CI run.
+- **The SQL front end:** `protocol/sql/SqlToPure.java` -- text (`concat_ws`, `format`, `overlay`, `quote_literal`,
+  `quote_nullable`, `translate`, `split_part`, the trims naming `' '`), numbers (`div`, `mod` and `%` of numerics,
+  `log(b, x)`, `log10`, `cot`, `width_bucket`, a numeric `power` and `^`), `extract`'s `dow`, `week`, `decade`,
+  `century`, `millennium` and a date's `epoch`, `isfinite`, the `regr_*` aggregates, ORDER BY inside aggregates,
+  FILTER on window aggregates, frame `EXCLUDE`; new `protocol/sql/PostgresDateTime.java` (Postgres's date and timestamp
+  spellings, datetime.c's ParseDateTime and DecodeDateTime ported).
+- **One cross-area edit, a guard file:** `CodeShapeGuardrailTest` -- eleven fields of `PostgresDateTime`'s decoder
+  (datetime.c's struct pg_tm and its field mask, scoped to one constant's read, the parser-cursor lifecycle)
+  allowlisted, dated.
+- **Tests:** `SqlToPureTest`, new `PostgresDateTimeTest`; `sql-parity/` the ledger, the answers, `lite/text.yaml`,
+  `lite/math.yaml` and `lite/aggregates.yaml` (new), `lite/dates.yaml`, `lite/windows.yaml`.
+- **Docs:** the study's §9.4, `docs/GATES.md`.
+
+Not touched: `sql/dialect/`, `lowering/`, the Pure parser.
+
 ## An eighth line, 2026-10-11: Databricks, Snowflake and BigQuery (the user's ask, rule 5)
 
 The user: add Snowflake, Databricks and BigQuery as backends "very similar to how we just added Postgres", the PCT
