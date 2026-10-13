@@ -983,6 +983,17 @@ carrier JSON <- VARCHAR); five suite classes and `ChannelBLane`'s pins.
 plan by outcome; `ArchitectureTest` registers its two tallies, dated); `spec/.../rcorpus/MinimalCorpus.java`
 attributes it per test; `tools/census/primitive_map.py` and `primitive_cover.py` (README section 3). The corpus needs
 244 primitives; 48 PCT never runs anywhere; 77 corpus tests carry all 244.
+**Landed 2026-10-13 (96e49c0, PR neema2/legend-lite#34, pushed to main at the user's request; main's run 38349639460
+green on every job; GATES "ClickHouse and Postgres burned down").** The ClickHouse and Postgres burn-downs (own pins
+31 -> 4 and 75 -> 9), `SqlExpr.OrderedListAgg` typed as a list, and the dialect plan's handoff. Files beyond the
+entries above: `sql/dialect/ClickHouse.java` and `Postgres.java` (the burn-downs), `SQLite.java`, `MariaDb.java` and
+`BigQuery.java` (a text list's LITERAL cast an identity), `lowering/Scalars.java`, `sql/SqlExpr.java`, `sql/Json.java`
+(an integer past a Long), `exec/SqlTypeCensus.java` (a map's entries delivered as an ARRAY, BigQuery and Postgres only),
+`testing/.../EmbeddedClickHouse.java`, `PctBackend`; guard edits, each dated: `DialectBoundaryTest` (`SqlTypeCensus`
+2 -> 3), `PctCensusGate` (Postgres's wire ceilings), `ChannelBLane`'s floors, the eight ClickHouse and Postgres ledgers;
+`ClickHouseDialectTest` (new). The independent review's blocker and should-fix findings were fixed before the landing.
+**The dialect consolidation program** (`docs/DIALECT_LEAK_CENSUS_AND_PLAN_2026_10_12.md`, §0 "Start here") starts
+from 96e49c0; it is not started. It touches every file under `sql/dialect/`: announce it here first.
 **Next** (the user's order): the corpus harness on any database, built for speed (§20: the fixture seeded once,
 packages in parallel, every round trip counted) -- Postgres first, then the 77 on every lane, then the whole corpus
 on Snowflake, Databricks and BigQuery; then MongoDB, Elasticsearch, SingleStore (the plan's §2).

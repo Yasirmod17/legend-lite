@@ -9224,3 +9224,36 @@ head rebased on main 6c3a6c976 (360 pass, 2 of main's guards skipped on macOS); 
      `//datacube:create_class_test`.
 3. **Known, and where it goes:** the lock lives in Python, not the repository, until G11 (before Studio opens the same
    repository from Python, E); Python's `create_class` and its twins are B4, as twin TypeScript and Python libraries.
+
+## 2026-10-13 — ClickHouse and Postgres burned down, the ordered list aggregate typed, the dialect plan's handoff (the eighth line)
+
+Branch `claude/great-wright-p6t5s1`, the follow-up to neema2/legend-lite#30. PR neema2/legend-lite#34, landed as
+96e49c0 at the user's request: that exact commit pushed to main, a fast-forward (it merges PR #36's 7ef7772; no file
+in common). CI: main's run 38349639460 on 96e49c0, every job green; the PR's run 38342331955 on d9870ba, every job
+green (51 checks). `//gates:local` green on 96e49c0, run in a root cloud container with Postgres unprivileged (347 pass;
+`//datacube:upload_test` and `//engine-client:model_data_test` pass as root, the root-only pair;
+`//tools/guards:classpath_test` skipped, incompatible on every host since PR #31).
+
+1. **What it is.**
+   - **ClickHouse:** its own PCT pins 31 -> 4 (65 -> 38 in all): as-of joins without an equality, outer joins on a
+     one-sided condition, correlated IN and LATERAL decorrelated, fractional RANGE frames, the quantile level, the
+     session's tables and `max_query_size`, typed empty lists, a Variant for an absent instance.
+   - **Postgres:** its own pins 75 -> 9 (109 -> 43): printf unrolled, maps and list accumulators over jsonb, structs
+     decoded from jsonb, Levenshtein and Jaro-Winkler as recursive walks in plain SQL, the empty list of no type.
+   - **Shared:** `SqlExpr.OrderedListAgg` typed as a list of its value's type (it was VARCHAR).
+   - **Docs:** the dialect-leak census's evidence (`docs/dialect-leak-census-2026-10-12/`), the pins split into each
+     database's own and the platform's (`docs/PCT_PIN_WORKAROUNDS_2026_10_12.md`), and §0 of
+     `docs/DIALECT_LEAK_CENSUS_AND_PLAN_2026_10_12.md`, the handoff to the dialect consolidation program.
+2. **What proves it.**
+   - PCT, all five suites on both channels, on all eleven databases, green at their committed channel B floors; the
+     review's fixes re-measured on SQLite, MariaDB, MySQL, BigQuery, Postgres and ClickHouse.
+   - `//core:sql_parity_postgres_test`, `//core:sql_island_postgres_test`, `//core:postgres_arm_test` on the merge
+     with the `#SQL{...}#` long tail, whose Postgres cases run through this branch's Postgres dialect.
+   - `ClickHouseDialectTest` (new): the ClickHouse rewrites PCT's inputs do not reach.
+3. **The independent review** (four agents, none of whom wrote it; each shape run on Postgres 16.15 and ClickHouse
+   25.8.2.29): one blocker (ClickHouse read an absent nested instance as a present one) and the should-fix findings,
+   each fixed before the landing; what it queued and kept is in `docs/PCT_PIN_WORKAROUNDS_2026_10_12.md`, "What PR #34's
+   independent review found beyond PCT".
+4. **Known, and where it goes:** the classpath guard's skip is main's (a suggested task); `%0Nd` zero padding cuts on
+   every database, Postgres's Levenshtein is slow on long text, a Postgres struct's date-time and map fields stay raw
+   (each a suggested task); the dialect consolidation program starts from this commit (§0 of the plan).
