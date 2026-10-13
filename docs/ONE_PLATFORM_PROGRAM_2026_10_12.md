@@ -675,8 +675,50 @@ an audit.
   - the snap's count (3) and its receipt (as rita, 3 rows on the server);
   - the copy's rows read in Python's DuckDB;
   - refused again once released.
-- **Not measured:** the plane button clicked on a grid of Python's page, which is the cube and the app above, held by
-  the typecheck and the plane tests.
+- **Not measured in a browser:** `sources.ts`'s `openedHostTable`, the `hostSnap` and `signInAgain` wiring through
+  `GridPlace`, `GridSource` and `CubeApp`, and the plane button on a grid of Python's page. The typecheck and the
+  plane tests hold them; the browser test drives the services the grid calls.
+- **Changed from the design:** the copy is read only through the warehouse model's snap runtime, not served like a
+  page's file. The refusal of a table whose model a frame or file holds cannot fire today: a frame's model is written
+  under its own package with no snap runtime, so the two texts differ. It stays as the guard of that rule.
+
+**The step 5 audit's changes (2026-10-13):**
+- **No wait on the compiler's threads under the warehouse lock**, which those threads also take (`_planner`): opening a
+  table holds its model before taking the lock, and lets a spare go after. A binding call already on a compiler thread
+  runs in place (`_on_compiler_threads`), never queued behind itself.
+- **Every `/warehouse.json` call is answered** (`_answered`), and a copy that DuckDB refuses is 422. The copy is named
+  whole (`database.schema.table`), so a schema the warehouse names (`temp`, an attached database's) reaches no other
+  catalog. The schema the copy made is dropped with it.
+- **An expired session is 401 on every path**, and on the page the tab's own `SessionExpired`. The cube offers to sign
+  in again there too: a host's table gives its grid `signInAgain` (Python signs in as the same person, and the open
+  tables go on with the new token). Python's sign-in is a reader of its own (`warehouse.Warehouse`), refreshed as its
+  token nears its end, for the next table opened.
+- **One person per open table:** a table open as one person is refused to another, until Python restarts.
+- **The copy:** one per table, as the tab's is one per tab, held by the grids that snapped it (`holders`) and dropped
+  when the last lets go. A grid that closes while snapped lets go of it. A release while a snap copies waits for it.
+  Not cleared: a page closed without closing its grids leaves the copy until Python exits; in Python's own DuckDB
+  (in memory) it goes with the process.
+- **Where the rows are, said:** a Live read's receipt is the warehouse's (`legend.receipt`: where, as whom, its
+  statement and count); a read of the copy says Python's copy, and that nothing went to the warehouse. The picker
+  says Snap copies into Python's database.
+- **Measured:** `python/tests/test_engine.py` `WarehouseOnPython`:
+  - the shapes refused, and a table only once signed in;
+  - the session without its token, and a table not listed refused;
+  - Live rows and their receipt;
+  - one person per table;
+  - the copy held by two grids and dropped by the last, with its schema;
+  - the snap limit in the tab's words;
+  - an expired session as 401 on plan-and-run, snap and table.
+
+**The full local run's fixes (`//gates:local` and `//gates:warehouse` on the stack merged with main, 2026-10-13):**
+- The grid page was 521 bytes over its budget: the warehouse's driver is now fetched at the first sign-in
+  (`services/browser.ts`), and the expired-session error is a module of its own (`engine-client/src/
+  warehouse-session.ts`) that the app reads without the driver.
+- DataCube's built folder (`demo/make-dist.mjs`) now carries `vendor/queries`, `vendor/sdlc` and `vendor/warehouse`:
+  the warehouse's single-user app signs in through the binding (`verify_app_test`, `live_snap_test`), and the tab's
+  saved stores fetch `queries/`.
+- `:planner_worker`, a copy of engine-client's worker since C2, left DataCube's `:bundles` (`//:web`), as Studio's
+  did (`//tools/guards:compile_only_test`).
 
 #### C4. The small copies
 

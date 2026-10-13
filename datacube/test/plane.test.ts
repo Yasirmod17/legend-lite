@@ -367,7 +367,7 @@ describe('a snap its host makes (Python\'s page: docs/ONE_PLATFORM_PROGRAM_2026_
     let released = 0;
     const c = new CubeController(new PlanThenRun(live, new RecordingEngine()), {
       hostSnap: {
-        table: 'TRADES', source: accessor('trades::DB', 'TRADES'), runner: new PlanThenRun(copy, new RecordingEngine()),
+        table: 'TRADES', source: accessor('trades::DB', 'TRADES'), runner: new PlanThenRun(copy, new RecordingEngine()), store: 'Python',
         snap: async (pull) => { pulls.push(pull); return { rowCount: 7 }; },
         release: async () => { released += 1; },
       },

@@ -17,7 +17,8 @@
 
 import { UI_LOCALE } from '../../engine-client/src/locale.ts';
 import { hostOf, receiptLabel, receiptLines } from '../../engine-client/src/receipt.ts';
-import { sessionExpired, WarehouseEngine } from '../../engine-client/src/warehouse.ts';
+import type { WarehouseEngine } from '../../engine-client/src/warehouse.ts';
+import { sessionExpired } from '../../engine-client/src/warehouse-session.ts';
 import { isQueryFailure, type QueryRunner } from './runner.ts';
 import {
   CubeController,
@@ -158,6 +159,7 @@ export interface GridSource {
   readonly snapTarget?: SnapTarget;
   /** A snap its host makes (Python's page: CubeControllerOptions.hostSnap). */
   readonly hostSnap?: HostSnap;
+  readonly signInAgain?: (password: string) => Promise<void>;
   readonly heldCopy?: HeldCopy;
   readonly cubeSource?: CubeSource;
   /** What its header says it reads: a file's name, `sales.orders`, a saved query's name. */
@@ -320,6 +322,8 @@ export interface CubeAppBaseOptions {
   readonly snapTarget?: SnapTarget;
   /** A snap its host makes, for a cube read through a runner (Python's page: CubeControllerOptions.hostSnap). */
   readonly hostSnap?: HostSnap;
+  /** Signing in again when the warehouse's session ends, for a cube with no live engine of its own (a host's table). */
+  readonly signInAgain?: (password: string) => Promise<void>;
   /**
    * The rows are ALREADY a copy in this tab: a file opened into its DuckDB,
    * rows generated there. Nothing can move them while the person works, so
@@ -2442,6 +2446,7 @@ export class CubeApp {
       ...source.place,
       ...(source.snapTarget ? { snapTarget: source.snapTarget } : {}),
       ...(source.hostSnap ? { hostSnap: source.hostSnap } : {}),
+      ...(source.signInAgain ? { signInAgain: source.signInAgain } : {}),
       ...(source.heldCopy ? { heldCopy: source.heldCopy } : {}),
       ...(source.cubeSource ? { cubeSource: source.cubeSource } : {}),
       sourceLabel: source.label,
@@ -2548,6 +2553,7 @@ export class CubeApp {
           ...source,
           ...(o.snapTarget ? { snapTarget: o.snapTarget } : {}),
           ...(o.hostSnap ? { hostSnap: o.hostSnap } : {}),
+          ...(o.signInAgain ? { signInAgain: o.signInAgain } : {}),
           // what its rows ARE, as this grid knows it: the same copy in the tab, the same file, the
           // host's own name for it -- so its header says the same source, and the same plane
           ...(o.heldCopy ? { heldCopy: o.heldCopy } : {}),
@@ -2815,6 +2821,8 @@ export class CubeApp {
     for (const editor of this.#columnEditors.values()) editor.dispose();
     this.#columnEditors.clear();
     this.#grid.destroy();
+    // a copy its host keeps is let go with the grid that snapped it (the tab's goes with the tab)
+    if (this.#options.hostSnap !== undefined && this.#controller.snaps.isSnapped) void this.#controller.release().catch(() => undefined);
   }
 
   // -- Ad Hoc Analysis mode -------------------------------------------------
@@ -3244,12 +3252,16 @@ export class CubeApp {
   #signInOffer(error: unknown): { who: string; where: string; submit: (password: string) => Promise<void> } | null {
     const expired = sessionExpired(error);
     const live = this.#options.runner === undefined ? this.#options.live : undefined;
-    if (!expired || !(live instanceof WarehouseEngine)) return null;
+    // a live plane that signs in again (the warehouse's engine), asked by what it does: the driver is loaded only once
+    // a page signs in to a warehouse (services/browser.ts); else the host's own sign-in (a table it reads)
+    const again = live && 'signInAgain' in live ? (password: string) => (live as WarehouseEngine).signInAgain(password)
+      : this.#options.signInAgain;
+    if (!expired || !again) return null;
     return {
       who: expired.principal,
       where: `the warehouse at ${hostOf(expired.baseUrl)}`,
       submit: async (password) => {
-        await live.signInAgain(password);
+        await again(password);
         this.#closeWindow('Sign in');
         this.#status(`signed in again as ${expired.principal}`, 'ok');
         // what failed runs again: the view (going live, or the refused change) and every chart
@@ -3644,7 +3656,8 @@ export class CubeApp {
         // Where the data is, when Live is a warehouse: the plane is a place (the wording every app shares)
         const host = this.#options.runner !== undefined && this.#options.hostSnap !== undefined;
         const remote = host || (this.#options.runner === undefined && this.#options.live !== undefined);
-        const described = describePlane(state, { remote, toggles: true, ...(host ? { store: 'Python' } : {}) });
+        const described = describePlane(state, { remote, toggles: true,
+          ...(host ? { store: this.#options.hostSnap!.store } : {}) });
         snap.textContent = described.text;
         snap.title = described.title;
       };

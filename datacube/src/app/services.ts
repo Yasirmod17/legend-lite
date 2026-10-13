@@ -255,6 +255,8 @@ export interface WarehouseService {
    * the tab's own writer's answer, read-only, with the runtime a copy is planned against.
    */
   table?(session: WarehouseSession, object: CatalogObject): Promise<InferredModel & { readonly snapRuntime: string }>;
+  /** Whose database a host's table's copy is in, as a person reads it (`Python`): the host that reads its tables. */
+  readonly place?: string;
   /**
    * A table the host read (`table`) snapped there: `pull` (Pure: its every column) planned and run where the rows are,
    * the copy in the host's database, read through the model's snap runtime. Its count, and the pull's receipt.

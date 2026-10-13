@@ -1301,8 +1301,9 @@ esbuild_bundle(
 )
 
 # THE BUNDLES DATACUBE SHIPS (//:web; docs/BUILD_REBUILD_DESIGN_2026_10_05.md, D10): the app, the page of one cube on an
-# engine (engine.html: Python's engine serves it), a notebook's cube (the widget's loader and DataCube's module) and the
-# planner's worker. (The page of several cubes, demo/page.ts, went with the one-app design's step 1d: its checks run on
+# engine (engine.html: Python's engine serves it), and a notebook's cube (the widget's loader and DataCube's module). The
+# planner's worker is engine-client's bundle (//engine-client:bundles, the program's C2); :planner_worker is only its
+# copy into this site, as Studio's is. (The page of several cubes, demo/page.ts, went with the one-app design's step 1d: its checks run on
 # the app, verify_page.) remote-bundle and stress are fixtures of their harnesses (verify_remote,
 # run_stress), not product: they leave the site with D5.
 filegroup(
@@ -1310,7 +1311,6 @@ filegroup(
     srcs = [
         ":bundle_bundle",
         ":bundle_bundle_engine",
-        ":planner_worker",
         ":widget",
         ":widget_loader",
     ],

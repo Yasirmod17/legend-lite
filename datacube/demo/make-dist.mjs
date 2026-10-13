@@ -34,6 +34,12 @@ for (const f of ['classes.wasm', 'wasm-gc-module-runtime.js',
   'duckdb-browser-eh.worker.js', 'duckdb-browser-mvp.worker.js']) {
   await cp(v(f), join(DIST, 'vendor', f));
 }
+// the page's other modules, each fetched the first time the page asks for it: the saved stores' rules (vendor/queries,
+// the program's B5 and B6), the in-page SDLC (vendor/sdlc) and the warehouse's API (vendor/warehouse, C3: the
+// single-user app signs in through it)
+for (const d of ['queries', 'sdlc', 'warehouse']) {
+  await cp(v(d), join(DIST, 'vendor', d), { recursive: true });
+}
 // the pages' type: fonts.css and the files it names (vendor/fonts, Roboto from //legend-art:fonts), served with the site
 await cp(join(ROOT, 'demo', 'fonts.css'), join(DIST, 'fonts.css'));
 await cp(v('fonts'), join(DIST, 'vendor', 'fonts'), { recursive: true });

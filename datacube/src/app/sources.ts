@@ -58,6 +58,9 @@ export type GridPlace = {
   readonly snapTarget?: SnapTarget;
   /** A warehouse table its host reads (Python's): Snap copies into the host's database, planned and run there (C3). */
   readonly hostSnap?: HostSnap;
+  /** Signing in again as the same person when the warehouse's session ends, where the grid has no live engine of its
+   *  own to ask (a table its host reads). */
+  readonly signInAgain?: (password: string) => Promise<void>;
   /** A grid can be saved: its source, by identity (never its data). */
   readonly cubeSource?: CubeSource;
   /** The groups a saved cube had open. */
@@ -452,7 +455,7 @@ export function pageSources(d: SourcesOf): PageSources {
     // runtime -- planned and run by the host as the live rows are
     const copy = on.snap && on.release ? services.engine.rows(m.model, m.snapRuntime, { bitColumns: m.bitColumns }) : undefined;
     const hostSnap: HostSnap | undefined = copy?.runner && on.snap && on.release ? {
-      table: chosen.name, schema: chosen.schema, source: m.source, runner: copy.runner,
+      table: chosen.name, schema: chosen.schema, source: m.source, runner: copy.runner, store: on.place ?? 'the host',
       snap: (pull) => on.snap!(m.model, pull),
       release: () => on.release!(m.model),
     } : undefined;
@@ -470,6 +473,8 @@ export function pageSources(d: SourcesOf): PageSources {
       make: gridMaker(r.snapshot, r.configuration, [], {
         ...rowsPlace(rows), ...(hostSnap ? { hostSnap } : {}), cubeSource, label: name, ...(r.tree ? { tree: r.tree } : {}),
         foldPanel: capped,
+        // an expired session signed in again as the same person, by the host, as the tab's live engine does (P2-297)
+        signInAgain: async (password) => { await on.connect(session.baseUrl, session.principal, password); },
       }),
       discard: async () => {
         letGo(rows);
@@ -493,6 +498,7 @@ export function pageSources(d: SourcesOf): PageSources {
     return {
       ...(url ? { url } : {}),
       ...(keep ? { session: asSession(keep) } : {}),
+      ...(on.table && on.place !== undefined ? { copiesInto: on.place } : {}),
       ...(want ? { want: { schema: want.schema, name: want.name } } : {}),
       signIn: async (url, user, password) => {
         // nothing of a previous sign-in stays on offer until this one has listed its tables (P2-334)

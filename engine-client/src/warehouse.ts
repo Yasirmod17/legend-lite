@@ -25,6 +25,7 @@ import type { Plan } from './relation-type.ts';
 import { toRawTable, type ArrowishTable } from './duckdb.ts';
 import { hostOf, type Receipt } from './receipt.ts';
 import type { ResultTable } from './result.ts';
+import { SessionExpired } from './warehouse-session.ts';
 
 /** A signed-in session: where the warehouse is, and the bearer token. */
 export interface WarehouseSession {
@@ -216,28 +217,8 @@ Promise<{ readonly session: WarehouseSession; readonly objects: CatalogObject[] 
   return { session, objects };
 }
 
-/**
- * The warehouse refused the token: expired, or issued by a warehouse that has since restarted.
- * Its own type, so the cube can offer to sign in again right where it says so.
- */
-export class SessionExpired extends Error {
-  readonly baseUrl: string;
-  readonly principal: string;
-  constructor(baseUrl: string, principal: string) {
-    super(`the warehouse session for ${principal} has expired — sign in again`);
-    this.name = 'SessionExpired';
-    this.baseUrl = baseUrl;
-    this.principal = principal;
-  }
-}
-
-/** Whether `error`, or anything in its cause chain, is a `SessionExpired`. */
-export function sessionExpired(error: unknown): SessionExpired | null {
-  for (let e = error, depth = 0; e && depth < 10; e = (e as { cause?: unknown }).cause, depth++) {
-    if (e instanceof SessionExpired) return e;
-  }
-  return null;
-}
+// the session's end, as its own error (warehouse-session.ts: a page's code reads it without loading this driver)
+export { SessionExpired, sessionExpired } from './warehouse-session.ts';
 
 /** The time a WarehouseEngine reads and the timer it schedules its token refresh on: the system's, or a test's own
  *  (Bazel workplan P3-16: a test proves the refresh by advancing a clock, never by sleeping). */

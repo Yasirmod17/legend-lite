@@ -10,14 +10,7 @@ import type { AsyncDuckDB } from '../../../engine-client/src/duckdb-wasm.ts';
 import type { DuckDbEngine } from '../../../engine-client/src/duckdb.ts';
 import { setUpSession } from '../../../engine-client/src/engine.ts';
 import type { SeedSource } from '../../../engine-client/src/model-data.ts';
-import {
-  connect,
-  listObjects,
-  loadWarehouseBinding,
-  signInWithKey,
-  WarehouseEngine,
-  type WarehouseBinding,
-} from '../../../engine-client/src/warehouse.ts';
+import type { WarehouseBinding } from '../../../engine-client/src/warehouse.ts';
 import type { QueriesModule, QueryReader } from '../../../query-store/src/index.ts';
 import type { Planner } from '../cube.ts';
 import {
@@ -221,17 +214,22 @@ function depotHome(depot: { readonly sdlc: string; readonly vendor: string }, lo
 const REMEMBERED = 'datacube.warehouse.url';
 
 function warehouseService(config: TabConfig, location: { readonly href: string }): WarehouseService {
-  // THE WAREHOUSE'S API: the one binding (vendor/warehouse/, docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C3), fetched at
-  // the first sign-in (a load that failed is tried again at the next); a table is opened only once signed in, so its
-  // live engine finds it loaded
-  let binding: WarehouseBinding | undefined;
-  let loading: Promise<WarehouseBinding> | undefined;
-  const loaded = (): Promise<WarehouseBinding> => (loading ??= loadWarehouseBinding(new URL('./vendor/warehouse/', location.href).href)
-    .then((b) => (binding = b))
-    .catch((e: unknown) => {
-      loading = undefined;
-      throw e;
-    }));
+  // THE WAREHOUSE'S DRIVER AND ITS API: the driver (engine-client's warehouse.ts) and the one binding
+  // (vendor/warehouse/, docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C3), both fetched at the first sign-in (a load that
+  // failed is tried again at the next): a page that never signs in to a warehouse loads neither. A table is opened only
+  // once signed in, so its live engine finds them loaded
+  type Driver = typeof import('../../../engine-client/src/warehouse.ts');
+  let ready: { readonly driver: Driver; readonly binding: WarehouseBinding } | undefined;
+  let loading: Promise<{ readonly driver: Driver; readonly binding: WarehouseBinding }> | undefined;
+  const loaded = (): Promise<{ readonly driver: Driver; readonly binding: WarehouseBinding }> => (loading ??=
+    import('../../../engine-client/src/warehouse.ts')
+      .then(async (driver) => (ready = {
+        driver, binding: await driver.loadWarehouseBinding(new URL('./vendor/warehouse/', location.href).href),
+      }))
+      .catch((e: unknown) => {
+        loading = undefined;
+        throw e;
+      }));
   return {
     offered: () => {
       if (config.warehouse) return config.warehouse;
@@ -248,16 +246,19 @@ function warehouseService(config: TabConfig, location: { readonly href: string }
         // storage refused: not remembered, nothing else changes
       }
     },
-    connect: async (url, user, password) => connect(await loaded(), url, user, password),
+    connect: async (url, user, password) => {
+      const { driver, binding } = await loaded();
+      return driver.connect(binding, url, user, password);
+    },
     signInWithKey: async (key) => {
       if (!config.warehouse) throw new Error('this page was not served by a warehouse: its config.json names none');
-      const b = await loaded();
-      const session = await signInWithKey(b, config.warehouse, key);
-      return { session, objects: await listObjects(b, session) };
+      const { driver, binding } = await loaded();
+      const session = await driver.signInWithKey(binding, config.warehouse, key);
+      return { session, objects: await driver.listObjects(binding, session) };
     },
     live: (session, catalog) => {
-      if (binding === undefined) throw new Error('the warehouse is read once signed in: sign in first');
-      return new WarehouseEngine(binding, session, catalog);
+      if (ready === undefined) throw new Error('the warehouse is read once signed in: sign in first');
+      return new ready.driver.WarehouseEngine(ready.binding, session, catalog);
     },
   };
 }

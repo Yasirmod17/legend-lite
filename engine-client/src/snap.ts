@@ -81,6 +81,8 @@ export interface SnapInfo {
   readonly source: ValueSpecification;
   /** The pull from a remote live plane that made it: the server's receipt. */
   readonly pulledBy?: Receipt;
+  /** Whose the copy is when not this tab's: its host's (`Python`: HostSnapTarget.store). */
+  readonly store?: string;
 }
 
 /**
@@ -380,6 +382,8 @@ export interface HostSnapTarget {
   readonly table: string;
   readonly schema?: string;
   readonly source: ValueSpecification;
+  /** Whose database the copy is in, as a person reads it: `Python`. */
+  readonly store: string;
 }
 
 /** The states SnapManager keeps, for a copy its host keeps (HostSnapTarget). */
@@ -415,6 +419,7 @@ export class HostSnaps implements Snaps {
       table: this.#target.table,
       ...(this.#target.schema ? { schema: this.#target.schema } : {}),
       source: this.#target.source,
+      store: this.#target.store,
     };
     this.#state = { mode: 'snapped', snap };
     return snap;

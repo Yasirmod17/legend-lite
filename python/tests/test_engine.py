@@ -14,6 +14,7 @@ import threading
 import time
 import unittest
 import unittest.mock
+from unittest import mock
 from pathlib import Path
 import urllib.error
 import urllib.request
@@ -901,3 +902,155 @@ class Page(Cube):
                 ' "lambda": {"_type": "lambda", "body": [{"_type": "decimal", "value": 12.30}]}}')
         self.assertEqual(engine.answer('POST', '/page.json', 'page=q3&version=1', said).status, 204)
         self.assertEqual(str(engine.read_page('q3')['lambda']['body'][0]['value']), '12.30')
+
+
+class WarehouseOnPython(unittest.TestCase):
+    """A warehouse table on Python's page (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C3), every route of /warehouse.json
+    and the plan-and-run over its model, against a stand-in for the driver (legend_lite.warehouse's Warehouse and
+    connect): the shapes refused, the sign-in, a table opened once as one person, its Live rows and receipt, its copy
+    held by the grids that snapped it and dropped by the last, the snap limit, and an expired session said as one."""
+
+    URL = 'https://wh.example'
+    OBJECTS = [{'catalog': 'main', 'databaseType': 'DuckDB', 'schema': 'trading', 'name': 'POSITIONS', 'kind': 'table',
+                'columns': [
+                    {'name': 'desk', 'type': 'VARCHAR', 'logicalType': 'VARCHAR', 'precision': None, 'scale': None,
+                     'notNull': False},
+                    {'name': 'qty', 'type': 'INTEGER', 'logicalType': 'INTEGER', 'precision': None, 'scale': None,
+                     'notNull': False}]}]
+
+    def setUp(self):
+        from legend_lite import warehouse
+        self.warehouse = warehouse
+        outer = self
+        self.count, self.expired, self.principal = 3, False, 'rita'
+
+        class Reader:
+            def __init__(self, session, catalog='main', clock=None):
+                self._session, self.catalog = session, catalog
+            session = property(lambda self: self._session)
+            principal = property(lambda self: self._session.principal)
+            base_url = property(lambda self: self._session.base_url)
+
+            def renew(self, session):
+                self._session = session
+
+            def objects(self):
+                if outer.expired:
+                    raise warehouse.SessionExpired(outer.URL, self.principal)
+                return outer.OBJECTS
+
+            def arrow_chunks(self, sql, on_receipt=None):
+                if outer.expired:
+                    raise warehouse.SessionExpired(outer.URL, self.principal)
+                if on_receipt is not None:
+                    on_receipt({'statementId': 's1', 'serverRows': 3, 'as': self.principal, 'where': 'the warehouse at wh'})
+                rows = (pa.table({'n': pa.array([outer.count], pa.int64())}) if sql.startswith('SELECT count(*)')
+                        else pa.table({'desk': ['FX', 'EQ', 'FX'], 'qty': pa.array([10, 5, 3], pa.int32())}))
+                sink = pa.BufferOutputStream()
+                with pyarrow.ipc.new_stream(sink, rows.schema) as w:
+                    w.write_table(rows)
+                yield sink.getvalue().to_pybytes()
+
+        def connect(url, user, password):
+            if password != 'pw':
+                raise warehouse.WarehouseError('sign-in failed — AUTH_INVALID: wrong user or password', 'AUTH_INVALID')
+            return warehouse.Session(url, 'tok', user, '2099-01-01T00:00:00Z'), outer.OBJECTS
+
+        patches = [mock.patch.object(warehouse, 'Warehouse', Reader), mock.patch.object(warehouse, 'connect', connect)]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        self.frames = ll.Frames()
+        self.engine = Engine(self.frames)
+
+    def call(self, said, path='/warehouse.json'):
+        a = self.engine.answer('POST', path, '', json.dumps(said))
+        return a.status, a.body
+
+    def opened(self, user='rita'):
+        self.assertEqual(self.call({'op': 'connect', 'url': self.URL, 'user': user, 'password': 'pw'})[0], 200)
+        status, body = self.call({'op': 'table', 'url': self.URL, 'catalog': 'main', 'schema': 'trading', 'name': 'POSITIONS'})
+        self.assertEqual(status, 200, body)
+        return json.loads(body)
+
+    def query(self, m):
+        spec = {'table': 'POSITIONS', 'schema': 'trading', 'convertible': False, 'databaseType': 'DuckDB',
+                'snapDatabaseType': 'DuckDB', 'columns': [{**c, 'dataType': c['type']} for c in self.OBJECTS[0]['columns']]}
+        accessor = ll.table_model(spec)['accessor']
+        return json.dumps(ll.parse(f'|{accessor}->select(~[desk, qty])'))
+
+    def plan_and_run(self, m, runtime):
+        a = self.engine.answer('POST', '/plan-and-run.json', '', json.dumps(
+            {'lambda': self.query(m), 'model': m['model'], 'runtime': runtime}))
+        return a
+
+    def test_the_shapes_refused_and_a_table_only_once_signed_in(self):
+        self.assertEqual(self.call({})[0], 400)
+        self.assertEqual(self.engine.answer('POST', '/warehouse.json', '', 'not json').status, 400)
+        self.assertEqual(self.call({'op': 'connect', 'url': self.URL, 'user': 'rita'})[0], 400)
+        self.assertEqual(self.call({'op': 'nope', 'url': self.URL})[0], 400)
+        status, body = self.call({'op': 'table', 'url': self.URL, 'catalog': 'main', 'schema': 'trading', 'name': 'POSITIONS'})
+        self.assertEqual((status, body.decode()), (401, f'sign in to the warehouse at {self.URL} first'))
+        status, body = self.call({'op': 'connect', 'url': self.URL, 'user': 'rita', 'password': 'wrong'})
+        self.assertEqual((status, body.decode()), (422, 'sign-in failed — AUTH_INVALID: wrong user or password'))
+
+    def test_signed_in_the_session_without_its_token_and_a_table_not_listed_refused(self):
+        status, body = self.call({'op': 'connect', 'url': self.URL, 'user': 'rita', 'password': 'pw'})
+        said = json.loads(body)
+        self.assertEqual((status, said['session']['token'], said['session']['principal']), (200, '', 'rita'))
+        self.assertEqual(self.call({'op': 'table', 'url': self.URL, 'catalog': 'main', 'schema': 'trading',
+                                    'name': 'secret'})[0], 404)
+
+    def test_live_rows_from_the_warehouse_with_its_receipt(self):
+        m = self.opened()
+        a = self.plan_and_run(m, m['runtime'])
+        self.assertEqual(a.status, 200, a.body)
+        rows = pyarrow.ipc.open_stream(a.body).read_all()
+        self.assertEqual(sorted(zip(rows['desk'].to_pylist(), rows['qty'].to_pylist())), [('EQ', 5), ('FX', 3), ('FX', 10)])
+        self.assertEqual(json.loads(rows.schema.metadata[b'legend.receipt']),
+                         {'plane': 'warehouse', 'where': 'the warehouse at wh', 'as': 'rita', 'statementId': 's1',
+                          'serverRows': 3})
+
+    def test_one_person_per_open_table(self):
+        self.opened('rita')
+        self.assertEqual(self.call({'op': 'connect', 'url': self.URL, 'user': 'bob', 'password': 'pw'})[0], 200)
+        status, body = self.call({'op': 'table', 'url': self.URL, 'catalog': 'main', 'schema': 'trading', 'name': 'POSITIONS'})
+        self.assertEqual(status, 409, body)
+        self.assertIn('open already as rita', body.decode())
+
+    def test_the_copy_held_by_the_grids_that_snapped_it_and_dropped_by_the_last(self):
+        m = self.opened()
+        refused = self.plan_and_run(m, m['snapRuntime'])
+        self.assertIn('or snapped, through its copy', json.loads(refused.body)['plan'])
+        for _ in range(2):  # two grids snap it
+            status, body = self.call({'op': 'snap', 'model': m['model'], 'pull': self.query(m)})
+            self.assertEqual(status, 200, body)
+        self.assertEqual(json.loads(body)['rowCount'], 3)
+        a = self.plan_and_run(m, m['snapRuntime'])
+        self.assertEqual(a.status, 200, a.body)
+        self.assertEqual(pyarrow.ipc.open_stream(a.body).read_all().num_rows, 3)
+        self.assertEqual(self.call({'op': 'release', 'model': m['model']})[0], 200)
+        self.assertEqual(self.plan_and_run(m, m['snapRuntime']).status, 200, 'the other grid still holds it')
+        self.call({'op': 'release', 'model': m['model']})
+        self.assertIn('or snapped', json.loads(self.plan_and_run(m, m['snapRuntime']).body)['plan'])
+        gone = self.frames.connection.execute(
+            "SELECT count(*) FROM duckdb_tables() WHERE table_name = 'POSITIONS'").fetchone()[0]
+        made = self.frames.connection.execute("SELECT count(*) FROM duckdb_schemas() WHERE schema_name = 'trading'").fetchone()[0]
+        self.assertEqual((gone, made), (0, 0), 'the copy and the schema it made are dropped')
+
+    def test_the_snap_limit_in_the_tabs_words(self):
+        m = self.opened()
+        self.count = 10_000_001
+        status, body = self.call({'op': 'snap', 'model': m['model'], 'pull': self.query(m)})
+        self.assertEqual((status, body.decode()), (422, '10,000,001 rows exceeds the 10,000,000 row snap limit. Narrow the '
+                                                          'filter, or stay live.'))
+
+    def test_an_expired_session_said_as_one(self):
+        m = self.opened()
+        self.expired = True
+        a = self.plan_and_run(m, m['runtime'])
+        said = json.loads(a.body)
+        self.assertEqual((a.status, said['expired']), (401, {'baseUrl': self.URL, 'principal': 'rita'}))
+        self.assertEqual(self.call({'op': 'snap', 'model': m['model'], 'pull': self.query(m)})[0], 401)
+        self.assertEqual(self.call({'op': 'table', 'url': self.URL, 'catalog': 'main', 'schema': 'trading',
+                                    'name': 'POSITIONS'})[0], 401)

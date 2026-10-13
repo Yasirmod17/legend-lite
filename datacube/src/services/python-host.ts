@@ -49,6 +49,7 @@ import type {
   Services, Versions, WarehouseService,
 } from '../app/services.ts';
 import type { CatalogObject, WarehouseSession } from '../../../engine-client/src/warehouse.ts';
+import { SessionExpired } from '../../../engine-client/src/warehouse-session.ts';
 
 /** How the page reaches Python's engine. */
 export interface PythonLink {
@@ -241,10 +242,19 @@ export function pythonRunner(link: PythonLink, model: string, runtime: string, p
     if (!answer.ok || (answer.headers.get('Content-Type') ?? '').startsWith('application/json')) {
       // no rows: the planner refused (its own answer, read as it reads every refusal), or its SQL did (and why)
       const text = await answer.text();
-      const said = (() => { try { return JSON.parse(text) as { plan?: string; error?: string }; } catch { return {}; } })();
+      const said = (() => {
+        try {
+          return JSON.parse(text) as { plan?: string; error?: string; expired?: { baseUrl: string; principal: string } };
+        } catch {
+          return {};
+        }
+      })();
       if (said.plan === undefined) throw new QueryFailure(new Error(`the engine answered ${answer.status}: ${text}`), query);
       const plan = readPlan(said.plan, query);
-      throw new QueryFailure(new Error(said.error ?? `the engine answered ${answer.status}`), query, plan.sql);
+      // a warehouse's session ended (a table Python reads, C3): the tab's own error, so the cube offers to sign in again
+      const cause = said.expired ? new SessionExpired(said.expired.baseUrl, said.expired.principal)
+        : new Error(said.error ?? `the engine answered ${answer.status}`);
+      throw new QueryFailure(cause, query, plan.sql);
     }
     // a body cut short or not Arrow: said as every other failure here is, never thrown raw at the cube
     const { table, metadata } = await answer.arrayBuffer().then((bytes) => arrowIpcAnswer(new Uint8Array(bytes))).catch((e: unknown) => {
@@ -254,9 +264,13 @@ export function pythonRunner(link: PythonLink, model: string, runtime: string, p
     const said = metadata.get('legend.plan');
     if (said === undefined) throw new QueryFailure(new Error('the engine answered rows without the plan they are of'), query);
     const plan = readPlan(said, query);
+    // where the rows were read, as Python says it: a warehouse table's on the warehouse, its statement its own (C3)
+    const theirs = metadata.get('legend.receipt');
+    const receipt: Receipt = theirs !== undefined ? JSON.parse(theirs) as Receipt
+      : { plane: 'engine', where: `the engine at ${hostOf(link.baseUrl)}` };
     try {
       const rows = typedByPlan(toRawTable(table, epoch, performance.now() - started), plan);
-      return { plan, rows: { ...rows, receipt: { plane: 'engine', where: `the engine at ${hostOf(link.baseUrl)}` } } };
+      return { plan, rows: { ...rows, receipt } };
     } catch (e) {
       throw new QueryFailure(e, query, plan.sql);
     }
@@ -436,6 +450,7 @@ function pythonWarehouse(link: PythonLink): WarehouseService {
     connect: async (url, user, password) => JSON.parse(await posted(link, 'warehouse.json', { op: 'connect', url, user, password })) as
       { session: WarehouseSession; objects: CatalogObject[] },
     signInWithKey: () => Promise.reject(new Error('a page on Python signs in to a warehouse by its user and password')),
+    place: 'Python',
     table: async (session, object) => JSON.parse(await posted(link, 'warehouse.json', {
       op: 'table', url: session.baseUrl, catalog: object.catalog, schema: object.schema, name: object.name,
     })) as InferredModel & { readonly snapRuntime: string },

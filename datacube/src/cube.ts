@@ -241,7 +241,8 @@ function recording(runner: QueryRunner, into: Receipt[], plane: PlaneState): Que
     const r = out.rows.receipt;
     if (r) {
       into.push(plane.mode === 'snapped'
-        ? { ...r, copy: { takenAt: plane.snap.takenAt, ...(plane.snap.pulledBy ? { from: plane.snap.pulledBy } : {}) } }
+        ? { ...r, copy: { takenAt: plane.snap.takenAt, ...(plane.snap.pulledBy ? { from: plane.snap.pulledBy } : {}),
+          ...(plane.snap.store !== undefined ? { store: plane.snap.store } : {}) } }
         : r);
     }
     return out;

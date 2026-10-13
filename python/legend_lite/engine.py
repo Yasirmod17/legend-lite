@@ -42,7 +42,7 @@ import threading
 import traceback
 import queue
 from concurrent.futures import Future
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from types import MappingProxyType
 from typing import Any, NamedTuple, Protocol
 from pathlib import Path
@@ -148,6 +148,14 @@ _pool: _Pool | None = None
 _pool_lock = threading.Lock()
 
 
+def _on_compiler_threads(call: Callable[[], str]) -> str:
+    """A library call run on the compiler's threads: in place when the caller is one (a pool thread waiting on the pool
+    would wait on itself), else on the pool."""
+    if threading.current_thread().name.startswith('legend-lite-compiler-'):
+        return call()
+    return _workers().submit(call).result()
+
+
 def _workers() -> _Pool:
     global _pool
     with _pool_lock:
@@ -182,14 +190,34 @@ def _said(status: int, message: str) -> Answer:
     return Answer(status, 'text/plain; charset=utf-8', message.encode('utf-8'))
 
 
+def _arrow_of(chunks: Iterable[bytes]) -> pa.Table:
+    """A result's Arrow IPC streams, one per chunk, as one table: the first chunk's schema (every chunk carries it;
+    the warehouse's DuckDB writes one at least, its schema alone for no rows)."""
+    tables = [pyarrow.ipc.open_stream(c).read_all() for c in chunks]
+    if not tables:
+        raise pa.ArrowInvalid('the warehouse answered no chunk, not even its columns')
+    return pa.concat_tables(tables) if len(tables) > 1 else tables[0]
+
+
+def _on_planner_threads(planner: Any) -> Callable[..., Any]:
+    """Where a planner's calls run: Python's own on the compiler's threads; a server's is its HTTP, here."""
+    if planner.plane == 'local':
+        return lambda f, *a: _workers().submit(f, *a).result()
+    return lambda f, *a: f(*a)
+
+
 def _quoted_name(name: str) -> str:
     """A name as DuckDB quotes it."""
     return '"' + name.replace('"', '""') + '"'
 
 
-def _arrow_rows(rows: pa.Table, planned: str) -> Answer:
-    """A plan-and-run's rows, as Arrow, the planner's answer in their schema's metadata (``legend.plan``)."""
-    rows = rows.replace_schema_metadata({**(rows.schema.metadata or {}), _PLAN_KEY: planned.encode('utf-8')})
+def _arrow_rows(rows: pa.Table, planned: str, receipt: dict[str, Any] | None = None) -> Answer:
+    """A plan-and-run's rows, as Arrow, the planner's answer in their schema's metadata (``legend.plan``), and where
+    they were read when not here (``legend.receipt``: a warehouse table's, its statement and its reader)."""
+    kept = {**(rows.schema.metadata or {}), _PLAN_KEY: planned.encode('utf-8')}
+    if receipt is not None:
+        kept[b'legend.receipt'] = json.dumps(receipt).encode('utf-8')
+    rows = rows.replace_schema_metadata(kept)
     sink = pa.BufferOutputStream()
     with pyarrow.ipc.new_stream(sink, rows.schema) as writer:
         writer.write_table(rows)
@@ -393,8 +421,11 @@ class NativePlanner:
 
 
 class _WarehouseTable:
-    """A warehouse table a page opened on Python (C3): the model Python wrote for it and holds, the runtime its live plans
-    are made against -- run on the warehouse, through the binding, as the signed-in user -- and its copy's."""
+    """A warehouse table a page opened on Python (C3): the model Python wrote for it and holds, read as one person --
+    its live plans made against its runtime and run on the warehouse, through the binding -- and its copy (Snap), in
+    the frames' DuckDB under the table's own name, which the model's snap runtime reads. The copy is one per table, as
+    the tab's is one per tab: the grids that snapped it hold it (``holders``), and it is dropped when the last lets
+    go."""
 
     def __init__(self, held: compiler.HeldModel, written: dict[str, Any], schema: str, name: str,
                  where: warehouse.Warehouse, catalog: str) -> None:
@@ -404,8 +435,11 @@ class _WarehouseTable:
         self.name = name
         self.warehouse = where
         self.catalog = catalog
-        # its copy is in the frames' DuckDB (Snap), under the table's own name, which the model's snap runtime reads
-        self.snapped = False
+        self.holders = 0
+        # the schema the copy made in the frames' DuckDB, dropped with the copy when it was the copy's alone
+        self.made_schema = False
+        # the copy's changes, one at a time: a release while a snap copies waits for it, never lost
+        self.copying = threading.Lock()
 
     @property
     def runtime(self) -> str:
@@ -414,6 +448,10 @@ class _WarehouseTable:
     @property
     def snap_runtime(self) -> str:
         return self.written['snapRuntime']
+
+    @property
+    def snapped(self) -> bool:
+        return self.holders > 0
 
     def reads(self, base_url: str, catalog: str) -> bool:
         return self.warehouse.base_url.rstrip('/') == base_url.rstrip('/') and self.catalog == catalog
@@ -447,7 +485,7 @@ class Engine:
         self._warehouse_tables: dict[str, _WarehouseTable] = {}
         self._warehouse_lock = threading.Lock()
         # the binding's calls on the compiler's threads, never a connection's (warehouse.set_library_thread)
-        warehouse.set_library_thread(lambda call: _workers().submit(call).result())
+        warehouse.set_library_thread(_on_compiler_threads)
         self.planner = planner if planner is not None else NativePlanner()
         self._pages_folder = Path(pages) if pages is not None else None
         self.site = Path(site).resolve() if site is not None else None
@@ -512,8 +550,8 @@ class Engine:
                 return _workers().submit(_answered, self._planner, body or '').result()
             if path == _WAREHOUSE:
                 # on the caller's thread: the warehouse's HTTP holds no compiler thread, and only the library's calls go
-                # to one
-                return self._warehouse(body or '')
+                # to one; never a dropped call
+                return _answered(self._warehouse, body or '')
             if not path.startswith(_API):
                 return _said(404, f'no such path: {path}')
             return _workers().submit(self._api, path, query, body or '').result()
@@ -863,23 +901,28 @@ class Engine:
         Python, the session answered -- its address, who the warehouse says it is, when it ends; never its token -- with
         what they may read. ``{"op": "table", "url", "catalog", "schema", "name"}``: a table listed there, its model
         written by the tab's own writer (``table_model``: read-only, its copy planned for DuckDB) and held, answered as
-        that writer answers it. A refusal is its words, the driver's."""
+        that writer answers it. ``snap`` and ``release``: its copy (``_warehouse_snap``). A refusal is its words; an
+        expired session 401, a warehouse's refusal 422."""
         try:
             asked = json.loads(body)
         except ValueError:
             return _said(400, 'a warehouse call is JSON')
-        if isinstance(asked, dict) and asked.get('op') in ('snap', 'release'):
-            return self._warehouse_snap(asked)
-        if not (isinstance(asked, dict) and isinstance(asked.get('op'), str) and isinstance(asked.get('url'), str)):
-            return _said(400, 'a warehouse call is {"op", "url", ...}')
-        url = asked['url'].rstrip('/')
+        if not isinstance(asked, dict) or not isinstance(asked.get('op'), str):
+            return _said(400, 'a warehouse call is {"op", ...}')
         try:
+            if asked['op'] in ('snap', 'release'):
+                return self._warehouse_snap(asked)
+            if not isinstance(asked.get('url'), str):
+                return _said(400, 'a warehouse call names its warehouse ("url")')
+            url = asked['url'].rstrip('/')
             if asked['op'] == 'connect':
                 if not (isinstance(asked.get('user'), str) and isinstance(asked.get('password'), str)):
                     return _said(400, 'a sign-in is {"user", "password"}, each a string')
                 session, objects = warehouse.connect(url, asked['user'], asked['password'])
                 with self._warehouse_lock:
-                    self._warehouse_sessions[url] = session
+                    # the sign-in kept as a reader of its own (its token refreshed as it nears its end), for the next
+                    # table opened from this warehouse
+                    self._warehouse_sessions[url] = warehouse.Warehouse(session)
                     # the tables open from it go on with the new token when it is the same person (P2-297)
                     for table in self._warehouse_tables.values():
                         if table.warehouse.base_url.rstrip('/') == url and table.warehouse.principal == session.principal:
@@ -897,35 +940,45 @@ class Engine:
 
     def _warehouse_table(self, url: str, asked: dict[str, Any]) -> Answer:
         """A listed table opened: its columns read from the warehouse now (what the person may read, as the catalog has
-        it), its model written and held. The same table with the same columns from another warehouse or catalog would
-        be the same model text, which names the plan's table by itself: refused while the first is open."""
+        it), its model written and held. A model's text names a plan's table by itself, so one table of that text is
+        open at a time: the same table and columns from another warehouse or catalog, or as another person, is refused
+        while the first is open. Nothing waits on the compiler's threads while this engine's warehouse lock is held:
+        the compiler's threads take that lock (``_planner``)."""
         if not all(isinstance(asked.get(k), str) for k in ('catalog', 'schema', 'name')):
             return _said(400, 'a table is {"catalog", "schema", "name"}, each a string')
         catalog, schema, name = asked['catalog'], asked['schema'], asked['name']
         with self._warehouse_lock:
-            session = self._warehouse_sessions.get(url)
-        if session is None:
+            signed = self._warehouse_sessions.get(url)
+        if signed is None:
             return _said(401, f'sign in to the warehouse at {url} first')
-        found = next((o for o in warehouse.list_objects(session)
-                      if (o['catalog'], o['schema'], o['name']) == (catalog, schema, name)), None)
+        found = next((o for o in signed.objects() if (o['catalog'], o['schema'], o['name']) == (catalog, schema, name)),
+                     None)
         if found is None:
-            return _said(404, f'{schema}.{name} is not a table {session.principal} may read in {catalog}')
+            return _said(404, f'{schema}.{name} is not a table {signed.principal} may read in {catalog}')
         spec = {'table': name, 'schema': schema, 'convertible': False, 'databaseType': found['databaseType'],
                 'snapDatabaseType': 'DuckDB', 'columns': [{**c, 'dataType': c['type']} for c in found['columns']]}
         written = _workers().submit(compiler.table_model, spec).result()
         if self.frames.held_for(written['model']) is not None:
-            # a frame or a page's file with the same table and columns writes the same model text, which a plan names
-            # its table by: the warehouse's would answer for it
+            # a frame or a page's file whose model is this text: the warehouse's would answer for it
             return _said(409, f'a frame or file of this Python is {schema}.{name} with the same columns: rename one')
+        held = _workers().submit(compiler.HeldModel, written['model']).result()
+        refusal, spare = None, held
         with self._warehouse_lock:
             kept = self._warehouse_tables.get(written['model'])
-            if kept is not None and not kept.reads(url, catalog):
-                return _said(409, f'{schema}.{name} is open already, with the same columns, from {kept.warehouse.base_url} '
-                                  f'({kept.catalog}): one of the two at a time')
             if kept is None:
-                held = _workers().submit(compiler.HeldModel, written['model']).result()
                 self._warehouse_tables[written['model']] = _WarehouseTable(
-                    held, written, schema, name, warehouse.Warehouse(session, catalog), catalog)
+                    held, written, schema, name, warehouse.Warehouse(signed.session, catalog), catalog)
+                spare = None
+            elif not kept.reads(url, catalog):
+                refusal = (f'{schema}.{name} is open already, with the same columns, from {kept.warehouse.base_url} '
+                           f'({kept.catalog}): one of the two at a time')
+            elif kept.warehouse.principal != signed.principal:
+                refusal = (f'{schema}.{name} is open already as {kept.warehouse.principal}: what a grid reads is one '
+                           f"person's, so it is read as them until Python restarts")
+        if spare is not None:
+            _workers().submit(spare.close).result()
+        if refusal is not None:
+            return _said(409, refusal)
         said = {k: v for k, v in written.items() if k != 'accessor'}
         return Answer(200, 'application/json', json.dumps(said).encode('utf-8'))
 
@@ -933,72 +986,97 @@ class Engine:
         """SNAP, ON PYTHON (C3; engine-client/src/snap.ts, the tab's, is its twin): ``{"op": "snap", "model", "pull"}`` --
         the pull, Pure (its source's every column), planned with the table's live runtime and counted where the rows
         are against the same limit, its Arrow chunks copied into the frames' DuckDB under the table's own name (the
-        model's conversions applied, as the tab's copy applies them), read from then on through the snap runtime.
-        ``{"op": "release", "model"}``: the copy dropped. Never a frame's or a file's table, nor one this engine did
-        not make."""
+        model's conversions applied, as the tab's copy applies them), read from then on through the snap runtime; the
+        grid that snapped holds the copy. ``{"op": "release", "model"}``: that grid lets it go, and the copy is dropped
+        when no grid holds it. Never a frame's or a file's table, nor one this engine did not make; one change of the
+        copy at a time."""
         model = asked.get('model')
         with self._warehouse_lock:
             table = self._warehouse_tables.get(model) if isinstance(model, str) else None
         if table is None:
             return _said(404, 'this engine has no warehouse table of that model open')
-        target = f'{_quoted_name(table.schema)}.{_quoted_name(table.name)}'
-        if asked['op'] == 'release':
-            with self.frames.holding():
-                if table.snapped:
-                    self.frames.connection.execute(f'DROP TABLE IF EXISTS {target}')
-                table.snapped = False
-            return Answer(200, 'application/json', b'{}')
-        if not isinstance(asked.get('pull'), str):
-            return _said(400, 'a snap is {"model", "pull"}, the pull its lambda as JSON')
-        on = (lambda f, *a: _workers().submit(f, *a).result()) if self.planner.plane == 'local' else (lambda f, *a: f(*a))
-        planned = on(self.planner.plan, asked['pull'], table.held, table.runtime)
-        try:
-            plan = on(self.planner.read, planned)
-        except LegendError as refused:
-            return _said(422, f'the snap could not be planned: {refused}')
-        try:
-            # counted where the rows are, before anything is copied (the tab's preflight)
-            counted = [pyarrow.ipc.open_stream(c).read_all()
-                       for c in table.warehouse.arrow_chunks(f'SELECT count(*) AS n FROM ({plan.sql})')]
-            rows = int(counted[0].column(0)[0].as_py()) if counted and counted[0].num_rows else 0
-            if rows > _MAX_SNAP_ROWS:
-                return _said(422, f'{rows:,} rows exceeds the {_MAX_SNAP_ROWS:,} row snap limit. Narrow the filter, or '
-                                  'stay live.')
-            receipt: dict[str, Any] = {}
-            chunks = [pyarrow.ipc.open_stream(c).read_all() for c in table.warehouse.arrow_chunks(plan.sql, receipt.update)]
-        except warehouse.SessionExpired as expired:
-            return _said(401, str(expired))
-        except (warehouse.WarehouseError, pa.ArrowInvalid) as refused:
-            return _said(422, f'the snap could not be pulled: {refused}')
-        pulled = pa.concat_tables(chunks) if len(chunks) > 1 else chunks[0]
-        conversions = table.written.get('conversions') or []
-        landing = '__legend_lite_snap'
-        with self.frames.holding():
-            mine = table.snapped
-            if not mine and (table.schema.lower() == 'main' and self.frames.taken(table.name) or self._table_exists(
-                    table.schema, table.name)):
-                return _said(409, f'{table.schema}.{table.name} is a table of this Python\'s already: its copy would '
-                                  'replace it')
-            connection = self.frames.connection
-            connection.register(landing, pulled)
+        with table.copying:
+            database = self.frames.connection.execute('SELECT current_database()').fetchone()[0]
+            # the copy by its whole name: a schema the warehouse names (temp, an attached database's) never reaches
+            # another catalog's table
+            target = f'{_quoted_name(database)}.{_quoted_name(table.schema)}.{_quoted_name(table.name)}'
+            if asked['op'] == 'release':
+                with self.frames.holding():
+                    if table.holders == 1:
+                        self._drop_copy(table, database, target)
+                    table.holders = max(0, table.holders - 1)
+                return Answer(200, 'application/json', b'{}')
+            if not isinstance(asked.get('pull'), str):
+                return _said(400, 'a snap is {"model", "pull"}, the pull its lambda as JSON')
+            on = _on_planner_threads(self.planner)
+            planned = on(self.planner.plan, asked['pull'], table.held, table.runtime)
             try:
-                connection.execute(f'CREATE SCHEMA IF NOT EXISTS {_quoted_name(table.schema)}')
-                select = '*' if not conversions else '* REPLACE (' + ', '.join(
-                    f"{c['sql']} AS {_quoted_name(c['column'])}" for c in conversions) + ')'
-                connection.execute(f'CREATE OR REPLACE TABLE {target} AS SELECT {select} FROM {landing}')
-            finally:
-                connection.unregister(landing)
-            table.snapped = True
+                plan = on(self.planner.read, planned)
+            except LegendError as refused:
+                return _said(422, f'the snap could not be planned: {refused}')
+            try:
+                # counted where the rows are, before anything is copied (the tab's preflight)
+                counted = _arrow_of(table.warehouse.arrow_chunks(f'SELECT count(*) AS n FROM ({plan.sql})'))
+                rows = int(counted.column(0)[0].as_py()) if counted.num_rows else 0
+                if rows > _MAX_SNAP_ROWS:
+                    return _said(422, f'{rows:,} rows exceeds the {_MAX_SNAP_ROWS:,} row snap limit. Narrow the filter, '
+                                      'or stay live.')
+                receipt: dict[str, Any] = {}
+                pulled = _arrow_of(table.warehouse.arrow_chunks(plan.sql, receipt.update))
+            except warehouse.SessionExpired as expired:
+                return _said(401, str(expired))
+            except (warehouse.WarehouseError, pa.ArrowInvalid) as refused:
+                return _said(422, f'the snap could not be pulled: {refused}')
+            conversions = table.written.get('conversions') or []
+            landing = '__legend_lite_snap'
+            with self.frames.holding():
+                if not table.snapped and (table.schema.lower() == 'main' and self.frames.taken(table.name)
+                                          or self._table_exists(database, table.schema, table.name)):
+                    return _said(409, f'{table.schema}.{table.name} is a table of this Python\'s already: its copy '
+                                      'would replace it')
+                connection = self.frames.connection
+                connection.register(landing, pulled)
+                try:
+                    if not self._schema_exists(database, table.schema):
+                        connection.execute(f'CREATE SCHEMA {_quoted_name(database)}.{_quoted_name(table.schema)}')
+                        table.made_schema = True
+                    select = '*' if not conversions else '* REPLACE (' + ', '.join(
+                        f"{c['sql']} AS {_quoted_name(c['column'])}" for c in conversions) + ')'
+                    connection.execute(f'CREATE OR REPLACE TABLE {target} AS SELECT {select} FROM {landing}')
+                except duckdb.Error as refused:
+                    return _said(422, f'the snap could not be copied into this Python\'s DuckDB: {refused}')
+                finally:
+                    connection.unregister(landing)
+                table.holders += 1
         said = {'rowCount': rows, 'pulledBy': {
             'plane': 'warehouse', 'where': receipt.get('where', ''), 'as': receipt.get('as', ''),
             **({'statementId': receipt['statementId']} if 'statementId' in receipt else {}),
             **({'serverRows': receipt['serverRows']} if 'serverRows' in receipt else {})}}
         return Answer(200, 'application/json', json.dumps(said).encode('utf-8'))
 
-    def _table_exists(self, schema: str, name: str) -> bool:
+    def _drop_copy(self, table: _WarehouseTable, database: str, target: str) -> None:
+        """A table's copy dropped, and the schema it made when nothing else is in it now."""
+        self.frames.connection.execute(f'DROP TABLE IF EXISTS {target}')
+        if table.made_schema:
+            left = self.frames.connection.execute(
+                'SELECT count(*) FROM duckdb_tables() WHERE database_name = ? AND schema_name = ?',
+                [database, table.schema]).fetchone()[0]
+            if left == 0:
+                self.frames.connection.execute(f'DROP SCHEMA IF EXISTS {_quoted_name(database)}.{_quoted_name(table.schema)}')
+            table.made_schema = False
+
+    def _table_exists(self, database: str, schema: str, name: str) -> bool:
         return self.frames.connection.execute(
-            'SELECT count(*) FROM duckdb_tables() WHERE lower(schema_name) = lower(?) AND lower(table_name) = lower(?)',
-            [schema, name]).fetchone()[0] > 0
+            'SELECT count(*) FROM duckdb_tables() WHERE database_name = ? AND lower(schema_name) = lower(?)'
+            ' AND lower(table_name) = lower(?)', [database, schema, name]).fetchone()[0] > 0 or \
+            self.frames.connection.execute(
+                'SELECT count(*) FROM duckdb_views() WHERE database_name = ? AND lower(schema_name) = lower(?)'
+                ' AND lower(view_name) = lower(?)', [database, schema, name]).fetchone()[0] > 0
+
+    def _schema_exists(self, database: str, schema: str) -> bool:
+        return self.frames.connection.execute(
+            'SELECT count(*) FROM duckdb_schemas() WHERE database_name = ? AND lower(schema_name) = lower(?)',
+            [database, schema]).fetchone()[0] > 0
 
     def _warehouse_table_of(self, body: str) -> _WarehouseTable | None:
         """The warehouse table a plan-and-run's model is the model of, or None."""
@@ -1015,7 +1093,9 @@ class Engine:
     def _warehouse_plan_and_run(self, table: _WarehouseTable, body: str) -> Answer:
         """PLANANDRUN over a warehouse table (C3): planned by the planner Python chose against the model it holds, on
         the compiler's threads; against the live runtime its SQL runs on the warehouse as the signed-in person, the
-        server's Arrow chunks the rows, typed by the plan as Python's own are. The page sends Pure, never SQL (R4)."""
+        server's Arrow chunks the rows, typed by the plan as Python's own are; against the snap runtime, on the copy in
+        the frames' DuckDB while there is one. The page sends Pure, never SQL (R4). An expired session is 401, its words
+        the driver's, with ``expired`` naming the warehouse and the person (the page offers to sign in again)."""
         asked = json.loads(body)
         if not all(isinstance(asked.get(k), str) for k in ('lambda', 'model', 'runtime')):
             return _said(400, 'a plan-and-run is {"lambda", "model", "runtime"}, each a string')
@@ -1024,23 +1104,30 @@ class Engine:
             return _planned({'plan': self.planner.refused_plan(
                 f'{table.schema}.{table.name} is read on its warehouse, through its own runtime, or snapped, through its '
                 'copy\'s')})
-        # Python's own planner on the compiler's threads; a server's is its HTTP, on this one (as _plan_and_run awaits it)
-        on = (lambda f, *a: _workers().submit(f, *a).result()) if self.planner.plane == 'local' else (lambda f, *a: f(*a))
+        on = _on_planner_threads(self.planner)
         planned = on(self.planner.plan, asked['lambda'], table.held, asked['runtime'])
         try:
             plan = on(self.planner.read, planned)
         except LegendError:
             return _planned({'plan': planned})
         try:
+            receipt: dict[str, Any] | None = None
             if snapped:
                 # the copy in the frames' DuckDB, through the snap runtime: Python's executor, as a frame's rows
                 rows = self.frames.run(plan)
             else:
-                chunks = [pyarrow.ipc.open_stream(c).read_all() for c in table.warehouse.arrow_chunks(plan.sql)]
-                rows = typed_by_plan(pa.concat_tables(chunks) if len(chunks) > 1 else chunks[0], plan)
+                said: dict[str, Any] = {}
+                rows = typed_by_plan(_arrow_of(table.warehouse.arrow_chunks(plan.sql, said.update)), plan)
+                # the warehouse's own receipt: where, as whom, its statement and its count (the tab's live reads carry it)
+                receipt = {'plane': 'warehouse', 'where': said.get('where', ''), 'as': said.get('as', ''),
+                           **({'statementId': said['statementId']} if 'statementId' in said else {}),
+                           **({'serverRows': said['serverRows']} if 'serverRows' in said else {})}
+        except warehouse.SessionExpired as expired:
+            return _planned({'plan': planned, 'error': str(expired),
+                             'expired': {'baseUrl': expired.base_url, 'principal': expired.principal}}, 401)
         except (warehouse.WarehouseError, UntypedColumn, pa.ArrowInvalid, duckdb.Error) as refused:
             return _planned({'plan': planned, 'error': f'{type(refused).__name__}: {refused}'}, 422)
-        return _arrow_rows(rows, planned)
+        return _arrow_rows(rows, planned, receipt)
 
     def _plan_and_run(self, body: str) -> Answer:
         """PLANANDRUN on Python (§15.2): ``{"lambda", "model", "runtime"}`` -- the plan request the page's planner makes

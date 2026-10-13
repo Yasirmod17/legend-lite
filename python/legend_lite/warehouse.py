@@ -193,6 +193,11 @@ class Warehouse:
         self._lock = threading.Lock()
 
     @property
+    def session(self) -> Session:
+        """The session as it is now (its token refreshed as it neared its end)."""
+        return self._session
+
+    @property
     def principal(self) -> str:
         return self._session.principal
 
@@ -221,6 +226,11 @@ class Warehouse:
         """Swap the token for a fresh one now: same user, a new expiry."""
         t = self._call('refresh', {}, refresh=False)
         self.renew(replace(self._session, token=t['token'], principal=t['principal'], expires_at=t['expiresAt']))
+
+    def objects(self) -> list[dict[str, Any]]:
+        """What this user may read in every catalog (``list_objects``), the token refreshed first when it nears its end;
+        a token refused is an expired session."""
+        return self._call('objects', {})
 
     def check(self, statement_id: str) -> str:
         """Whether a statement is on the warehouse's record for this user (its history: the caller's own only)."""
