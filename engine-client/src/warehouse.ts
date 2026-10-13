@@ -8,7 +8,7 @@
 // The client below is a DRIVER of the one binding (warehouse/.../sqlapi/SqlApiCalls.java, docs/ONE_PLATFORM_PROGRAM
 // _2026_10_12.md C3): the binding, compiled to WebAssembly (//warehouse:sqlapi_page, the page's vendor/warehouse/),
 // names every call and reads every answer -- the very ones Python's driver (python/legend_lite/warehouse.py, through
-// the native library) and the JVM's make -- and this file only performs them: the HTTP, the clock, aborting, and the
+// the native library) makes, by the binding the JVM's client uses too -- and this file only performs them: the HTTP, the clock, aborting, and the
 // Arrow bytes, which stay here. One recorded corpus holds every driver to the same calls
 // (warehouse/src/test/resources/sqlapi-corpus.json; engine-client/test/warehouse-corpus.test.ts).
 //
@@ -78,7 +78,7 @@ interface HistoryEntry {
 /** A statement's next step, as the binding reads a submit's or a poll's answer. */
 type Step =
   | { readonly step: 'poll'; readonly statementId: string }
-  | { readonly step: 'done'; readonly statementId: string; readonly rowCount: number; readonly chunkCount: number }
+  | { readonly step: 'done'; readonly statementId: string; readonly rowCount?: number; readonly chunkCount: number }
   | { readonly step: 'failed'; readonly statementId?: string; readonly error: ApiError };
 
 /** One HTTP call the binding names, relative to the warehouse's base URL. */
@@ -139,7 +139,9 @@ export async function loadWarehouseBinding(base: string, load?: (runtimeUrl: str
   }));
 }
 
-const refused = (said: unknown): said is Refusal => typeof said === 'object' && said !== null && 'error' in said;
+/** A refusal: an error and no step (a statement's failed step carries its error too, and is an answer). */
+const refused = (said: unknown): said is Refusal => typeof said === 'object' && said !== null && 'error' in said
+  && !('step' in said);
 const words = (r: Refusal): string => `${r.error.code}: ${r.error.message}`;
 
 /** `fetch`, with a refused connection said as what it is: the browser's own words ("Failed to fetch") name neither
@@ -393,8 +395,9 @@ export class WarehouseEngine implements QueryEngine {
     const found = history.find((h) => h.statementId === id);
     const who = this.#session.principal;
     if (!found) return `Not on the warehouse's record for ${who}: no statement ${id} in its last ${history.length}.`;
+    const rows = found.rowCount === null ? 'its rows uncounted' : `${found.rowCount.toLocaleString(UI_LOCALE)} rows`;
     return `On the warehouse's record for ${who}: statement ${id}, ${found.state}, `
-      + `${Number(found.rowCount).toLocaleString(UI_LOCALE)} rows, submitted ${new Date(found.submittedAt).toLocaleTimeString(UI_LOCALE)}`
+      + `${rows}, submitted ${new Date(found.submittedAt).toLocaleTimeString(UI_LOCALE)}`
       + (found.finishedAt ? `, finished ${new Date(found.finishedAt).toLocaleTimeString(UI_LOCALE)}` : '') + '.';
   }
 
@@ -410,17 +413,24 @@ export class WarehouseEngine implements QueryEngine {
   ): AsyncGenerator<Uint8Array> {
     let step = await this.#call<Step>('submit', { sql, catalog: this.#catalog }, signal);
     const id = step.statementId;
+    // where a read that ends early leaves its statement: still running, cancelled; done, its result closed; read to the
+    // end (or failed there), nothing
+    let ending: 'cancel' | 'closeStatement' | undefined = 'cancel';
     try {
       while (step.step === 'poll') step = await this.#call<Step>('poll', { statementId: step.statementId }, signal);
-      if (step.step === 'failed') throw new Error(`${step.error.code}: ${step.error.message}`);
+      if (step.step === 'failed') {
+        ending = undefined;
+        throw new Error(`${step.error.code}: ${step.error.message}`);
+      }
       const done = step;
+      ending = 'closeStatement';
       // What the SERVER issued for it: its id and its count, never the tab's.
       onReceipt?.({
         plane: 'warehouse',
         where: `the warehouse at ${hostOf(this.#session.baseUrl)}`,
         as: this.#session.principal,
         statementId: done.statementId,
-        serverRows: done.rowCount,
+        ...(done.rowCount !== undefined ? { serverRows: done.rowCount } : {}),
         check: () => this.check(done.statementId),
       });
       for (let index = 0; index < done.chunkCount; index++) {
@@ -429,14 +439,10 @@ export class WarehouseEngine implements QueryEngine {
         if (r.status !== 200) this.#refuse(this.#binding.read('fetchChunk', r.status, await r.text()));
         yield new Uint8Array(await r.arrayBuffer());
       }
-      // every chunk read: the server may free the result now, not at expiry
-      await this.#call('closeStatement', { statementId: done.statementId });
-    } catch (error: unknown) {
-      if (signal?.aborted && id !== undefined) {
-        // stop the server's work too; the page has already moved on
-        void this.#call('cancel', { statementId: id }).catch(() => undefined);
-      }
-      throw error;
+    } finally {
+      // every chunk read, or the read ended early: the server may free the result now, not at expiry, and stop a
+      // statement still running; what it answers changes nothing here (the rows were read, or the read has failed)
+      if (ending !== undefined && id !== undefined) await this.#call(ending, { statementId: id }).catch(() => undefined);
     }
   }
 

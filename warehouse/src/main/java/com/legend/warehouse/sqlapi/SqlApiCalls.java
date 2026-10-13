@@ -112,7 +112,8 @@ public final class SqlApiCalls {
                 SqlApi.ResultMeta meta = d.status().result();
                 f.put("step", Json.str("done"));
                 f.put("statementId", Json.str(d.status().statementId()));
-                f.put("rowCount", Json.num(meta == null ? 0 : meta.rowCount()));
+                // the server's own count, only when it gave one; no result, no chunk to read
+                if (meta != null) f.put("rowCount", Json.num(meta.rowCount()));
                 f.put("chunkCount", Json.num(meta == null ? 0 : meta.chunkCount()));
             }
             case SqlApiBinding.Failed x -> {
@@ -156,13 +157,9 @@ public final class SqlApiCalls {
         return new Json.Obj(f);
     }
 
-    /** A refused call's error: the API's own when the body carries one, else the status and the body's start. */
+    /** A refused call's error, by the binding's one rule (NativeBinding.failure). */
     private static ApiError failure(HttpResult result) {
-        ApiError e = ApiJson.errorOf(result.body());
-        if (e != null) return e;
-        String body = result.body();
-        return new ApiError(ErrorCode.INTERNAL, "HTTP " + result.status()
-                + (body.isEmpty() ? "" : ": " + (body.length() > 200 ? body.substring(0, 200) : body)));
+        return NativeBinding.failure(result);
     }
 
     private static String refusal(ApiError e, boolean expired) {

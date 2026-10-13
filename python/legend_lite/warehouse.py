@@ -11,6 +11,7 @@ single-user warehouse printed. The token is kept here and refreshed as it nears 
 
 from __future__ import annotations
 
+import http.client
 import json
 import threading
 import time
@@ -55,8 +56,20 @@ class Session:
     expires_at: str
 
 
+# where a call of the library runs: here, unless a host whose callers are many threads (the engine's connections)
+# hands in its own pool -- a thread that calls the library is attached to it for good, so a host keeps the calls on a
+# few (set_library_thread); the HTTP never runs there
+_on_library: Callable[[Callable[[], str]], str] = lambda call: call()  # noqa: E731
+
+
+def set_library_thread(run: Callable[[Callable[[], str]], str]) -> None:
+    """Every call of the binding run by ``run`` (the engine's compiler pool), never on the caller's own thread."""
+    global _on_library
+    _on_library = run
+
+
 def _binding(entry: str, *args: str) -> dict[str, Any] | list[Any]:
-    tag, _, rest = library().call(entry, *args).partition('\n')
+    tag, _, rest = _on_library(lambda: library().call(entry, *args)).partition('\n')
     if tag != 'OK':
         raise RuntimeError(f'the native library could not answer {entry}: {rest}')
     return json.loads(rest)
@@ -71,20 +84,33 @@ def _call(op: str, args: dict[str, Any]) -> dict[str, Any]:
 
 
 def _read(op: str, status: int, body: str) -> Any:
-    return _binding('lite_warehouse_read', op, str(status), body)
+    # a C string ends at its first NUL: an answer carrying one is read with it replaced, never cut short
+    return _binding('lite_warehouse_read', op, str(status), body.replace('\0', '\ufffd'))
 
 
 def _refused(said: Any) -> bool:
-    return isinstance(said, dict) and 'error' in said
+    """A refusal: an error and no step (a statement's failed step carries its error too, and is an answer)."""
+    return isinstance(said, dict) and 'error' in said and 'step' not in said
 
 
 def _words(said: dict[str, Any]) -> str:
     return f"{said['error']['code']}: {said['error']['message']}"
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect is not followed: urllib's own would carry the bearer token to wherever it points (another host,
+    plain http), which a browser's fetch never does. Answered as the redirect it is, and so refused."""
+
+    def redirect_request(self, *_: Any) -> None:
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 def _urlopen(request: urllib.request.Request) -> Any:
     """The one place a request goes out (a test answers in its stead)."""
-    return urllib.request.urlopen(request, timeout=_WIRE_TIMEOUT_S)
+    return _OPENER.open(request, timeout=_WIRE_TIMEOUT_S)
 
 
 def _reach(base_url: str, call: dict[str, Any]) -> tuple[int, bytes]:
@@ -98,7 +124,7 @@ def _reach(base_url: str, call: dict[str, Any]) -> tuple[int, bytes]:
     except urllib.error.HTTPError as answered:
         with answered:
             return answered.code, answered.read()
-    except (urllib.error.URLError, OSError) as unreachable:
+    except (urllib.error.URLError, http.client.HTTPException, OSError) as unreachable:
         reason = getattr(unreachable, 'reason', unreachable)
         raise WarehouseError(f'cannot reach the warehouse at {base_url} — {reason}') from unreachable
 
@@ -205,7 +231,7 @@ class Warehouse:
             return f"Not on the warehouse's record for {who}: no statement {statement_id} in its last {len(history)}."
         rows = found.get('rowCount')
         said = (f"On the warehouse's record for {who}: statement {statement_id}, {found['state']}, "
-                f"{rows if rows is not None else '?'} rows, submitted {found['submittedAt']}")
+                f"{'its rows uncounted' if rows is None else f'{rows:,} rows'}, submitted {found['submittedAt']}")
         return said + (f", finished {found['finishedAt']}" if found.get('finishedAt') else '') + '.'
 
     def arrow_chunks(self, sql: str, on_receipt: Callable[[dict[str, Any]], None] | None = None) -> Iterator[bytes]:
@@ -213,22 +239,36 @@ class Warehouse:
         closed once every chunk is read, so the server frees it; ``on_receipt`` hears what the server issued for it
         (its id and its count) before the first chunk."""
         step = self._call('submit', {'sql': sql, 'catalog': self._catalog})
-        while step['step'] == 'poll':
-            step = self._call('poll', {'statementId': step['statementId']})
-        if step['step'] == 'failed':
-            raise WarehouseError(f"{step['error']['code']}: {step['error']['message']}", step['error']['code'])
-        if on_receipt is not None:
-            on_receipt({'statementId': step['statementId'], 'serverRows': step['rowCount'], 'as': self._session.principal,
-                        'where': f'the warehouse at {urlsplit(self._session.base_url).netloc}'})
-        for index in range(step['chunkCount']):
-            # a chunk's bytes are this driver's: only a failed chunk's answer is the binding's to read
-            status, body = _reach(self._session.base_url, _call('fetchChunk', {
-                'statementId': step['statementId'], 'index': index, 'token': self._session.token}))
-            if status != 200:
-                self._raise(_read('fetchChunk', status, body.decode('utf-8', errors='replace')))
-            yield body
-        # every chunk read: the server may free the result now, not at expiry
-        self._call('closeStatement', {'statementId': step['statementId']})
+        statement = step.get('statementId')
+        # where a read that ends early leaves its statement (the caller stops, or a call fails): still running,
+        # cancelled; done, its result closed; read to the end (or failed there), nothing -- the tab's rule
+        ending: str | None = 'cancel'
+        try:
+            while step['step'] == 'poll':
+                step = self._call('poll', {'statementId': step['statementId']})
+            if step['step'] == 'failed':
+                ending = None
+                raise WarehouseError(f"{step['error']['code']}: {step['error']['message']}", step['error']['code'])
+            ending = 'closeStatement'
+            if on_receipt is not None:
+                receipt = {'statementId': step['statementId'], 'as': self._session.principal,
+                           'where': f'the warehouse at {urlsplit(self._session.base_url).netloc}'}
+                on_receipt({**receipt, **({'serverRows': step['rowCount']} if 'rowCount' in step else {})})
+            for index in range(step['chunkCount']):
+                # a chunk's bytes are this driver's: only a failed chunk's answer is the binding's to read
+                status, body = _reach(self._session.base_url, _call('fetchChunk', {
+                    'statementId': step['statementId'], 'index': index, 'token': self._session.token}))
+                if status != 200:
+                    self._raise(_read('fetchChunk', status, body.decode('utf-8', errors='replace')))
+                yield body
+        finally:
+            # the server may free the result now, not at expiry, and stop a statement still running; what it answers
+            # changes nothing here (the rows were read, or the read has failed)
+            if ending is not None and statement is not None:
+                try:
+                    self._call(ending, {'statementId': statement})
+                except WarehouseError:
+                    pass
 
     def _raise(self, said: Any) -> None:
         if not _refused(said):

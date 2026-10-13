@@ -595,8 +595,10 @@ an audit.
   the same Java in the tab and on the server -- stands.
 - **The native library:** `WarehouseCalls` (`lite_warehouse_call`, `lite_warehouse_read`), on `//warehouse:sqlapi`.
   The warehouse's closure is unchanged: the native library reaches the binding, never the reverse.
-- **The corpus:** nine scenarios (`//warehouse:sqlapi_corpus`, a copy in the output tree, as a node test takes another
-  package's file only from there). `//engine-client:warehouse_corpus_test` replays it through the tab's driver over the
+- **The corpus:** thirteen scenarios (`//warehouse:sqlapi_corpus`, a copy in the output tree, as a node test takes
+  another package's file only from there), the audit's four added: a statement with nothing to read, a proxy's page in
+  place of a poll's answer, a chunk refused, and a read that stops after its first chunk; the expired read records the
+  cancel it sends, and the refresh the next call carrying the new token. `//engine-client:warehouse_corpus_test` replays it through the tab's driver over the
   module, and `python/tests/test_warehouse.py` (in `//python:engine_test`) through Python's over the native library;
   each makes exactly the recorded calls.
 - **The drivers.** `engine-client/src/warehouse.ts`: `WarehouseBinding`, `loadWarehouseBinding`; `signIn`,
@@ -608,6 +610,13 @@ an audit.
   at 80% on a timer: one rule, each host's clock).
 - `datacube/test/warehouse-session.test.ts`, which runs headless too (no WebAssembly), hands the engine a binding it
   never calls; the HTTP half loads the module.
+- **What the audit changed:**
+  - A read that ends early leaves its statement as the tab's rule says, in both drivers: a statement still running is
+    cancelled, a result done is closed. A refused close or cancel is ignored: the rows were read, or the read failed.
+  - One rule for a refusal's words (`NativeBinding.failure`, which `SqlApiCalls` uses): a non-API body is cut at 200
+    characters.
+  - Python's driver follows no redirect, which would carry the token elsewhere. A broken connection is said as one.
+  - A failed step is an answer, not a refusal: it carries an `error` and a `step`.
 
 #### C4. The small copies
 

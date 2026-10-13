@@ -21,7 +21,7 @@ import java.util.List;
  * RFC 8259 parser.
  *
  * <p>An answer's reader checks every value's kind before it reads it (the
- * {@code Shape} helpers below), and refuses an answer that is not the API's
+ * shape helpers at the end), and refuses an answer that is not the API's
  * with an {@link IllegalArgumentException}: the readers run in WebAssembly
  * too (the page's module, {@code SqlApiCalls}), where a failed cast is a trap,
  * not an exception.
@@ -85,8 +85,7 @@ public final class ApiJson {
 
     public static SqlApi.Session parseSession(String body) {
         Json.Obj o = Json.parseObject(body);
-        return new SqlApi.Session(o.getString("sessionId"), o.getString("catalog"),
-                o.getString("engine"), o.getString("engineVersion"));
+        return new SqlApi.Session(str(o, "sessionId"), str(o, "catalog"), str(o, "engine"), str(o, "engineVersion"));
     }
 
     public static String login(String user, String password) {

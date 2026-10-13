@@ -84,10 +84,20 @@ async function act(s: Scenario): Promise<Record<string, unknown>> {
         }
         return { chunks, statementId: receipt.statementId, rowCount: receipt.serverRows };
       }
-      case 'refresh': {
+      case 'firstChunk': {
+        const chunks: string[] = [];
+        // the read stops after its first chunk: the driver closes what it leaves
+        for await (const bytes of engine().arrowChunks(String(a.sql))) {
+          chunks.push(Buffer.from(bytes).toString('base64'));
+          break;
+        }
+        return { chunks };
+      }
+      case 'refreshThenCheck': {
+        // the new token is what the next call carries: the replay holds that call to the recorded one
         const e = engine();
         await e.refreshToken();
-        return { principal: e.principal, expiresAt: e.expiresAt };
+        return { principal: e.principal, said: await e.check('s1') };
       }
       case 'history':
         return { said: await engine().check('s1') };
@@ -109,8 +119,8 @@ describe('the tab\'s warehouse driver makes the corpus\'s calls', () => {
       const want = s.outcome;
       if ('failed' in want) {
         assert.ok(typeof got.failed === 'string' && got.failed.endsWith(String(want.failed)), `${String(got.failed)}`);
-      } else if (s.action.kind === 'refresh') {
-        assert.deepEqual(got, { principal: want.principal, expiresAt: '2026-10-13T12:00:00Z' });
+      } else if (s.action.kind === 'refreshThenCheck') {
+        assert.deepEqual(got, { principal: want.principal, said: want.said });
       } else if (s.action.kind === 'history') {
         assert.match(String(got.said), /^On the warehouse's record for rita: statement s1, succeeded, 3 rows/);
       } else {

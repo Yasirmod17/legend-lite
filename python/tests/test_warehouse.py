@@ -63,10 +63,17 @@ def act(scenario: dict) -> dict:
             receipt: dict = {}
             chunks = [base64.b64encode(c).decode() for c in engine().arrow_chunks(a['sql'], receipt.update)]
             return {'chunks': chunks, 'statementId': receipt.get('statementId'), 'rowCount': receipt.get('serverRows')}
-        if a['kind'] == 'refresh':
+        if a['kind'] == 'firstChunk':
+            # the read stops after its first chunk: the driver closes what it leaves
+            read = engine().arrow_chunks(a['sql'])
+            first = next(read)
+            read.close()
+            return {'chunks': [base64.b64encode(first).decode()]}
+        if a['kind'] == 'refreshThenCheck':
+            # the new token is what the next call carries: the replay holds that call to the recorded one
             w = engine()
             w.refresh_token()
-            return {'principal': w.principal, 'token': w._session.token}
+            return {'principal': w.principal, 'token': w._session.token, 'said': w.check('s1')}
         if a['kind'] == 'history':
             return {'said': engine().check('s1')}
         raise AssertionError(f"no such action: {a['kind']}")
@@ -83,7 +90,7 @@ class TheCorpus(unittest.TestCase):
     def test_every_scenario(self):
         with open(CORPUS, encoding='utf-8') as f:
             scenarios = json.load(f)['scenarios']
-        self.assertGreaterEqual(len(scenarios), 9)
+        self.assertGreaterEqual(len(scenarios), 13)
         for scenario in scenarios:
             with self.subTest(scenario['name']):
                 replay = Replay(self, scenario)
