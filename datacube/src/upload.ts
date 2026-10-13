@@ -100,8 +100,9 @@ export const PART_BYTES = 4 * 1024 * 1024;
  * same text (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md G4):
  * - a gzipped file (its first bytes gzip's) unpacked first, whatever its format;
  * - UTF-16 read by its byte-order mark, either order;
- * - UTF-8 when its first 64 KB are UTF-8 (a mark taken off; a bad byte after them replaced, as a File's text() does);
- * - else Latin-1 (the web's windows-1252), each byte its character, never a replacement.
+ * - UTF-8 when its first 64 KB are UTF-8, or hold a UTF-8 character at least (a mark taken off; a stray byte replaced,
+ *   as a File's text() replaces it);
+ * - else Latin-1 (the web's windows-1252): bytes above ASCII and no UTF-8 character among them, each byte its own.
  *
  * A part at a time, each `size` bytes but the last, read as the file streams: no part of the file is ever one string,
  * so no file is too long for the page's strings, and a host is sent the parts as they come (Python's file-part.json).
@@ -153,18 +154,42 @@ export async function* fileParts(file: PickedFile, size = PART_BYTES): AsyncGene
 /** How much of a text file is looked at to tell UTF-8 from Latin-1. */
 const SNIFF_BYTES = 64 * 1024;
 
-/** A text file's encoding, from its first bytes (`fileParts`). */
+/**
+ * A text file's encoding, from its first bytes (`fileParts`): its mark's; else UTF-8 when its first bytes hold no byte
+ * above ASCII that is not part of a UTF-8 character, or hold one UTF-8 character at least (a stray byte in a UTF-8
+ * file is then replaced, as a File's text() replaces it, never the whole file read as Latin-1); else Latin-1.
+ */
 function encodingOf(head: Uint8Array): 'utf-8' | 'utf-16le' | 'utf-16be' | 'windows-1252' {
   if (head[0] === 0xff && head[1] === 0xfe) return 'utf-16le';
   if (head[0] === 0xfe && head[1] === 0xff) return 'utf-16be';
   if (head[0] === 0xef && head[1] === 0xbb && head[2] === 0xbf) return 'utf-8';
-  try {
-    // `stream`: a character cut off at the sample's end is not a fault of the file's
-    new TextDecoder('utf-8', { fatal: true }).decode(head, { stream: true });
-    return 'utf-8';
-  } catch {
-    return 'windows-1252';
+  let characters = 0;
+  let strays = 0;
+  for (let at = 0; at < head.length;) {
+    const b = head[at]!;
+    if (b < 0x80) {
+      at += 1;
+      continue;
+    }
+    // a UTF-8 character's length by its lead byte, and its continuation bytes 10xxxxxx
+    const length = b >= 0xc2 && b <= 0xdf ? 2 : b >= 0xe0 && b <= 0xef ? 3 : b >= 0xf0 && b <= 0xf4 ? 4 : 0;
+    if (length === 0) {
+      strays += 1;
+      at += 1;
+      continue;
+    }
+    if (at + length > head.length) break; // a character cut off at the sample's end is not a fault of the file's
+    let whole = true;
+    for (let k = 1; k < length; k++) if ((head[at + k]! & 0xc0) !== 0x80) whole = false;
+    if (whole) {
+      characters += 1;
+      at += length;
+    } else {
+      strays += 1;
+      at += 1;
+    }
   }
+  return strays === 0 || characters > 0 ? 'utf-8' : 'windows-1252';
 }
 
 /** A stream's first `n` bytes (fewer when it is shorter), and the whole stream again from its start. */
@@ -243,7 +268,7 @@ export async function ingestFile(
   // A fixed virtual filename per table: re-picking a file replaces
   // the registration rather than accumulating them.
   const virtualName = uploadFileName(table, file.name);
-  // its bytes as every host's DuckDB is given them (fileBytes): a text file as the tab has always read it
+  // its bytes as every host's DuckDB is given them (fileBytes): a text file decoded by its encoding (fileParts)
   await db.registerFileBuffer(virtualName, await fileBytes(file));
   try {
     return await readFileInto(engine, { at: virtualName, fileName: file.name, table }, models);

@@ -420,7 +420,7 @@ export function pythonDatabase(link: PythonLink, offers: PythonOffers): Database
     frame: (name) => frameOf(link, name),
     ...(offers.files ? {
       ingestFile: async (file: File, options: { readonly table: string }) => {
-        // the bytes the tab's DuckDB is given (upload.ts fileParts: a text file decoded as the tab always has), sent a
+        // the bytes the tab's DuckDB is given (upload.ts fileParts: a text file decoded by its encoding, G4), sent a
         // part at a time as they are read (file-part.json, each saying where it starts), so no file is too big to send
         // and none is ever whole in the page; then read there, as one file (file.json)
         let upload: string | undefined;

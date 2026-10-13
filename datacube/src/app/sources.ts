@@ -690,7 +690,7 @@ export function pageSources(d: SourcesOf): PageSources {
       choose.textContent = 'Choose file…';
       const input = document.createElement('input');
       input.type = 'file';
-      input.accept = '.csv,.parquet,.json,.jsonl,.ndjson';
+      input.accept = '.csv,.parquet,.json,.jsonl,.ndjson,.gz';
       input.hidden = true;
       input.className = 'dc-lib-choose';
       input.addEventListener('change', () => {

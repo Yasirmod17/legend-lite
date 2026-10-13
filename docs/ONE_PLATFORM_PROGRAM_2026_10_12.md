@@ -947,15 +947,17 @@ From `docs/DATACUBE_MODEL_DESIGN_2026_10_10.md` §13. Each lands once, in the on
      hosts, reads a file by its first bytes:
      - gzip's are unpacked first (`DecompressionStream`), then read as what is inside;
      - UTF-16 is read by its byte-order mark, either order;
-     - UTF-8 when its first 64 KB are UTF-8;
-     - else Latin-1 (the web's windows-1252), each byte its character.
+     - UTF-8 when its first 64 KB are UTF-8, or hold one UTF-8 character at least (a stray byte then replaced, as a
+       File's `text()` replaces it: a UTF-8 file is never read as Latin-1 for one bad byte, the audit's catch);
+     - else Latin-1 (the web's windows-1252): bytes above ASCII and no UTF-8 character among them.
 
      Every host's DuckDB is given the text as UTF-8, as before. `formatOf` and `tableNameOf` read a gzipped file by
-     its name within (`trades.csv.gz` is a CSV, table `trades`), and both pickers take `.gz`.
+     its name within (`trades.csv.gz` is a CSV, table `trades`), and every file chooser takes `.gz`.
    - **The rule's one limit:** the choice is the first 64 KB's. A Latin-1 byte past them, in a file UTF-8 until there,
      is replaced, as a File's `text()` replaces it.
    - **Measured:** `datacube/test/upload.test.ts`:
      - a Latin-1 CSV opens as José and München;
+     - a UTF-8 file with one stray byte stays UTF-8, and a character cut at the 64 KB edge is not a fault;
      - UTF-16 LE and BE, a gzipped CSV (UTF-8 and UTF-16 inside) and a gzipped JSON read alike;
      - the 64 KB rule;
      - the `.gz` names.

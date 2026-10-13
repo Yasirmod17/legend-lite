@@ -220,6 +220,18 @@ describe('a text file read by its encoding: the bytes every host\'s DuckDB is gi
       ['parquet', 'json', 'csv', 'trades']);
   });
 
+  it('a UTF-8 file with a stray byte stays UTF-8: its letters kept, the stray byte replaced, never read as Latin-1', async () => {
+    const text = new Uint8Array([...new TextEncoder().encode('name\nJosé\n'), 0xe9, 0x0a]);
+    assert.deepEqual([...await fileBytes(pickedBytes('mixed.csv', text))], [...new TextEncoder().encode('name\nJosé\n\uFFFD\n')]);
+  });
+
+  it('a character cut at the first 64 KB\'s end is not a fault of the file\'s: it stays UTF-8', async () => {
+    const lead = new TextEncoder().encode('a\n' + 'x'.repeat(64 * 1024 - 3));
+    const bytes = new Uint8Array([...lead, ...new TextEncoder().encode('é\n')]);
+    assert.equal(lead.length, 64 * 1024 - 1, 'é begins on the sample\'s last byte');
+    assert.deepEqual([...await fileBytes(pickedBytes('edge.csv', bytes))], [...bytes]);
+  });
+
   it('UTF-8 by its first 64 KB: a Latin-1 byte after them is replaced, as a File\'s text() replaces it', async () => {
     const head = new TextEncoder().encode(`a\n${'x'.repeat(70 * 1024)}\n`);
     const tail = new Uint8Array([...new TextEncoder().encode('caf'), 0xe9, 0x0a]);
