@@ -36,7 +36,7 @@ from typing import Any, Callable, Iterator
 import duckdb
 import pyarrow as pa
 
-from . import compiler
+from . import _json, compiler
 
 LIVE = 'live'
 SNAPPED = 'snapped'
@@ -221,16 +221,24 @@ class Table:
             self._refresh()
 
     def plan(self, query: str | dict[str, Any]) -> compiler.Plan:
-        """The compiler's plan for a query over this table: Pure text, a tree, or ``->...`` applied to it."""
+        """The plan for a query over this table (Pure text, a tree, or ``->...`` applied to it), by the planner the
+        frames plan with (``Frames.planner``: Python's own unless a server was chosen)."""
         with self._frames._lock:
             self._ready()
-            return self._model().plan(self._tree(query), self.runtime)
+            return self._planned(query)
 
     def execute(self, query: str | dict[str, Any]) -> pa.Table:
         """Runs a query over this table (as ``plan`` takes it) and answers as an Arrow table, typed by its plan."""
         with self._frames._lock:
             self._ready()
-            return self._frames.run(self._model().plan(self._tree(query), self.runtime))
+            return self._frames.run(self._planned(query))
+
+    def _planned(self, query: str | dict[str, Any]) -> compiler.Plan:
+        planner = self._frames.planner
+        if planner is None:
+            return self._model().plan(self._tree(query), self.runtime)
+        # the planner chosen (R3): a server plans over this table's model, and its SQL is run here
+        return planner.read(planner.plan(_json.dumps(self._tree(query)), self._model(), self.runtime))
 
 
 class Frames:
@@ -250,6 +258,9 @@ class Frames:
         for statement in compiler.session_setup('DuckDB'):
             self.connection.execute(statement)
         self._lock = threading.RLock()
+        # where Python's own queries over these frames (Table.plan, execute) are planned: the planner a session chose
+        # (engine.py's Planner: a server's, the program's G1), or None, Python's own in this process
+        self.planner: Any = None
         # how deep in ``serving`` the thread holding the lock is: inside, the frames are held still, each Live one read
         self._still = 0
         # DuckDB matches names without regard to case, quoted or not: so does this

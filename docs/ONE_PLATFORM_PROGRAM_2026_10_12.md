@@ -446,7 +446,17 @@ From `docs/DATACUBE_MODEL_DESIGN_2026_10_10.md` §13. Each lands once, in the on
      - `pythonPlanes` stops refusing Python's other planes;
      - `ll.show(planner=...)` chooses, read once;
      - the token and the server's sign-in follow C3's twin-client pattern.
-   - **Ask the user:** the spelling of `ll.show(planner=...)`, and how a server's credentials are given.
+   - **Decided 2026-10-13 (the user):** the words are the tab's, `ll.show(df, planner='local' | 'remote' | 'engine',
+     server='http://...')`, or `ll.planner(...)` before the first cube; a server's sign-in is skipped for now ("dont
+     stress too much about auth right now"; the user's ideal, SSO as the person running Python, is G10, for both hosts
+     at once: the tab sends no sign-in to a server today either).
+   - **Built 2026-10-13 (branch `datacube/python-parity`):** `legend_lite/upstream.py` (`RemotePlanner`, the twin of
+     `UpstreamPlanner`; the requests and the plan's reading held alike by `datacube/test/fixtures/upstream-plans.json`,
+     read by `datacube:upstream_plans_test` and `python:upstream_test`); the engine's `Planner` gains `plan`, `read`
+     and `refused_plan`, and plan-and-run, the pure/v1 calls and `Table.plan`/`execute` ask it; a session chooses once
+     (`_Session.choose_planner`); the page on a server's plane plans with the tab's `UpstreamPlanner` at Python's
+     address (`python-host.ts` `planning`) and reads the plan by `planner.ts` `readServerPlan`. A headless grid still
+     plans with the native library: PARK-30. Execute through a server's plan on Python is refused in words (C1).
 2. **Streaming results back from Python.**
    - Python writes record batches, each typed by the plan; the plan stays in the schema, which is sent first.
    - The page reads the body with a `RecordBatchReader`, chunk by chunk, as the tab's DuckDB streams.
@@ -472,17 +482,21 @@ From `docs/DATACUBE_MODEL_DESIGN_2026_10_10.md` §13. Each lands once, in the on
      `tools/platforms/defs.bzl`), and laid out in `//python:wheel_duckdb` beside httpfs.
    - **The rule, R4.** An Iceberg table's metadata names its data files by path, so a remote table could name a file on
      this machine.
-     - Before Python mounts an Iceberg table, it reads the snapshot it will read and every manifest and data file that
-       snapshot names (DuckDB's `iceberg_snapshots`, `iceberg_metadata`). It refuses, naming the path, unless every one
-       is a remote URL by `remote_url`'s rule.
-     - It mounts that snapshot, pinned (`iceberg_scan`'s snapshot parameter), so a later snapshot cannot name a local
-       file. This needs the shared mount (`datacube/src/remote.ts` `mountRemote`) to take a pinned snapshot; the tab
-       may pin too.
-     - Today `engine.py`'s remote rules refuse Iceberg in words.
-   - **Measure first:** whether DuckDB 1.5.5's iceberg autoloads avro from the extension folder with autoinstall off,
-     and the function names and parameters as that version has them.
-   - **Proof:** an Iceberg table served over HTTP by the test (written by DuckDB's iceberg, or a fixture), read on
-     Python's page as in the tab; one whose metadata names a local data file, refused; `wheel_test` reading one from an
+     - **Built 2026-10-13 (branch `datacube/python-parity`):** before Python mounts an Iceberg table,
+       `Engine._iceberg_refusal` reads the manifest lists its snapshots name, the manifests those name, and the files
+       its current snapshot reads, each level only once the level naming it is checked, and refuses the table, naming
+       the path, unless every one is a remote URL by `remote_url`'s rule. The shared mount gives the extensions and keys
+       first (`remote.ts` `accessRemote`; headless `remoteAccess`), then the view.
+     - **Not pinned** (changed from this plan's first draft, measured): DuckDB reads the metadata's current snapshot
+       on every scan and finds the current metadata file by its own rule, so pinning a snapshot closes nothing a
+       changing server could not reopen. What the check cannot close is PARK-29, with its fix (DuckDB refusing this
+       machine's paths on legend-lite's connection, with G6).
+     - **Measured:** loading iceberg loads avro from the extension folder with installing off; `iceberg_scan` and
+       `iceberg_metadata` take `snapshot_from_id`; `iceberg_scan` ends the process when a manifest cannot be read
+       (`iceberg_metadata` and `read_avro` report it), so no view is made before every manifest was read through those.
+   - **Proof (built):** `python/tests/iceberg_table.py` writes a small Iceberg v2 table named by the URLs a test serves
+     it at; `headless_test` reads a served one and refuses tables naming a local data file, manifest or manifest list;
+     `python_engine_test` opens one from the app's Remote section on Python's page; `wheel_test` reads one from an
      installed wheel.
 6. **A connection per page on Python** (optional): today one connection, shared, a feature.
 7. **A page plan's `sourceUrl('file:...')` refused** (optional hardening, §1.4).

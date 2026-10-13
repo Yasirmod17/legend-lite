@@ -110,6 +110,12 @@ def relation_type(model: str, tree: Tree) -> tuple[Column, ...]:
     return _columns(_json.loads(_engine('/api/pure/v1/compilation/lambdaRelationType', '', _json.dumps(request))))
 
 
+def read_planned(answer: str) -> Plan:
+    """The planner's tagged answer (``OK`` and its plan, or ``ERR``, its kind and message) as a Plan, its refusal raised
+    (``LegendError``): what the plan function the tab's worker calls answers (``lite_plan_json_held``)."""
+    return read_plan(_answer(answer))
+
+
 def read_plan(answer: str) -> Plan:
     """The planner's plan (``{"sql", "type"}``, the answer after its ``OK`` tag) as a Plan: the one reading of it, as
     DataCube's planner reads it (lite-planner.ts ``readPlan``)."""

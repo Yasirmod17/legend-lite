@@ -11,6 +11,7 @@
 import type { Planner } from './cube.ts';
 import { PureV1Client, type PrintStyle, type PureV1Options } from '../../engine-client/src/pure-v1.ts';
 import { relationColumns, tdsColumns, type Plan, type PlanColumn } from '../../engine-client/src/relation-type.ts';
+import { parseExact } from '../../engine-client/src/values.ts';
 import { toJson, type Lambda } from '../../pure-protocol/src/index.ts';
 import type { GridSource } from './model-writer.ts';
 
@@ -97,11 +98,7 @@ export class UpstreamPlanner implements Planner {
     const key = toJson(query);
     const hit = this.#useCache ? this.#cache.get(key) : undefined;
     if (hit !== undefined) return hit;
-    const body = await this.#client.generatePlan(query, signal);
-    const sql = sqlOf(body);
-    if (sql === undefined) throw new PlanError('the plan carries no SQL node', query);
-    // the plan's own tdsColumns: the result's type, as the compiler gave it
-    const plan: Plan = { sql, columns: tdsColumns(body, this.#bitColumns) };
+    const plan = serverPlan(await this.#client.generatePlan(query, signal), query, this.#bitColumns);
     if (this.#useCache) this.#cache.set(key, plan);
     return plan;
   }
@@ -138,6 +135,34 @@ export class UpstreamPlanner implements Planner {
 }
 
 /** The SQL of an execution plan: its first `sql` execution node's `sqlQuery`. */
+/**
+ * A server's `generatePlan` answer as a Plan: its first SQL node's statement, and the plan's own `tdsColumns`, the
+ * result's type as the compiler gave it. The one reading of a server's plan: the tab's planner on a server reads it so,
+ * and so does a page on Python whose Python plans on a server and runs the SQL itself (python-host.ts; Python reads it
+ * the same way, python/legend_lite/upstream.py, the two held alike by test/fixtures/upstream-plans.json).
+ */
+export function serverPlan(body: unknown, query: Lambda, bitColumns: ReadonlySet<string> = new Set()): Plan {
+  const sql = sqlOf(body);
+  if (sql === undefined) throw new PlanError('the plan carries no SQL node', query);
+  return { sql, columns: tdsColumns(body, bitColumns) };
+}
+
+/** A server's `generatePlan` answer, as its text, read as `serverPlan` reads it; a refusal (legend-engine's error
+ *  shape) thrown in the server's own words. */
+export function readServerPlan(text: string, query: Lambda, bitColumns: ReadonlySet<string> = new Set()): Plan {
+  let body: unknown;
+  try {
+    body = parseExact(text);
+  } catch {
+    throw new PlanError(`the server answered no plan: ${text.slice(0, 300)}`, query);
+  }
+  if (body === null || typeof body !== 'object' || !('rootExecutionNode' in body)) {
+    const message = (body as { message?: unknown } | null)?.message;
+    throw new PlanError(typeof message === 'string' ? message : `the server answered no plan: ${text.slice(0, 300)}`, query);
+  }
+  return serverPlan(body, query, bitColumns);
+}
+
 function sqlOf(plan: unknown): string | undefined {
   const work: unknown[] = [(plan as { rootExecutionNode?: unknown }).rootExecutionNode];
   while (work.length > 0) {

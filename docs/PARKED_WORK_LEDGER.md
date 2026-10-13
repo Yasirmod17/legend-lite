@@ -802,3 +802,28 @@ cost while parked: a table that changes between the check and a read, or a serve
 
 **Anchor.** `def _iceberg_refusal(` in `python/legend_lite/engine.py` (ParkedWorkLedgerTest reads core only; this row's
 anchor is checked by hand).
+
+## PARK-30 — a headless grid on Python plans with Python's own planner, whatever the session chose
+
+**Recorded** 2026-10-13 by the DataCube + Python line, with G1 (`docs/ONE_PLATFORM_PROGRAM_2026_10_12.md`: a server
+planning for Python's pages). A session chooses where it plans once (`ll.planner()`, `ll.show(..., planner=...,
+server=...)`), and a page's grids, and Python's own `Table.plan` and `execute`, are planned there.
+
+**What happens today.** A page's grid read headless (`Grid.view()`, `grid.relation`, `grid.to_pandas()`: DataCube's own
+code in V8, `legend_lite/_headless.py`) plans through the bundle's planner worker, which Python answers with the native
+library (`_planner.py`), so on a session planning on a server a headless grid's numbers are legend-lite's in this
+process where its page's are the server's.
+
+**The fix.** The headless bundle's planner on the session's plane: on a server's, the tab's `UpstreamPlanner` over the
+host's fetch (the headless design's R6), asking Python's own `pure/v1` as the page does, and the grid's rows through
+plan-and-run, as the page's are.
+
+**Acceptance.** `python/tests/test_upstream.py`: a headless grid's view on a session planning on legend-lite's server
+answers as its page does, its SQL the server's.
+
+**Why parked.** The page's planning was the step; the headless bundle has no fetch of its own to a server yet.
+
+**When.** With D (headless pages), which runs the page's actions headless.
+
+**Anchor.** `with the native library (PARK-30)` in `python/legend_lite/engine.py`'s `Planner` (ParkedWorkLedgerTest reads
+core only; checked by hand).

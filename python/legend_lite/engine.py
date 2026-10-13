@@ -52,6 +52,7 @@ import pyarrow as pa
 import pyarrow.ipc
 
 from . import _json, _planner, compiler
+from .compiler import LegendError
 from ._library import library
 from .frames import Frames, UntypedColumn
 from ._home import SavedPages, Settings, home, locked
@@ -242,13 +243,27 @@ class Planner(Protocol):
     compiler answers -- the engine's pure/v1 API: a query's types, a parse, a print, and an execute's plan, whose SQL
     Python then runs on its own DuckDB (R4) -- is answered by the one planner the engine was made with, chosen once and
     shown on the page. Its ``plane`` is the word the page's status bar says (``local``, ``remote``, ``engine``) and its
-    ``label`` the menu's. Today the one planner is Python's own (``NativePlanner``); one on a server (legend-lite's,
-    legend-engine's: step 2c) is another of these. Python's own calls in this process -- a headless grid's view
-    (legend_lite._headless), ``Frames.plan`` -- still plan with the native library: routing them through the same
-    planner is 2c's too."""
+    ``label`` the menu's: Python's own (``NativePlanner``), or a server's (``upstream.RemotePlanner``: legend-lite's,
+    legend-engine's; the program's G1), chosen in Python (``ll.show(..., planner=...)``). A page's grids, and Python's
+    own ``Table.plan`` and ``execute``, are planned by it; a headless grid's view (legend_lite._headless) still plans
+    with the native library (PARK-30)."""
 
     plane: str
     label: str
+
+    def plan(self, query: str, held: compiler.HeldModel, runtime: str) -> str:
+        """A grid's query (its lambda's JSON) planned over the model held, through ``runtime``: this planner's answer as
+        it came, which the page reads as its planner on this plane reads it (``read`` reads it here)."""
+        ...
+
+    def read(self, answer: str) -> compiler.Plan:
+        """A ``plan`` answer as a Plan, its SQL and its columns; a refusal raised (``LegendError``), in its words."""
+        ...
+
+    def refused_plan(self, message: str) -> str:
+        """A plan refused before this planner was asked, in its own answer's shape (the page reads it as it reads the
+        planner's own refusals)."""
+        ...
 
     def answer(self, path: str, query: str, body: str) -> compiler.Answer:
         """A ``pure/v1`` call other than execute, answered as upstream answers it."""
@@ -278,6 +293,16 @@ class NativePlanner:
 
     def refusal(self, message: str) -> compiler.Answer:
         return compiler.refusal(message)
+
+    def plan(self, query: str, held: compiler.HeldModel, runtime: str) -> str:
+        # the planner function the tab's worker calls (planJson), over the model this process holds
+        return library().call('lite_plan_json_held', held.handle, query, runtime)
+
+    def read(self, answer: str) -> compiler.Plan:
+        return compiler.read_planned(answer)
+
+    def refused_plan(self, message: str) -> str:
+        return f'ERR\nMODEL\n{message}'
 
 
 class Engine:
@@ -373,8 +398,8 @@ class Engine:
 
     def services(self) -> dict[str, Any]:
         """What this engine offers the page beside its frames (services.json, asked once as the page starts): whether
-        it reads a page's file, and where it plans -- the plane it plans on, and every plane it offers (today only its
-        own: choosing another is step 2c's)."""
+        it reads a page's file, and where it plans -- the plane it plans on (chosen in Python, R3), and every plane it
+        offers: that one, since a page on Python chooses none of its own."""
         plane = {'word': self.planner.plane, 'label': self.planner.label}
         # where the page's saved pages are, and whose: the folder's one owner, this user (as the browser's store is
         # 'this browser''s)
@@ -724,14 +749,18 @@ class Engine:
             self._noted(models)
             held = self.frames.model_for(asked['model'])
             if held is None:
-                return _planned({'plan': 'ERR\nMODEL\nthis engine plans only over the tables it serves: a page\'s frames '
-                                           'and files, and a model that reads only them (its project\'s)'})
-            planned = library().call('lite_plan_json_held', held.handle, asked['lambda'], asked['runtime'])
-            if not planned.startswith('OK\n'):
+                return _planned({'plan': self.planner.refused_plan(
+                    'this engine plans only over the tables it serves: a page\'s frames and files, and a model that reads '
+                    'only them (its project\'s)')})
+            # by the planner chosen (R3): Python's own, or a server's -- which plans only, the SQL run here
+            planned = self.planner.plan(asked['lambda'], held, asked['runtime'])
+            try:
+                plan = self.planner.read(planned)
+            except LegendError:
                 return _planned({'plan': planned})
             try:
                 # Python's executor, as Python's own queries are run: the rows typed by the plan (frames.typed_by_plan)
-                rows = self.frames.run(compiler.read_plan(planned[3:]))
+                rows = self.frames.run(plan)
             except (duckdb.Error, UntypedColumn) as refused:
                 return _planned({'plan': planned, 'error': f'{type(refused).__name__}: {refused}'}, 422)
         rows = rows.replace_schema_metadata({**(rows.schema.metadata or {}), _PLAN_KEY: planned.encode('utf-8')})

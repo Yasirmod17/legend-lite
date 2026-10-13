@@ -161,6 +161,10 @@ class _Session:
         # the pages shown, each where it is shown: a tab's or a notebook's
         self.pages: list[PageTab | PageCube] = []
         self._engine: Engine | None = None
+        # where the session plans (R3): the planner chosen (``choose_planner``; a server's, the program's G1), or None,
+        # Python's own; and whether it was chosen yet -- once an engine plans, it is, and never changes behind its pages
+        self._planner: Any = None
+        self._chosen = False
         self._web: WebServer | None = None
         # DataCube's own code over these frames, headless (legend_lite._headless): made on first use
         self._headless: Any = None
@@ -172,9 +176,43 @@ class _Session:
     def engine(self) -> Engine:
         with self._lock:
             if self._engine is None:
-                # a page's file is read into the frames' database by DataCube's own code, headless (file.json)
-                self._engine = Engine(self.frames, site=_site(), headless=self.headless)
+                # a page's file is read into the frames' database by DataCube's own code, headless (file.json); every
+                # query planned by the planner chosen, chosen for good from here
+                self._engine = Engine(self.frames, site=_site(), headless=self.headless, planner=self._planner)
+                self._chosen = True
             return self._engine
+
+    def choose_planner(self, word: str, server: str | None) -> None:
+        """Where this session plans, chosen once (R3): ``local``, Python's own; ``remote``, legend-lite's server at
+        ``server``; ``engine``, legend-engine at ``server``. A server plans only: Python runs its SQL on its own DuckDB
+        (R4). The same choice again changes nothing; another, once the session plans, is refused -- its pages show
+        where they plan -- and a server that does not answer is said, never substituted."""
+        from . import upstream
+        if word == 'local':
+            if server is not None:
+                raise ValueError("the local planner is Python's own: it is at no server")
+        elif word in upstream.PLANES:
+            if not server:
+                raise ValueError(f"the {word} planner is {upstream.PLANES[word][0]} at a server: give its address "
+                                 f"(server='http://...')")
+        else:
+            raise ValueError(f"a planner is 'local', 'remote' or 'engine', not {word!r}")
+        wanted = (word, server.rstrip('/') if server else None)
+        with self._lock:
+            current = ('local', None) if self._planner is None else (self._planner.plane, self._planner.url)
+            if self._chosen:
+                if current == wanted:
+                    return
+                where = 'locally' if current[0] == 'local' else f'on {current[0]} at {current[1]}'
+                raise ValueError(f'this Python plans {where}, chosen once: its pages show where they plan, and it never '
+                                 f'changes behind them. Choose the planner before the first cube is shown (a new Python)')
+            planner = None if word == 'local' else upstream.RemotePlanner(word, wanted[1] or '')
+            if planner is not None:
+                refused = planner.answering()
+                if refused is not None:
+                    raise ConnectionError(f'{refused}: nothing is planned elsewhere in its place')
+            self._planner, self._chosen = planner, True
+            self.frames.planner = planner
 
     def headless(self) -> Any:
         """DataCube's own non-screen code, in V8, over these frames' database (the `datacube` extra): made on first
@@ -393,8 +431,17 @@ def _release(key: int) -> None:
     session.frames.close()
 
 
+def planner(word: str = 'local', server: str | None = None) -> None:
+    """Where this Python plans its cubes and its own queries, chosen once, before the first cube is shown (R3):
+    ``'local'`` (the default: Python's own compiler, in this process), ``'remote'`` (legend-lite's server at ``server``)
+    or ``'engine'`` (legend-engine at ``server``). A server plans only; Python runs the SQL on its own DuckDB, so the
+    data never leaves this machine. ``show(..., planner=..., server=...)`` chooses the same way."""
+    _current().choose_planner(word, server)
+
+
 def show(frame: Any, name: str | None = None, *, mode: str = LIVE, browser: bool = True,
-         inline: bool | None = None) -> Cube | DataCube | PageTab | PageCube:
+         inline: bool | None = None, planner: str | None = None,
+         server: str | None = None) -> Cube | DataCube | PageTab | PageCube:
     """Shows DataCube on ``frame`` (a pandas or polars DataFrame, an Arrow table, or a function returning one) and returns
     at once: under the cell in a Jupyter notebook; in a marimo notebook, as the cell's output when it is the cell's last
     expression (marimo's way); in a browser tab anywhere else (a plain script that opened one waits at its end until
@@ -403,8 +450,11 @@ def show(frame: Any, name: str | None = None, *, mode: str = LIVE, browser: bool
     cube each call, the latest taking the name's frame). ``mode``: Live (the default: each query reads the frame as it
     is then) or ``'snapped'`` (copied once). ``browser=False`` opens no tab: the link is ``cube.url``.
     ``inline=False`` opens a tab from a notebook's kernel too (a console that shows no widget: Spyder's, qtconsole);
-    under the cell needs the notebook extra (``pip install 'legend-lite[notebook]'``)."""
+    under the cell needs the notebook extra (``pip install 'legend-lite[notebook]'``). ``planner`` and ``server``:
+    where it plans, chosen once (``planner()``)."""
     from .page import Page
+    if planner is not None or server is not None:
+        _current().choose_planner(planner or 'local', server)
     if isinstance(frame, Page):
         return _show_page(frame, browser=browser, inline=inline)
     if _marimo() and inline is not False:
