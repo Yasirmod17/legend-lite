@@ -35,7 +35,7 @@ import type { ResultTable } from '../../../engine-client/src/result.ts';
 import { toJson, type Lambda } from '../../../pure-protocol/src/index.ts';
 import { LitePlanner } from '../lite-planner.ts';
 import { readServerPlan, UpstreamPlanner, type ModelOptions } from '../planner.ts';
-import type { PlannerWorker, Request, Response } from '../planner-protocol.ts';
+import type { PlannerWorker, Request, Response } from '../../../engine-client/src/legend/planner-protocol.ts';
 import { ExactNumber, fromJson, type ValueSpecification } from '../../../pure-protocol/src/index.ts';
 import { base64 } from '../headless/web.ts';
 import { CubeStoreClient } from '../cube-store.ts';

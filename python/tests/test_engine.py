@@ -178,10 +178,22 @@ class Refusals(Served):
         self.assertEqual(status, 500)
         self.assertIn('the models it serves', body['message'])
 
-    def test_execute_in_json_is_refused_naming_the_format_served(self):
-        status, body = self.error('/api/pure/v1/execution/execute', self.execute_input(self.query('')))
-        self.assertEqual(status, 500)
-        self.assertIn('ARROW_IPC', body['message'])
+    def test_execute_in_json_answers_as_legend_lites_server(self):
+        # legend-engine's JSON too (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C1): DuckDB writes the rows as the server's
+        # database writes them, the compiler arranges them with the server's own writers
+        status, _, body = self.post('/api/pure/v1/execution/execute',
+                                    self.execute_input(self.query('->select(~[desk, qty])->sort(~qty->ascending())')))
+        self.assertEqual(status, 200, body)
+        answer = json.loads(body)
+        self.assertEqual(answer['builder']['_type'], 'tdsBuilder')
+        self.assertEqual([c['name'] for c in answer['builder']['columns']], ['desk', 'qty'])
+        self.assertEqual(answer['activities'][0]['_type'], 'relational')
+        self.assertEqual(answer['result']['columns'], ['desk', 'qty'])
+        self.assertEqual([r['values'] for r in answer['result']['rows']],
+                         [[d, q] for d, q in sorted(zip(self.df['desk'], self.df['qty']), key=lambda r: r[1])])
+        # a refusal in the engine's shape, as the Arrow answer's
+        status, refused = self.error('/api/pure/v1/execution/execute', self.execute_input(self.query('->select(~[nope])')))
+        self.assertEqual((status, refused['errorType']), (500, 'COMPILATION'))
 
     def test_the_database_refusing_is_answered_in_the_engines_shape(self):
         status, body = self.error('/api/pure/v1/execution/execute?serializationFormat=ARROW_IPC',

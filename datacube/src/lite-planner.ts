@@ -33,7 +33,7 @@ import type { AssociationAction, ClassAction, DataSpaceAction, GridSource, Model
 import type { PrintStyle } from '../../engine-client/src/pure-v1.ts';
 import { relationColumns, type Plan, type PlanColumn } from '../../engine-client/src/relation-type.ts';
 import type { SeedTable, TableSeed } from '../../engine-client/src/model-data.ts';
-import type { PlannerWorker, RequestBody, Response } from './planner-protocol.ts';
+import type { PlannerWorker, RequestBody, Response } from '../../engine-client/src/legend/planner-protocol.ts';
 
 /** The subset of TeaVM's module surface this file uses. */
 interface TeavmModule {
@@ -100,7 +100,7 @@ export interface LitePlannerOptions {
    */
   readonly workerUrl?: string;
   /**
-   * Run the module on a worker the HOST makes: one that answers planner-protocol.ts's messages, as planner-worker.ts
+   * Run the module on a worker the HOST makes: one that answers engine-client's planner-protocol.ts, as its planner-worker.ts
    * does in a tab -- Python's headless host answers each with the native library's function of the same name
    * (docs/DATACUBE_HEADLESS_PYTHON_DESIGN_2026_10_11.md §3). Given, it is used instead of a `Worker` from `workerUrl`.
    */

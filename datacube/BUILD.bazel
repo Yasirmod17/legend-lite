@@ -1202,35 +1202,38 @@ browser_test(
 # entry point -> bundle
 _BUNDLES = {
     "demo/main.ts": "demo/bundle.js",
-    "src/planner-worker.ts": "demo/planner-worker.js",
     "demo/remote-harness.ts": "demo/remote-bundle.js",
     "demo/stress.ts": "demo/stress.js",
     # DataCube's app on Python, every query Python's (docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md, step 2a)
     "demo/engine.ts": "demo/bundle-engine.js",
 }
 
+# the planner's worker: engine-client's own bundle (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C2: one planner protocol, one
+# worker for every app that plans in a tab), served as the page's ./planner-worker.js, as Query's and Studio's are
+copy_file(
+    name = "planner_worker",
+    src = "//engine-client:planner_worker",
+    out = "demo/planner-worker.js",
+)
+
 # Split: what a page loads only when it needs it (ECharts, the first time a chart draws -- plan
 # F7) is a chunk beside the bundle, in its own directory per bundle, fetched by the bundle itself.
-# The planner's worker is one file: it loads nothing lazily, and a worker's imports are its own.
-_UNSPLIT = ["src/planner-worker.ts"]
-
 [esbuild_bundle(
     name = "bundle_" + out[len("demo/"):-len(".js")].replace("-", "_"),
     srcs = glob(["demo/**/*.ts"]) + [":src"],
     outs = [out],
-    out_dirs = [] if entry in _UNSPLIT else ["demo/chunks-" + out[len("demo/"):-len(".js")]],
+    out_dirs = ["demo/chunks-" + out[len("demo/"):-len(".js")]],
     args = [
         entry,
         "--bundle",
         "--format=esm",
         "--target=es2022",
         "--log-level=warning",
-    ] + (["--outfile=" + out] if entry in _UNSPLIT else [
         "--splitting",
         "--outdir=demo",
         "--entry-names=" + out[len("demo/"):-len(".js")],
         "--chunk-names=chunks-" + out[len("demo/"):-len(".js")] + "/[name]-[hash]",
-    ]),
+    ],
 ) for entry, out in _BUNDLES.items()]
 
 # A NOTEBOOK'S CUBE (legend_lite.notebook.DataCube; docs/DATACUBE_PYTHON_SHOW_DESIGN_2026_10_08.md, "In a notebook"):
@@ -1294,7 +1297,7 @@ filegroup(
     srcs = [
         ":bundle_bundle",
         ":bundle_bundle_engine",
-        ":bundle_planner_worker",
+        ":planner_worker",
         ":widget",
         ":widget_loader",
     ],
@@ -1367,6 +1370,7 @@ filegroup(
         "demo/*.pure",
         "src/**/*.css",
     ]) + [":bundle_" + out[len("demo/"):-len(".js")].replace("-", "_") for out in _BUNDLES.values()] + [
+        ":planner_worker",
         ":projects",
         ":vendor",
         ":widget",

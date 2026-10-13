@@ -10,7 +10,8 @@ import { fileURLToPath } from 'node:url';
 
 import { DuckDbEngine, type ArrowishConnection } from '../src/duckdb.ts';
 import { WasmGrammar } from '../src/legend/wasm-grammar.ts';
-import { answer, type PlannerModule, type PlannerRequest } from '../src/legend/planner-answer.ts';
+import { answer, type PlannerModule } from '../src/legend/planner-answer.ts';
+import type { RequestBody } from '../src/legend/planner-protocol.ts';
 import { dataTables, loadDataTables, seeded, TestData, type FileSink } from '../src/model-data.ts';
 import { TabTables, withTestData, type Model } from '../src/tab-data.ts';
 import { engineClientRequire } from '../src/node-require.ts';
@@ -90,7 +91,7 @@ async function loadPlanner(): Promise<WasmGrammar> {
     },
   });
   return new WasmGrammar({
-    async ask(r: PlannerRequest): Promise<string> {
+    async ask(r: RequestBody): Promise<string> {
       return answer(m, r);
     },
   });

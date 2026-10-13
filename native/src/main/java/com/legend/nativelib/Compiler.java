@@ -268,6 +268,51 @@ public final class Compiler {
         return answer(a);
     }
 
+    /**
+     * Execute's plan half in the engine's JSON, for a host that runs the SQL on its own database
+     * ({@code Boundary.executeJsonPlan}; the planner protocol's {@code executePlan}, docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C2).
+     */
+    @CEntryPoint(name = "lite_execute_json_plan")
+    static CCharPointer executeJsonPlan(IsolateThread thread, CCharPointer body, CCharPointer models) {
+        String a;
+        try {
+            String b = text(body), m = text(models);
+            a = Folded.http(() -> Boundary.executeJsonPlan(b, m));
+        } catch (Throwable failure) {
+            a = Folded.failure(failure);
+        }
+        return answer(a);
+    }
+
+    /** That plan's answer from the one value the host's database wrote ({@code Boundary.executeJsonAnswer}; C2). */
+    @CEntryPoint(name = "lite_execute_json_answer")
+    static CCharPointer executeJsonAnswer(IsolateThread thread, CCharPointer plan, CCharPointer wire) {
+        String a;
+        try {
+            String p = text(plan), w = text(wire);
+            a = Folded.http(() -> Boundary.executeJsonAnswer(p, w));
+        } catch (Throwable failure) {
+            a = Folded.failure(failure);
+        }
+        return answer(a);
+    }
+
+    /** The planner's boot layer built for a model now ({@code Boundary.warmModel}; the protocol's {@code warm}, C2). */
+    @CEntryPoint(name = "lite_warm_model")
+    static CCharPointer warmModel(IsolateThread thread, CCharPointer model) {
+        String a;
+        try {
+            String m = text(model);
+            a = Folded.of(() -> {
+                Boundary.warmModel(m);
+                return "";
+            });
+        } catch (Throwable failure) {
+            a = Folded.failure(failure);
+        }
+        return answer(a);
+    }
+
     /** A host's refusal of a call it could not finish, in the engine's error shape ({@code Boundary.refusal}). */
     @CEntryPoint(name = "lite_pure_v1_refusal")
     static CCharPointer refusal(IsolateThread thread, CCharPointer message) {

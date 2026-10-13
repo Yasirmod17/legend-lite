@@ -8,13 +8,13 @@ import type { Lambda } from '../../../pure-protocol/src/index.ts';
 import { toJson } from '../../../pure-protocol/src/index.ts';
 import type { PureModelContextData } from './pmcd.ts';
 import { EngineError, HttpEngine, type Grammar } from './engine.ts';
-import type { PlannerRequest, PlannerResponse } from './planner-worker.ts';
+import type { RequestBody, Response as PlannerResponse } from './planner-protocol.ts';
 import type { CompileResult, ExecuteInput, PureModelContext, RelationTypeAnswer } from './wire.ts';
 import type { SeedTable, TableSeed } from '../model-data.ts';
 
 /** Where a request goes: a worker, or (in tests) the module called directly. */
 export interface PlannerPort {
-  ask(request: PlannerRequest): Promise<string>;
+  ask(request: RequestBody): Promise<string>;
 }
 
 /** A worker running planner-worker.ts; `base` is where classes.wasm and its runtime live. */
@@ -36,7 +36,7 @@ export class WorkerPort implements PlannerPort {
     };
   }
 
-  ask(request: PlannerRequest): Promise<string> {
+  ask(request: RequestBody): Promise<string> {
     const id = this.#next++;
     return new Promise((resolve, reject) => {
       this.#pending.set(id, { resolve, reject });
@@ -187,12 +187,20 @@ export class WasmGrammar implements Grammar {
 
   /** The SQL a query compiles to on its runtime, and the type of its result (upstream's relationType shape). */
   async plan(model: PureModelContext, lambda: Lambda, runtime: string): Promise<{ sql: string; type: unknown }> {
-    return JSON.parse(unfold(await this.#port.ask({ kind: 'plan', model: model.code, lambda: toJson(lambda), runtime }))) as { sql: string; type: unknown };
+    return JSON.parse(unfold(await this.#port.ask({ kind: 'planModel', model: model.code, lambda: toJson(lambda), runtime }))) as { sql: string; type: unknown };
   }
 
   /** The SQL a query compiles to on its runtime -- legend-lite's plan, shown to a person ("Show SQL"). */
   async sql(model: PureModelContext, lambda: Lambda, runtime: string): Promise<string> {
     return (await this.plan(model, lambda, runtime)).sql;
+  }
+
+  /**
+   * What a session of the database runs before it is queried, so that it answers as the planner's SQL expects -- the
+   * dialect's own setup (Boundary.sessionSetup: a DuckDB session in UTC), as legend-lite's server sets up its own.
+   */
+  async sessionSetup(databaseType: string): Promise<readonly string[]> {
+    return JSON.parse(unfold(await this.#port.ask({ kind: 'sessionSetup', databaseType }))) as string[];
   }
 
   /** Build the planner's boot layer for this model now, before a person waits on it. */

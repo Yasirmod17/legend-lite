@@ -461,6 +461,14 @@ columns with `relationalType`, the activity's `comment`, the "Missing external p
   the planner's to refuse, in the server's words. `WasmGrammar.returnType` and `generatePlan` are the planner's
   pure/v1, as the server routes them, so the tab answers both (Query's SQL button already showed the tab's plan
   through its planner; unchanged).
+- The session the SQL assumes (the Plan Gen and Compiler Rewrite lines' review of bf058c233): `BrowserEngine` runs
+  the dialect's own session setup (`Boundary.sessionSetup`: a DuckDB session in UTC, as the server runs on every session
+  and DataCube's tab on its DuckDB) on an engine in the tab before its first query -- Query sets it up before its demo
+  seed; an engine on a server (the warehouse) runs on that server's sessions. Left alone, DuckDB-WASM takes the
+  browser's zone, and a value of the session's zone (`now()->hour()`) answered otherwise than the server.
+- Python answers legend-engine's JSON execute too (it answered ARROW_IPC only): the same two halves as the tab
+  (`compiler.execute_json_plan`, `execute_json_answer`; its DuckDB runs `run`), so a JSON client -- Query served from
+  Python (E) -- reads the server's answer text.
 - What the tab answers differently now, as the server does (recorded, the audit of 60afa7006): a query that does not
   compile or parse, or names no runtime, is refused 500 with errorType COMPILATION (it was 400 through the planner's
   own plan); and an execute over a column whose relational spelling was never measured against legend-engine (a
@@ -468,11 +476,13 @@ columns with `relationalType`, the activity's `comment`, the "Missing external p
 - Proof: `PureV1ApiTest.e8_jsonPlanThenJsonAnswer_*` -- the plan's `run` SQL on the server's own test database, its one
   value arranged by `jsonAnswer`, is the server's `execute` answer byte for byte (each answer's trace id its own), and a
   graph fetch's plan and answer (one object bare). `//datacube:python_execute_test` (the warehouse lane) -- an execute
-  over Python's frame answered in the tab (the planner in-process, DuckDB-WASM in Node, the same rows) and by Python's
-  engine (ARROW_IPC): the same builder with each column's relationalType, activity SQL and trace comment form,
-  columns and rows' values; a parameter bound alike; the missing parameter refused in the same words; the return type
-  and the execution plan the same. (The frame's columns are strings, integers and floats: the builder's types for
-  enumerations, decimals and dates are the server's by construction, the same `tdsBuilder`, not measured here.)
+  over Python's frame answered in the tab (the planner in-process, DuckDB-WASM in Node, the same rows, its session
+  started in Kathmandu's zone, +05:45, as a browser there would start it) and by Python's engine: the answer's TEXT
+  byte for byte against Python's JSON answer (each trace id its own), its columns a whole Float, a Decimal, a DateTime
+  and `now()->hour()` (the session's zone, UTC's on both; the test fails with the setup left out, measured); the same
+  builder as Python's ARROW_IPC answer; a parameter bound alike; the missing parameter refused in the same words, as
+  Python's JSON refuses it; the return type and the execution plan the same. (The frame's own columns are strings,
+  integers and floats: an enumeration's builder type is the server's by construction, the same `tdsBuilder`.)
   Query's `verify_test` (in the browser: a run, a filter, a parameter, a graph fetch) and Studio's tests pass.
 - Changed from this plan: the differential is the tab against Python, as written; legend-lite's server would run the
   same Java but seeds only a connection's declared test data, not a page's Data, so it cannot hold the same rows (the
@@ -486,6 +496,20 @@ DataCube's ten kinds are the superset, but for Query's `warm` and its unheld `pl
   one.
 - Answered by one worker in the tab and by `legend_lite/_planner.py`.
 - DataCube, Query, Studio and Python use it.
+
+**Built 2026-10-13 (branch `datacube/python-parity`):**
+- The protocol is `engine-client/src/legend/planner-protocol.ts` (moved from DataCube's `planner-protocol.ts`, deleted):
+  fourteen kinds -- DataCube's ten, Query's unheld plan as `planModel` (its old `plan`, which clashed with DataCube's held
+  one), `warm`, and C1's `executePlan` and `executeAnswer` -- with `REQUEST_KINDS`, `Request`, `Response` and
+  `PlannerWorker`. One answer (`planner-answer.ts`: each kind the module's export of the same name) and one worker
+  (`planner-worker.ts`, engine-client's bundle): DataCube's own worker (`datacube/src/planner-worker.ts`) is gone, and
+  DataCube serves engine-client's bundle as its `./planner-worker.js`, as Query and Studio do. DataCube's
+  `LitePlanner`, its headless host and Python's page host, and Query's and Studio's `WasmGrammar` send it.
+- Python answers every kind (`legend_lite/_planner.py` KINDS, the start-up check `_headless.check_interface` holding
+  the two lists alike): the native library gains `lite_execute_json_plan`, `lite_execute_json_answer` and
+  `lite_warm_model`, each delegating to the Boundary function the tab's export delegates to.
+- Proof: every app's suites on the one worker (DataCube's, Query's and Studio's browser tests included), the headless
+  lane (its start-up check), `python_execute_test`.
 
 #### C3. Warehouse tables on Python's pages
 

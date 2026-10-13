@@ -2,10 +2,11 @@
 // legend-lite's planner (WebAssembly) reading, binding and planning it with the Java the server and Python answer it
 // with (PureV1Api.jsonPlan), DuckDB-WASM writing its rows as the server's database writes them (the JSON wire), and
 // the server's own writers arranging them (PureV1Api.jsonAnswer; engine-client's BrowserEngine) -- against the same
-// execute answered by Python's engine (ARROW_IPC, its plan PureV1Api.arrowPlan), over the same frame: the builder (each
-// column's relationalType), the activity's SQL and its trace comment, the columns, the rows' values, and a parameter
-// given no value refused in the same words. (That the tab's answer TEXT is the server's is PureV1ApiTest's: the same
-// writers over the same database's wire.)
+// execute answered by Python's engine over the same frame, its DuckDB writing the rows and the same writers arranging
+// them: the answer's TEXT, byte for byte (each trace id its own), a whole Float, a Decimal, a DateTime and a value of
+// the session's zone (`now()->hour()`) among its columns. The tab's DuckDB starts in a zone that is not UTC (as a
+// browser in Kathmandu would: +05:45), so a tab that did not set its session up as the server does answers otherwise.
+// Python's ARROW_IPC answer (its plan PureV1Api.arrowPlan) carries the same builder.
 
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -20,10 +21,11 @@ import { DuckDbEngine } from '../../../engine-client/src/duckdb.ts';
 import { arrowResultTable } from '../../../engine-client/src/engine-remote.ts';
 import { BrowserEngine } from '../../../engine-client/src/legend/browser-engine.ts';
 import { EngineError } from '../../../engine-client/src/legend/engine.ts';
-import { answer, type PlannerModule, type PlannerRequest } from '../../../engine-client/src/legend/planner-answer.ts';
+import { answer, type PlannerModule } from '../../../engine-client/src/legend/planner-answer.ts';
+import type { RequestBody } from '../../../engine-client/src/legend/planner-protocol.ts';
 import { WasmGrammar } from '../../../engine-client/src/legend/wasm-grammar.ts';
 import type { ExecuteInput, TdsResult } from '../../../engine-client/src/legend/wire.ts';
-import type { Lambda } from '../../../pure-protocol/src/index.ts';
+import { toJson, type Lambda } from '../../../pure-protocol/src/index.ts';
 import { arrowIpcStream } from '../../../engine-client/src/pure-v1.ts';
 import { runfileDirUrl, runfileFromEnv } from '../../../tools/js/runfiles.mts';
 import { openDatabase } from '../host/node.ts';
@@ -63,7 +65,7 @@ async function loadPlanner(): Promise<WasmGrammar> {
       i.teavmConsole = { putcharStdout() {}, putcharStderr() {} };
     },
   });
-  return new WasmGrammar({ async ask(r: PlannerRequest): Promise<string> { return answer(m, r); } });
+  return new WasmGrammar({ async ask(r: RequestBody): Promise<string> { return answer(m, r); } });
 }
 
 /** The frame's table as the model declares it: its name (schema-qualified as declared) and its columns' SQL types. */
@@ -111,6 +113,8 @@ before(async () => {
   if (t.name.includes('.')) await duck.run(`CREATE SCHEMA IF NOT EXISTS ${t.name.split('.')[0]}`, 0);
   await duck.run(`CREATE TABLE ${t.name} (${t.columns.map(([n, ty]) => `"${n}" ${ty}`).join(', ')})`, 0);
   await duck.run(`INSERT INTO ${t.name} VALUES ${served.rows.map((r) => `(${r.map(sqlValue).join(', ')})`).join(', ')}`, 0);
+  // the zone a browser in Kathmandu gives DuckDB-WASM: the engine must set its session up as the server's (UTC)
+  await duck.run("SET TimeZone = 'Asia/Kathmandu'", 0);
   tab = new BrowserEngine(grammar, duck, 'this browser');
 });
 
@@ -146,11 +150,42 @@ async function onPython(asked: ExecuteInput): Promise<{ builder: unknown; activi
 /** The trace comment's form: `-- "executionTraceID" : "<uuid>"`, each answer's own id. */
 const TRACE = /^-- "executionTraceID" : "[0-9a-f-]{36}"$/;
 
+/** Python's engine's answer to `asked` in legend-engine's JSON, as its text; a refusal its status and text. */
+async function onPythonText(asked: ExecuteInput): Promise<{ status: number; text: string }> {
+  const r = await fetch(`${served.url}/api/pure/v1/execution/execute`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: served.authorization },
+    body: toJson({ clientVersion: 'vX_X_X', context: { _type: 'BaseExecutionContext' }, ...asked }),
+  });
+  return { status: r.status, text: await r.text() };
+}
+
+/** An answer's text with each trace id masked: the one part each answer writes afresh. */
+const traced = (text: string): string => text.replace(/executionTraceID\\" : \\"[0-9a-f-]{36}/g, 'executionTraceID');
+
 describe("the tab's execute answers as Python's, the same Java planning both", () => {
+  it("a relation's answer text, byte for byte: a whole Float, a Decimal, a DateTime and the session's zone", async () => {
+    const asked = await input("->select(~[region, desk, notional])->filter(x|$x.desk == 'FX')->sort([~region->ascending(), ~notional->ascending()])"
+      + '->extend(~[at: x|%2024-03-10T08:00:00+0500, amount: x|5.00D, whole: x|3.0, hour: x|now()->hour()])');
+    // the hour is the clock's: asked again if the two answers straddle an hour
+    for (let attempt = 0; ; attempt++) {
+      const mine = await tab.executeText(asked);
+      const theirs = await onPythonText(asked);
+      assert.equal(theirs.status, 200, theirs.text);
+      if (attempt === 0 && traced(mine) !== traced(theirs.text) && new Date().getUTCMinutes() === 0) continue;
+      assert.equal(traced(mine), traced(theirs.text));
+      // and it is the session's zone that says the hour: UTC's, not Kathmandu's
+      const hours = (JSON.parse(mine) as TdsResult).result.rows.map((row) => row.values[row.values.length - 1]);
+      assert.ok(hours.every((h) => h === new Date().getUTCHours() || h === (new Date().getUTCHours() + 23) % 24), JSON.stringify(hours));
+      break;
+    }
+  });
+
   it('a relation: the same builder (each column relationalType), activity SQL, columns and rows', async () => {
     const asked = await input("->select(~[region, desk, notional, qty])->filter(x|$x.desk == 'Rates')->sort(~notional->descending())");
     const mine = await tab.execute(asked) as TdsResult;
     const theirs = await onPython(asked);
+    // Python's Arrow answer carries the JSON answer's builder
     assert.deepEqual(mine.builder, theirs.builder);
     assert.ok(mine.builder.columns.every((c) => typeof c.relationalType === 'string'), JSON.stringify(mine.builder));
     assert.equal(mine.activities?.length, 1);
@@ -168,10 +203,10 @@ describe("the tab's execute answers as Python's, the same Java planning both", (
     // sorted to one order: two rows share a book, so the quantity breaks the tie (DuckDB promises no order for ties)
     const asked = await input('->filter(x|$x.qty > $minQty)->select(~[book, qty])->sort([~book->ascending(), ~qty->ascending()])', 'minQty: Integer[1]',
       [{ name: 'minQty', value: { _type: 'integer', value: 6 } } as unknown as NonNullable<ExecuteInput['parameterValues']>[number]]);
-    const mine = await tab.execute(asked) as TdsResult;
-    const theirs = await onPython(asked);
-    assert.deepEqual(mine.result.rows.map((r) => r.values), theirs.rows);
-    assert.deepEqual(mine.result.rows.map((r) => r.values[0]), ['B1', 'B1', 'B2', 'B4']);
+    const mine = await tab.executeText(asked);
+    const theirs = await onPythonText(asked);
+    assert.equal(traced(mine), traced(theirs.text));
+    assert.deepEqual((JSON.parse(mine) as TdsResult).result.rows.map((r) => r.values[0]), ['B1', 'B1', 'B2', 'B4']);
   });
 
   it("a lambda's return type and an execution plan: the tab's pure/v1 answers as Python's", async () => {
@@ -205,6 +240,9 @@ describe("the tab's execute answers as Python's, the same Java planning both", (
     };
     const mine = await refusal(tab.execute(asked));
     assert.equal(mine, await refusal(onPython(asked)));
+    const theirs = await onPythonText(asked);
+    assert.equal(theirs.status, 500);
+    assert.equal((JSON.parse(theirs.text) as { message: string }).message, mine);
     assert.match(mine, /Missing external parameter\(s\): minQty:Integer\[1\]/);
   });
 });

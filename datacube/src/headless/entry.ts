@@ -5,7 +5,7 @@
 import './install-web.ts';
 import './install-url.ts';
 
-import { REQUEST_KINDS, type PlannerWorker } from '../planner-protocol.ts';
+import { REQUEST_KINDS, type PlannerWorker } from '../../../engine-client/src/legend/planner-protocol.ts';
 import { hostCalls, hostDatabase, hostWorker, type HostDatabase } from './host.ts';
 import { gridClass, gridExport, gridRelation, gridView } from './grid.ts';
 import { forget, ingest, mount, remoteAccess } from './data-in.ts';

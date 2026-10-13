@@ -302,6 +302,15 @@ class Planner(Protocol):
         or a refusal to send as it is."""
         ...
 
+    def execute_json_plan(self, body: str, models: list[str]) -> compiler.Answer:
+        """The same, for legend-engine's JSON answer: ``{"sql", "run", ...}`` (``compiler.execute_json_plan``), or a
+        refusal to send as it is."""
+        ...
+
+    def execute_json_answer(self, plan: str, wire: str) -> compiler.Answer:
+        """That plan's answer from the one value the database wrote running its ``run`` SQL."""
+        ...
+
     def refusal(self, message: str) -> compiler.Answer:
         """A failure said in this planner's own answer shape (legend-engine's)."""
         ...
@@ -318,6 +327,12 @@ class NativePlanner:
 
     def execute_plan(self, body: str, models: list[str]) -> compiler.Answer:
         return compiler.execute_plan(body, models)
+
+    def execute_json_plan(self, body: str, models: list[str]) -> compiler.Answer:
+        return compiler.execute_json_plan(body, models)
+
+    def execute_json_answer(self, plan: str, wire: str) -> compiler.Answer:
+        return compiler.execute_json_answer(plan, wire)
 
     def refusal(self, message: str) -> compiler.Answer:
         return compiler.refusal(message)
@@ -733,8 +748,8 @@ class Engine:
     def _api(self, path: str, query: str, body: str) -> Answer:
         """An API call's answer, computed on the compiler's pool."""
         try:
-            if path == _EXECUTE and _arrow_requested(query):
-                return self._execute(body)
+            if path == _EXECUTE:
+                return self._execute(body) if _arrow_requested(query) else self._execute_json(body)
             answer = self.planner.answer(path, query, body)
         except Exception as failure:
             # never a dropped call: the database refusing is an answer; anything else is a bug, logged whole, and
@@ -840,6 +855,21 @@ class Engine:
         # upstream's headers for this answer (measured, legend-engine 4.145.0)
         return Answer(200, 'application/json', _arrow_ipc(rows, planned['metadata']),
                       {'x-legend-response-format': 'FormatNotSet'})
+
+    def _execute_json(self, body: str) -> Answer:
+        """execute in legend-engine's JSON (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C1): the compiler plans over the
+        frames' models, DuckDB writes the whole result as one value (the JSON wire, as legend-lite's server's database
+        writes it), and the compiler arranges it with the server's own writers -- the server's answer text, as the tab's
+        is. One query at a time (the frames are held still while it runs)."""
+        with self.frames.serving() as models:
+            self._noted(models)
+            planned = self.planner.execute_json_plan(body, list(models.values()))
+            if planned.status != 200:
+                return Answer(planned.status, planned.content_type, planned.body.encode('utf-8'))
+            row = self.frames.connection.execute(json.loads(planned.body)['run']).fetchone()
+        wire = row[0] if row is not None and row[0] is not None else ''
+        answer = self.planner.execute_json_answer(planned.body, wire)
+        return Answer(answer.status, answer.content_type, answer.body.encode('utf-8'))
 
     def _cube(self, query: str) -> Answer:
         """The cube a page shows (DataCube's demo/engine.html, or a notebook's widget): ``table`` (a frame's name), its

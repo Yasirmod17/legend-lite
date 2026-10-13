@@ -234,6 +234,20 @@ def execute_plan(body: str, models: list[str]) -> Answer:
     return _http(library().call('lite_execute_plan', body, _json.dumps(models)))
 
 
+def execute_json_plan(body: str, models: list[str]) -> Answer:
+    """The plan half of execute in legend-engine's JSON, for a host that runs the SQL on its own database (the tab's, and
+    Python's: docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C1): an answer whose body is ``{"sql", "run", "builder", ...}`` --
+    ``run`` the SQL whose one value is the whole result as the database writes it (a relation's JSON wire); any other
+    answer is a refusal, to be sent as it is."""
+    return _http(library().call('lite_execute_json_plan', body, _json.dumps(models)))
+
+
+def execute_json_answer(plan: str, wire: str) -> Answer:
+    """Execute's answer in legend-engine's JSON: ``plan`` the plan half's body, ``wire`` the one value the database wrote
+    running its ``run`` SQL, arranged by legend-lite's server's own writers -- the server's answer text."""
+    return _http(library().call('lite_execute_json_answer', plan, wire))
+
+
 def refusal(message: str) -> Answer:
     """A database's refusal, as legend-lite's server answers one (``500``, legend-engine's error shape)."""
     return _http(library().call('lite_pure_v1_refusal', message))

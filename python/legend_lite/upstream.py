@@ -169,6 +169,14 @@ class RemotePlanner:
         return self.refusal(f'execute is not planned on {self.server} from Python yet: a grid is planned and run '
                             'through plan-and-run')
 
+    def execute_json_plan(self, body: str, models: list[str]) -> compiler.Answer:
+        """As ``execute_plan``: legend-engine's execute is not answered through a server's plan on Python yet."""
+        return self.execute_plan(body, models)
+
+    def execute_json_answer(self, plan: str, wire: str) -> compiler.Answer:
+        """Never asked (``execute_json_plan`` refuses first); refused in the same words if it is."""
+        return self.execute_plan(plan, [])
+
     def refusal(self, message: str) -> compiler.Answer:
         return compiler.refusal(message)
 

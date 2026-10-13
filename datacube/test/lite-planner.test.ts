@@ -7,7 +7,7 @@ import {
   PlannerUnavailableError,
   LitePlanner,
 } from '../src/lite-planner.ts';
-import type { PlannerWorker } from '../src/planner-protocol.ts';
+import type { PlannerWorker } from '../../engine-client/src/legend/planner-protocol.ts';
 
 /** A module's OK answer: the SQL and its result type (here, typing nothing). */
 function ok(sql: string): string {

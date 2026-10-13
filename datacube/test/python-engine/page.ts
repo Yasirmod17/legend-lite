@@ -12,8 +12,9 @@
 // source, as the frame's model writes it), the one change made to it.
 //
 // Also: upstream's own Arrow answer (legend-engine 4.145.0's, recorded) read by the same reader; the compiler's other
-// answers (a query's types, parse, print) the same on both sides; an engine read as JSON, and a call without the
-// token, refused by name.
+// answers (a query's types, parse, print) the same on both sides; an engine read as JSON answering the rows it answers
+// in Arrow (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C1: Python answers legend-engine's JSON too), and a call without the
+// token refused by name.
 //
 // And A PAGE FROM PYTHON'S ENGINE (docs/DATACUBE_PYTHON_PAGES_DESIGN_2026_10_09.md, step 1): `__pythonPageDocument`
 // writes a page of two frames on two sheets with DataCube's own writers, for the harness to have Python serve it and a
@@ -322,11 +323,15 @@ async function run(): Promise<void> {
     equal(activities.length, 1, 'its activities:');
   });
 
-  await check('an engine read as JSON, a JSON answer to an Arrow request, and a call without the token, are refused by name', async () => {
+  await check('an engine read as JSON answers the rows it answers in Arrow; a JSON answer to an Arrow request, and a call without the token, are refused by name', async () => {
     const asJson = new RemoteRun(new LegendEngineExecutor({ ...engine, authorization: served.authorization }));
+    const asArrow = new RemoteRun(new LegendEngineExecutor({ ...engine, serializationFormat: 'ARROW_IPC', authorization: served.authorization }));
     const first = { name: CASES[0]!.name, snapshot: onTheFrame(CASES[0]!.snapshot, served.source) };
     const q = onTheFrame(queries()[0]!.query, served.source);
-    await rejects(asJson.run(q, first.snapshot), /ARROW_IPC/);
+    const viaJson = await asJson.run(q, first.snapshot);
+    const viaArrow = await asArrow.run(q, first.snapshot);
+    deepEqual(viaJson.rows.columns.map((c) => [c.name, c.type, c.values]), viaArrow.rows.columns.map((c) => [c.name, c.type, c.values]),
+      'the rows, as JSON and as Arrow:');
     const without = new RemoteRun(new LegendEngineExecutor({ ...engine, serializationFormat: 'ARROW_IPC' }));
     await rejects(without.run(q, first.snapshot), /token/);
     // a server declared ARROW_IPC that does not serve it answers its JSON, 200: refused, never read as rows
