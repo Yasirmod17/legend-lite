@@ -8739,6 +8739,33 @@ compiled in lite and failed in the engine.
    "Can't find the packageable element '<descriptor>'" at the class mapping (its id conversion fails and the raw text is
    looked up): a deliberate difference, so an engine-fixture comparison of this case sees two messages.
 
+## 2026-10-12 — DataCube one app, steps 1 and 2 and PlanAndRun: the tab, then Python's pages, one app and one path on both hosts (the DataCube + Python line)
+
+The design is `docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md` (agreed 2026-10-11; §15 PlanAndRun agreed 2026-10-12). PR
+#31, merged as 36b72ee13. CI: run 38323008283 on f735d1857, every job green on every platform (52 checks), the branch up
+to date with main acd7a1df6; main's own run 38327366349 (dispatched: the push run was skipped by the merged commits'
+`[skip ci]`) green. `//gates:local //datacube/... //python/... //parser-equivalence/...` green on the rebased head before
+the push (361 pass, 2 of main's guards skipped on macOS).
+
+1. **What it is.**
+   - One DataCube app (`datacube/src/app/`) over services; the tab, Python's tab and widget, and Python headless each give
+     a set of them. `demo/boot.ts` is the tab's host; `demo/page.ts`, `engine-page.ts` and `engine-cube.ts` are gone.
+   - On Python's pages: a page's files and examples (sent a part at a time, any size), remote files (DuckDB's httpfs,
+     pinned and carried in the wheel), Save and Open… (records in `ll.home()`), every feature by giving services.
+   - PlanAndRun: every grid on either host is plan + run + read. On Python, one call (`plan-and-run.json`) plans
+     against the model Python holds, runs only that SQL on its DuckDB, and the page reads the rows with the tab's reader.
+     Python's own results (`table.execute`, `grid.to_pandas()`) are typed by the plan.
+   - The tab's DuckDB is set up from the compiler's session setup (`Boundary.sessionSetup`: UTC), as Python's is.
+2. **What proves it.**
+   - `//datacube:python_engine_test` (35 checks, its browser in America/New_York): every cube case answers the same
+     through PlanAndRun on Python and in the tab, SQL included; seven reader files read alike on both hosts; `now()`
+     alike; Python's tab and widget; files, examples, remote files and saved pages on Python's page.
+   - `//python:engine_test`, `:frames_test`, `:headless_test`, `:wheel_test`; `//datacube:upload_test`, `:duckdb_test`.
+3. **Known, and where it goes** (§15.7): two DuckDB patch versions (1.5.4 in the tab, 1.5.5 in Python); Python's
+   results come back whole (streaming a follow-up); a query's own `sourceUrl('file:...')` accepted on Python (the user,
+   §15.4); a Variant stored as a STRUCT under `SELECT *` comes back raw until the Compiler Rewrite line's egress fix
+   lands (core/variant-star-egress).
+
 ## 2026-10-11 — DataCube headless in Python: DataCube's own code in V8, planned by the native library, run on Python's DuckDB, no WebAssembly (the DataCube + Python line)
 
 The design is `docs/DATACUBE_HEADLESS_PYTHON_DESIGN_2026_10_11.md`. The user agreed it and ruled §10: one package, V8,

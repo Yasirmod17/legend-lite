@@ -150,9 +150,12 @@ with the compiler's plan/execution split**, in this order:
    over `Boundary`'s existing functions, reviewed by the Plan Gen / Exec Split line; the build by the Compiler Rewrite
    line. **Now (2026-10-11): DataCube as one app for every host** (`docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md`,
    agreed with the user: one app in `datacube/src/app/` over services -- the browser tab, Python's tab and widget, and
-   Python headless each a set of services; Python's model home an SDLC, the browser's in Python's terms). Its steps 1-4
-   touch `datacube/`, `python/` and `native/` only; step 5 (Studio and Query started from Python) is built with the
-   Studio line. Python's `create_class`, `create_association` and `create_data_space` wait for its step 3 (parked on
+   Python headless each a set of services; Python's model home an SDLC, the browser's in Python's terms). **Steps 1 and
+   2, and PlanAndRun (the design's §15), landed 2026-10-12 (36b72ee13, PR #31; its run 38323008283 green on all 52
+   checks, main's own 38327366349 green; GATES "DataCube one app, steps 1 and 2 and PlanAndRun").** Step 3 (Python's
+   model home: the SDLC and Depot from the same Java in the native library) touches `sdlc-server/`'s BUILD (the Studio
+   line's, reviewed by it) as well as `datacube/`, `python/` and `native/`, and is announced here before it is built;
+   step 5 (Studio and Query started from Python) is built with the Studio line. Python's `create_class`, `create_association` and `create_data_space` wait for its step 3 (parked on
    branch `datacube/python-model-parked`). **Step 2's second landing announced 2026-10-11 (rule 5; branch `datacube-m3`; the design's §15.6a,
    agreed with the user): a cross-area edit in `core/`** -- the route renamed and two more beside it,
    `/api/lite/v1/model/createClass` (was `/api/lite/v1/relational/promoteRelationToModel`), `createAssociation`,
@@ -812,6 +815,26 @@ basics could land with it.
 - **The independent review** of the basics found eight wrong answers, each fixed and pinned before the merge (f81c6e7;
   the study's §9.3), and three recorded.
 - **Next on the line:** regular expressions (`~`, `regexp_*`), then the HTTP route and the wire.
+
+**Announced 2026-10-13 -- the long tail: text, numbers, date spellings, aggregate and window permutations** (the user,
+after the basics landed: the functions first, "all the long tail ... including the date/time bucket", "all the
+string/math functions", and every permutation of window and aggregate functions; regular expressions last, if ever).
+Branch `claude/loving-euler-gjta59`, three commits over main acd7a1d (733fa90, d19b606, and one to come); the study's
+§9.4. It lands as a pull request, merged after its full CI run.
+- **The SQL front end:** `protocol/sql/SqlToPure.java` -- text (`concat_ws`, `format`, `overlay`, `quote_literal`,
+  `quote_nullable`, `translate`, `split_part`, the trims naming `' '`), numbers (`div`, `mod` and `%` of numerics,
+  `log(b, x)`, `log10`, `cot`, `width_bucket`, a numeric `power` and `^`), `extract`'s `dow`, `week`, `decade`,
+  `century`, `millennium` and a date's `epoch`, `isfinite`, the `regr_*` aggregates, ORDER BY inside aggregates,
+  FILTER on window aggregates, frame `EXCLUDE`; new `protocol/sql/PostgresDateTime.java` (Postgres's date and timestamp
+  spellings, datetime.c's ParseDateTime and DecodeDateTime ported).
+- **One cross-area edit, a guard file:** `CodeShapeGuardrailTest` -- eleven fields of `PostgresDateTime`'s decoder
+  (datetime.c's struct pg_tm and its field mask, scoped to one constant's read, the parser-cursor lifecycle)
+  allowlisted, dated.
+- **Tests:** `SqlToPureTest`, new `PostgresDateTimeTest`; `sql-parity/` the ledger, the answers, `lite/text.yaml`,
+  `lite/math.yaml` and `lite/aggregates.yaml` (new), `lite/dates.yaml`, `lite/windows.yaml`.
+- **Docs:** the study's §9.4, `docs/GATES.md`.
+
+Not touched: `sql/dialect/`, `lowering/`, the Pure parser.
 
 ## An eighth line, 2026-10-11: Databricks, Snowflake and BigQuery (the user's ask, rule 5)
 
