@@ -35,7 +35,12 @@ its way to main (listed in the evidence folder's README).**
   (`~/.legendlite/cloud-pct.properties`, outside the repo). Never print its values.
 - **Disk.** A full run of every lane at once filled the allowance (the embedded servers' data, the test logs, and the
   disk cache copying both). So run in batches of about 20 targets with `--disk_cache= --local_test_jobs=2`. Keep each
-  `test.log`'s summary, then delete `bazel-testlogs/pct` between batches.
+  `test.log`'s summary, then delete `bazel-testlogs/pct` between batches, and the batch's runfiles trees too
+  (`bazel-bin/pct/*.runfiles*`, about 130 MB a target, rebuilt on demand): 30 cloud targets after a local batch's
+  leftovers filled the disk again (2026-10-13).
+- **Memory.** ClickHouse and Trino in one batch at `--local_test_jobs=2` were killed by the container's memory limit
+  (two embedded servers plus two test JVMs; 2026-10-13). Run them in separate batches, or Trino at
+  `--local_test_jobs=1`.
 - **Times** (both channels, five suites): DuckDB, SQLite, H2, MariaDB and MySQL about 10 minutes a batch; ClickHouse
   and Trino about 25 (Trino's channel B Essential alone about 4); Postgres about 6; the three clouds the longest.
 - **One failing test.** Channel B takes `-Dlegend.diagnostics=dump-sql,chb-only=<test-name-substring>` and prints
@@ -43,6 +48,33 @@ its way to main (listed in the evidence folder's README).**
   `core/src/test/java/com/legend/sql/dialect/` can print `Compiler.query(ctx, q).lower(runtime, false).plan()` and
   `.plan(runtime).sql()`. Use the dialect's `renderPasses()` to see what each pass does to a node's type. Delete the
   test afterwards.
+
+**Measure in parallel: three containers, not one** (the user, 2026-10-13). Every phase re-measures all eleven
+databases on both channels: about 3 hours in one container, in small batches because of the memory and disk limits
+above. Spread it over sibling cloud sessions instead, started once at Phase 0 and reused for every phase:
+
+| container | databases | why |
+|---|---|---|
+| this session | DuckDB, SQLite, H2, MariaDB, MySQL | the light lanes, and the local gate |
+| sibling 1 | Postgres, ClickHouse, Trino | the heavy embedded servers (ClickHouse and Trino together hit the memory limit) |
+| sibling 2 | Snowflake, Databricks, BigQuery | the clouds, mostly waiting on the network |
+
+- **Starting one.** `create_session` (the claude-code-remote tools) with no `environment_id`: the sibling gets this
+  environment, so the same network policy and the `DB_AWS_*` variables the cloud credentials are read from. Give it
+  `source_url` and the branch as `source_revision`. Each sibling is a full session with its own tokens and compute,
+  and the clouds bill for their queries: start them only for a program that re-measures every phase, as this one does.
+- **Its first job is the setup**, once: `docs/CLOUD_BACKENDS_PCT_2026_10_11.md` §6 (bazelisk, the bats and
+  reference-checkout overrides, the proxy flags in `~/.bazelrc`), the Postgres recipe above for sibling 1, the
+  credentials file for sibling 2 (§4 there; never print a value), and a first build. Expect about half an hour before
+  its first test; it stays warm for later phases until it is idle long enough to be reclaimed.
+- **Each phase:** commit and push the phase's head; send each sibling the commit to fetch and its list of targets;
+  each runs its lanes in the batches above and replies with every target's status and its channel B `measured:`
+  lines. A sibling may not push to the branch, so its results come back as text: its reply (`send_message`), or its
+  transcript (`get_session`, `list_events`) if no reply arrives.
+- **One database, one container.** A cloud lane's fixtures live in the warehouse, so two containers running the same
+  cloud database at once can collide; never assign a database to two containers.
+- **The SQL diff runs in the same split:** each container dumps and diffs its own databases' SQL, before and after the
+  move.
 
 **Guards that a move trips** (each moves only with a dated reason, AGENTS.md):
 - `CodeShapeGuardrailTest`: a method may have at most 250 lines; there may be at most 7 raw `new SqlExpr.Column(`
