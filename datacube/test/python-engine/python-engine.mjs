@@ -111,7 +111,8 @@ try {
   // for the SDLC's own "not there yet": the page asks for its workspace before it makes one, and the SDLC answers a
   // workspace not yet made 404, as legend-sdlc does (the in-page SDLC answers the same, inside the tab)
   cube.on('response', (r) => {
-    const notYet = r.status() === 404 && r.request().method() === 'GET' && new URL(r.url()).pathname.startsWith('/sdlc/api/');
+    const notYet = r.status() === 404 && r.request().method() === 'GET'
+      && /^\/sdlc\/api\/projects\/[^/]+\/workspaces\/[^/]+$/.test(new URL(r.url()).pathname);
     if (r.status() >= 400 && !notYet) {
       failed = true;
       // with the engine's reason, as the page was told it

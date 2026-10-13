@@ -259,6 +259,48 @@ class TypedByPlan(unittest.TestCase):
         self.assertTrue(pd.isna(out['i'][1]) and pd.isna(out['b'][1]))
 
 
+class ModelFor(unittest.TestCase):
+    """The model a page's query may be planned over (Frames.model_for; docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B3, the
+    user's option (c)): one Python holds for what it serves, or a page's own whose every table Python serves."""
+
+    def setUp(self):
+        self.frames = ll.Frames()
+        self.table = self.frames.register('trades', trades())
+
+    def project(self, n=0):
+        """A page's own model over the frame's table, its Database under a package of its own."""
+        return self.table.model.replace('trades::DB', f'proj{n}::store::DB')
+
+    def test_a_frames_own_and_a_page_model_over_it_are_planned(self):
+        self.assertIs(self.frames.model_for(self.table.model), self.table.held)
+        held = self.frames.model_for(self.project())
+        self.assertIsNotNone(held)
+        self.assertIs(self.frames.model_for(self.project()), held, 'held while recent, the one model')
+        self.assertIn('FROM trades', held.plan(ll.parse('|#>{proj0::store::DB.trades}#->select(~[desk])'), self.table.runtime).sql)
+
+    def test_a_table_in_another_schema_or_a_model_that_does_not_compile_is_refused(self):
+        # the frame's table by name, but in a schema of another name: not the table Python serves
+        other = '###Relational\nDatabase proj::DB\n(\n  Schema other\n  (\n    Table trades\n    (\n      id BIGINT\n    )\n  )\n)\n'
+        # each reads as a model (so the refusal is the rule's, never a parse's)
+        schemas = [sch['name'] for e in ll.model_elements(other) if e.get('_type') == 'relational' for sch in e['schemas']]
+        self.assertEqual(schemas, ['other'])
+        self.assertIsNone(self.frames.model_for(other))
+        broken = self.project() + '\n###Pure\nClass proj0::A\n{\n  x: proj0::Nope[1];\n}\n'
+        self.assertTrue(ll.model_elements(broken))
+        self.assertIsNone(self.frames.model_for(broken))
+
+    def test_only_the_most_recent_are_held_each_let_go_of_as_it_is_evicted(self):
+        first = self.frames.model_for(self.project(0))
+        for n in range(1, 9):
+            self.frames.model_for(self.project(n))
+        self.assertEqual(len(self.frames._admitted), 8)
+        self.assertNotIn(self.project(0), self.frames._admitted)
+        with self.assertRaises(ValueError):
+            first.handle  # let go of (closed)
+        # asked again, held again
+        self.assertIsNotNone(self.frames.model_for(self.project(0)))
+
+
 class Refusals(unittest.TestCase):
     def test_a_name_is_a_plain_identifier(self):
         with self.assertRaises(ValueError):

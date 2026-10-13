@@ -280,16 +280,18 @@ export async function askedSettings(link: PythonLink): Promise<Record<string, un
 
 /**
  * The browser's own things, its settings kept by Python: read from what Python said as the page started, written to it
- * whole as they change. A write Python refuses leaves them for this visit, as a browser that refuses its storage does.
+ * whole as they change, each write after the one before (two at once could land in either order, the older kept). A
+ * write Python refuses leaves them for this visit, as a browser that refuses its storage does.
  */
 function pythonBrowser(link: PythonLink, browser: BrowserService, kept: Record<string, unknown> | undefined): BrowserService {
   let settings = kept;
+  let written: Promise<unknown> = Promise.resolve();
   return {
     ...browser,
     readSettings: () => settings,
     writeSettings: (values) => {
       settings = values;
-      void posted(link, 'settings.json', values).catch(() => undefined);
+      written = written.then(() => posted(link, 'settings.json', values)).catch(() => undefined);
     },
   };
 }

@@ -365,7 +365,11 @@ class Frames:
                     tables |= {str(t.get('name', '')).lower() for t in schema.get('tables', [])}
             if not tables <= served:
                 return None
-            held = compiler.HeldModel(model)
+            try:
+                held = compiler.HeldModel(model)
+            except compiler.LegendError:
+                # it reads as a model, but does not compile: no model to plan over
+                return None
             self._admitted[model] = (held, frozenset(tables))
             while len(self._admitted) > _ADMITTED:
                 self._admitted.pop(next(iter(self._admitted)))[0].close()

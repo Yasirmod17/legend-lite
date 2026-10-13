@@ -328,7 +328,9 @@ class Engine:
         a file of the site. It waits for its answer, which the compiler's threads compute when it needs the compiler,
         so it is called from a thread of the caller's own (a connection's, a message's), never a compiler thread."""
         if _model_home(path):
-            return _workers().submit(self._model_home, method, path, query, body or '').result()
+            # on the caller's thread: it waits for the repository's lock (another process's call) holding no compiler
+            # thread, and only the library's call goes to one
+            return self._model_home(method, path, query, body or '')
         if method == 'POST':
             if path == '/page.json':
                 return self._page_said(query, body or '')
@@ -363,7 +365,11 @@ class Engine:
         if path == _SERVICES:
             return Answer(200, 'application/json', json.dumps(self.services()).encode('utf-8'))
         if path == _SETTINGS:
-            return Answer(200, 'application/json', json.dumps(Settings().read()).encode('utf-8'))
+            try:
+                kept = Settings().read()
+            except OSError as failure:
+                return _said(500, f'the settings could not be read: {type(failure).__name__}: {failure}')
+            return Answer(200, 'application/json', json.dumps(kept).encode('utf-8'))
         return self._file(path)
 
     def services(self) -> dict[str, Any]:
@@ -399,7 +405,8 @@ class Engine:
         folder = self.model_home_folder()
         try:
             with locked(folder):
-                said = library().call('lite_sdlc_handle' if sdlc else 'lite_depot_handle', str(folder), method, target, body)
+                said = _workers().submit(library().call, 'lite_sdlc_handle' if sdlc else 'lite_depot_handle', str(folder),
+                                         method, target, body).result()
         except Exception as failure:
             traceback.print_exc()
             return _said(500, f'{type(failure).__name__}: {failure}')
@@ -421,7 +428,10 @@ class Engine:
             return _said(400, "DataCube's settings are one JSON object")
         if not isinstance(values, dict):
             return _said(400, "DataCube's settings are one JSON object")
-        Settings().write(values)
+        try:
+            Settings().write(values)
+        except OSError as failure:
+            return _said(500, f'the settings could not be kept: {type(failure).__name__}: {failure}')
         return Answer(204, 'text/plain; charset=utf-8', b'')
 
     def _saved(self, body: str) -> Answer:
@@ -1090,7 +1100,12 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         except OSError:
             return
         self.server.answering(self.connection)
-        self._send(self.server.web.engine.answer('DELETE', url.path, url.query, raw.decode('utf-8', errors='replace')))
+        try:
+            body = raw.decode('utf-8')
+        except UnicodeDecodeError:
+            self._send(_said(400, 'a request body is UTF-8'))
+            return
+        self._send(self.server.web.engine.answer('DELETE', url.path, url.query, body))
 
     def do_OPTIONS(self) -> None:  # noqa: N802
         # no cross-origin request is answered: only the engine's own page calls it

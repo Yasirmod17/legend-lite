@@ -72,6 +72,9 @@ built here and reviewed by that line (Compiler Rewrite for Bazel, Plan Gen for t
    today need the tab's own planner (`services.engine.local`), skip a grid whose rows come from a runner (every Python
    grid since PlanAndRun) and name the place `Browser` in the code. Instead: a model writer and sample rows through
    PlanAndRun from every host, the place named by the host. Then sweep the app for every other host-only check.
+   - **Built 2026-10-12.** `ModelWriting` (services.ts) given by both hosts; a grid's rows read through its PlanAndRun
+     (`rowsOf`). The sweep found the tab-only `local` engine behind three things on Python's pages, each a program step:
+     the model actions (here), saved queries (B5), a warehouse (C3).
 2. **The page's settings kept by Python, not by its address.** The app already reads and writes its settings through
    the browser service (`readSettings`, `writeSettings`); on Python they are Python's (`settings.json`, in
    `ll.home()/settings`, under the folder's lock), so every notebook and run of the user's shows them. Chosen over a
@@ -79,7 +82,7 @@ built here and reviewed by that line (Compiler Rewrite for Bazel, Plan Gen for t
    remembers waits for C3, where Python's pages get a warehouse).
 3. **The SDLC and the Depot in Python's native library,** the same Java over `GitStorage` in this user's folder
    (`ll.home()/projects`), a lock held across Python processes around each call. Python serves `/sdlc/api` and
-   `/depot/api`, headless calls them in-process. The SDLC's conformance suite (`sdlc-client/test/conformance.ts`)
+   `/depot/api`; headless calls them in-process (owed: with B4, Python's own model calls). The SDLC's conformance suite (`sdlc-client/test/conformance.ts`)
    runs against the server, the browser's module and Python. Python's pages get Create a Class… and the rest.
    - Build: `GitStorage` its own target, `sdlc-server`'s rules visible to `//native` (the Studio line's file).
    - **Built 2026-10-12.**
