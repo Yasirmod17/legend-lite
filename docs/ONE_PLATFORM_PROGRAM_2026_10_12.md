@@ -633,7 +633,9 @@ engine, as `ll.show()` opens DataCube.
   cookie as it admits the Bearer header. The cookie is named by the port because a browser sends a host's cookies to
   every port: two Python engines would otherwise replace each other's. Every `/api/` path is private now, not only
   pure/v1's. The token passes once in an address on this machine, into the browser's history, and dies with the
-  process.
+  process. Strict holds where the link is clicked on another site (Jupyter's output, at `localhost:8888`; the Studio
+  line's question, measured): the cookie is stored from the cross-site load, the page's files need none, and the
+  page's own calls are same-site, so they carry it.
 - **The routes.** `/api/server/v1/currentUser` answers this user (`"this user"`, as the stores name it), and POST
   `/api/lite/v1/*` goes to the planner's pure/v1, which answers it as legend-lite's server does (`PureV1Api.route`).
   Execute as JSON landed with C1 and C2; saved queries with B5.
@@ -643,7 +645,7 @@ engine, as `ll.show()` opens DataCube.
   checks, lite's routes); `//python:wheel_test` (from the installed wheel: both apps served, traded, configured,
   answering with the cookie alone; Studio's demo projects shipped; no DuckDB-WASM). And by hand in Chromium, from the
   installed wheel on a fresh home (`docs/one-platform/evidence/e-apps-on-python.mjs`): Studio's "Load demo projects"
-  publishes the four projects into Python's repository (360 ms); a published project opens and compiles, 0 errors;
+  publishes the four projects into Python's repository (292 ms), the link clicked on a page of another site; a published project opens and compiles, 0 errors;
   Query lists the four from Python's Depot, opens `trading` at HEAD, and builds a query on `Party`. No page error, no
   failed call but the run's.
 - **The one call that fails: running a project's query (PARK-35).** A project's rows are its `###Data` elements', which
