@@ -22,6 +22,38 @@ const upstream = readFileSync(runfileFromEnv('UPSTREAM_ARROW_ANSWER'));
 // this user's legend-lite folder, the test's own (the pages Save writes go there, never into a real home)
 const home = mkdtempSync(join(process.env.TEST_TMPDIR, 'legend-lite-home-'));
 
+// A WAREHOUSE (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C3): the Bazel-built native one, its owner alice and a reader,
+// rita, seeded here as its owner (a table rita may read, one she may not); the page reads it through Python, signed in
+// there as rita
+const warehouse = spawn(runfileFromEnv('WAREHOUSE_BINARY'), ['--port', '0',
+  '--data', mkdtempSync(join(process.env.TEST_TMPDIR, 'warehouse-')), '--user', 'alice:alice-pw', '--user', 'rita:rita-pw',
+  '--owner', 'alice', '--duckdb-library', runfileFromEnv('WAREHOUSE_DUCKDB_LIBRARY')], { stdio: ['ignore', 'ignore', 'pipe'] });
+let warehouseSaid = '';
+const warehousePort = await new Promise((done, fail) => {
+  warehouse.stderr.on('data', (b) => {
+    warehouseSaid += String(b);
+    for (const line of String(b).split('\n')) if (line) process.stderr.write(`[warehouse] ${line}\n`);
+    const m = /listening on 127\.0\.0\.1:(\d+)/.exec(warehouseSaid);
+    if (m) done(Number(m[1]));
+  });
+  warehouse.on('exit', (code) => fail(new Error(`the warehouse exited (${code}): ${warehouseSaid}`)));
+});
+const warehouseStopped = new Promise((done) => warehouse.once('exit', done));
+const warehouseUrl = `http://127.0.0.1:${warehousePort}`;
+const owner = (await (await fetch(`${warehouseUrl}/sql/v1/login`, { method: 'POST',
+  headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user: 'alice', password: 'alice-pw' }) })).json()).token;
+for (const sql of [
+  'CREATE TABLE POSITIONS (desk VARCHAR, qty INTEGER, px DECIMAL(10,2))',
+  "INSERT INTO POSITIONS VALUES ('FX', 10, 1.50), ('EQ', 5, 2.25), ('FX', 3, 4.00)",
+  'CREATE TABLE secret (s VARCHAR)',
+  'GRANT SELECT ON TABLE POSITIONS TO rita',
+]) {
+  const said = await (await fetch(`${warehouseUrl}/sql/v1/statements`, { method: 'POST',
+    headers: { Authorization: `Bearer ${owner}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sql, catalog: 'main', waitMs: 30_000 }) })).json();
+  if (said.state !== 'succeeded') throw new Error(`the warehouse's setup: ${sql}: ${JSON.stringify(said)}`);
+}
+
 // the library by its runfiles path, as //python's tests are given it: a program a test starts gets no BUILD env
 const engine = spawn(fixture, ['--site', site], {
   stdio: ['pipe', 'pipe', 'pipe'],
@@ -74,7 +106,7 @@ try {
   page.on('requestfailed', (r) => console.log(`request failed: ${r.url()} -- ${r.failure()?.errorText ?? ''}`));
   // what the page is handed: the token, and the frame the engine serves (the address is the page's own origin)
   const { url: _origin, link: _link, ...given } = served;
-  await page.addInitScript((g) => { window.__pythonEngineServed = g; }, given);
+  await page.addInitScript((g) => { window.__pythonEngineServed = g; }, { ...given, warehouse: warehouseUrl });
   // the test page, its bundle and upstream's recorded answer; everything else (the site, the API) is the engine's
   await page.route(`${origin}/python-engine.html`, (r) => r.fulfill({
     contentType: 'text/html',
@@ -96,8 +128,8 @@ try {
     console.log(`FAIL the setup: ${verdict.setupError}`);
     failed = true;
   }
-  if (verdict.outcomes.length !== 8) {
-    console.log(`FAIL ${verdict.outcomes.length} checks ran, not 8`);
+  if (verdict.outcomes.length !== 9) {
+    console.log(`FAIL ${verdict.outcomes.length} checks ran, not 9`);
     failed = true;
   }
 
@@ -611,5 +643,7 @@ try {
   // stopped and WAITED for: the engine serves until its input closes, and is gone before the test reports
   engine.stdin.end();
   await stopped;
+  warehouse.kill();
+  await warehouseStopped;
 }
 process.exit(failed ? 1 : 0);

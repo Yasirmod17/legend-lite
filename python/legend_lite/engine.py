@@ -52,10 +52,10 @@ import duckdb
 import pyarrow as pa
 import pyarrow.ipc
 
-from . import _json, _planner, compiler
+from . import _json, _planner, compiler, warehouse
 from .compiler import LegendError
 from ._library import library
-from .frames import Frames, UntypedColumn
+from .frames import Frames, UntypedColumn, typed_by_plan
 from ._home import THIS_USER, Settings, home, model_home_folder, pages_folder, queries_folder, store_call
 
 _API = '/api/pure/v1/'
@@ -71,6 +71,9 @@ _FILE_PART = '/file-part.json'
 # the page's own settings, kept between visits as the browser keeps them (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B2):
 # GET what was kept, POST them whole
 _SETTINGS = '/settings.json'
+# a warehouse table on a page (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C3): Python signs in as the person running it,
+# lists what they may read, and writes and holds each opened table's model; the token never reaches the page
+_WAREHOUSE = '/warehouse.json'
 # PYTHON'S MODEL HOME (B3): the SDLC's API and the Depot's, as the model home's server mounts them, answered by the
 # native library's SDLC over this user's git repository of projects
 _SDLC_API, _DEPOT_API = '/sdlc/api/', '/depot/api/'
@@ -176,6 +179,15 @@ def _said(status: int, message: str) -> Answer:
     return Answer(status, 'text/plain; charset=utf-8', message.encode('utf-8'))
 
 
+def _arrow_rows(rows: pa.Table, planned: str) -> Answer:
+    """A plan-and-run's rows, as Arrow, the planner's answer in their schema's metadata (``legend.plan``)."""
+    rows = rows.replace_schema_metadata({**(rows.schema.metadata or {}), _PLAN_KEY: planned.encode('utf-8')})
+    sink = pa.BufferOutputStream()
+    with pyarrow.ipc.new_stream(sink, rows.schema) as writer:
+        writer.write_table(rows)
+    return Answer(200, 'application/vnd.apache.arrow.stream', sink.getvalue().to_pybytes())
+
+
 def _planned(said: dict[str, str], status: int = 200) -> Answer:
     """A plan-and-run that answered no rows: the planner's own answer, and why its SQL was refused when it was."""
     return Answer(status, 'application/json', json.dumps(said).encode('utf-8'))
@@ -227,7 +239,7 @@ def private(path: str) -> bool:
     token. The site's files are the page's own and carry no secret."""
     return path.startswith('/api/') or _model_home(path) or path in (
         '/cube.json', '/version.json', '/page.json', _FILE_IN, _FILE_PART, _FILE_OUT, _REMOTE, _SETTINGS, _SERVICES,
-        _PLAN_AND_RUN, _PLANNER)
+        _PLAN_AND_RUN, _PLANNER, _WAREHOUSE)
 
 
 def _saved_query(path: str) -> bool:
@@ -372,6 +384,27 @@ class NativePlanner:
         return f'ERR\nMODEL\n{message}'
 
 
+class _WarehouseTable:
+    """A warehouse table a page opened on Python (C3): the model Python wrote for it and holds, the runtime its live plans
+    are made against -- run on the warehouse, through the binding, as the signed-in user -- and its copy's."""
+
+    def __init__(self, held: compiler.HeldModel, written: dict[str, Any], schema: str, name: str,
+                 where: warehouse.Warehouse, catalog: str) -> None:
+        self.held = held
+        self.written = written
+        self.schema = schema
+        self.name = name
+        self.warehouse = where
+        self.catalog = catalog
+
+    @property
+    def runtime(self) -> str:
+        return self.written['runtime']
+
+    def reads(self, base_url: str, catalog: str) -> bool:
+        return self.warehouse.base_url.rstrip('/') == base_url.rstrip('/') and self.catalog == catalog
+
+
 class Engine:
     """legend-engine's ``pure/v1`` API over the frames' tables, with no transport: ``answer(method, path, query,
     body)`` is one call, answered as HTTP would carry it. ``site``: a directory whose files are answered too
@@ -394,6 +427,13 @@ class Engine:
         # are written so far; one part is written at a time
         self._uploads: dict[str, Path] = {}
         self._uploads_lock = threading.Lock()
+        # the warehouses signed in to (by address), and the tables opened from them, by the model Python wrote for each
+        # (C3): a plan over that model runs on the warehouse, as the signed-in user
+        self._warehouse_sessions: dict[str, warehouse.Session] = {}
+        self._warehouse_tables: dict[str, _WarehouseTable] = {}
+        self._warehouse_lock = threading.Lock()
+        # the binding's calls on the compiler's threads, never a connection's (warehouse.set_library_thread)
+        warehouse.set_library_thread(lambda call: _workers().submit(call).result())
         self.planner = planner if planner is not None else NativePlanner()
         self._pages_folder = Path(pages) if pages is not None else None
         self.site = Path(site).resolve() if site is not None else None
@@ -449,9 +489,17 @@ class Engine:
             if path == _SETTINGS:
                 return self._settings_kept(body or '')
             if path == _PLAN_AND_RUN:
+                table = self._warehouse_table_of(body or '')
+                if table is not None:
+                    # a warehouse table's plan runs there: its HTTP on the caller's thread, holding no compiler thread
+                    return _answered(lambda b: self._warehouse_plan_and_run(table, b), body or '')
                 return _workers().submit(_answered, self._plan_and_run, body or '').result()
             if path == _PLANNER:
                 return _workers().submit(_answered, self._planner, body or '').result()
+            if path == _WAREHOUSE:
+                # on the caller's thread: the warehouse's HTTP holds no compiler thread, and only the library's calls go
+                # to one
+                return self._warehouse(body or '')
             if not path.startswith(_API):
                 return _said(404, f'no such path: {path}')
             return _workers().submit(self._api, path, query, body or '').result()
@@ -486,8 +534,9 @@ class Engine:
         model_home = {'where': str(self.model_home_folder())}
         # where the query store keeps the saved queries (B5), and whose they are
         queries = {'where': str(queries_folder()), 'user': _QUERY_USER}
+        # a warehouse's tables (C3): Python signs in to one as this user and reads its tables Live
         return {'files': self.takes_files(), 'remote': self.takes_remote(), 'pages': pages, 'modelHome': model_home,
-                'queries': queries, 'plane': plane, 'planes': [plane]}
+                'queries': queries, 'warehouse': True, 'plane': plane, 'planes': [plane]}
 
     def pages_folder(self) -> Path:
         """Where the page's saved pages are kept: the folder given, else this user's (``home()/pages``), as it is now."""
@@ -795,6 +844,111 @@ class Engine:
                 return _said(500, message)
         return Answer(answer.status, answer.content_type, answer.body.encode('utf-8'))
 
+    def _warehouse(self, body: str) -> Answer:
+        """A warehouse on a page (C3). ``{"op": "connect", "url", "user", "password"}``: signed in as the person running
+        Python, the session answered -- its address, who the warehouse says it is, when it ends; never its token -- with
+        what they may read. ``{"op": "table", "url", "catalog", "schema", "name"}``: a table listed there, its model
+        written by the tab's own writer (``table_model``: read-only, its copy planned for DuckDB) and held, answered as
+        that writer answers it. A refusal is its words, the driver's."""
+        try:
+            asked = json.loads(body)
+        except ValueError:
+            return _said(400, 'a warehouse call is JSON')
+        if not (isinstance(asked, dict) and isinstance(asked.get('op'), str) and isinstance(asked.get('url'), str)):
+            return _said(400, 'a warehouse call is {"op", "url", ...}')
+        url = asked['url'].rstrip('/')
+        try:
+            if asked['op'] == 'connect':
+                if not (isinstance(asked.get('user'), str) and isinstance(asked.get('password'), str)):
+                    return _said(400, 'a sign-in is {"user", "password"}, each a string')
+                session, objects = warehouse.connect(url, asked['user'], asked['password'])
+                with self._warehouse_lock:
+                    self._warehouse_sessions[url] = session
+                    # the tables open from it go on with the new token when it is the same person (P2-297)
+                    for table in self._warehouse_tables.values():
+                        if table.warehouse.base_url.rstrip('/') == url and table.warehouse.principal == session.principal:
+                            table.warehouse.renew(session)
+                said = {'session': {'baseUrl': session.base_url, 'principal': session.principal,
+                                    'expiresAt': session.expires_at, 'token': ''}, 'objects': objects}
+                return Answer(200, 'application/json', json.dumps(said).encode('utf-8'))
+            if asked['op'] == 'table':
+                return self._warehouse_table(url, asked)
+        except warehouse.SessionExpired as expired:
+            return _said(401, str(expired))
+        except warehouse.WarehouseError as refused:
+            return _said(422, str(refused))
+        return _said(400, f"no such warehouse call: {asked['op']}")
+
+    def _warehouse_table(self, url: str, asked: dict[str, Any]) -> Answer:
+        """A listed table opened: its columns read from the warehouse now (what the person may read, as the catalog has
+        it), its model written and held. The same table with the same columns from another warehouse or catalog would
+        be the same model text, which names the plan's table by itself: refused while the first is open."""
+        if not all(isinstance(asked.get(k), str) for k in ('catalog', 'schema', 'name')):
+            return _said(400, 'a table is {"catalog", "schema", "name"}, each a string')
+        catalog, schema, name = asked['catalog'], asked['schema'], asked['name']
+        with self._warehouse_lock:
+            session = self._warehouse_sessions.get(url)
+        if session is None:
+            return _said(401, f'sign in to the warehouse at {url} first')
+        found = next((o for o in warehouse.list_objects(session)
+                      if (o['catalog'], o['schema'], o['name']) == (catalog, schema, name)), None)
+        if found is None:
+            return _said(404, f'{schema}.{name} is not a table {session.principal} may read in {catalog}')
+        spec = {'table': name, 'schema': schema, 'convertible': False, 'databaseType': found['databaseType'],
+                'snapDatabaseType': 'DuckDB', 'columns': [{**c, 'dataType': c['type']} for c in found['columns']]}
+        written = _workers().submit(compiler.table_model, spec).result()
+        if self.frames.held_for(written['model']) is not None:
+            # a frame or a page's file with the same table and columns writes the same model text, which a plan names
+            # its table by: the warehouse's would answer for it
+            return _said(409, f'a frame or file of this Python is {schema}.{name} with the same columns: rename one')
+        with self._warehouse_lock:
+            kept = self._warehouse_tables.get(written['model'])
+            if kept is not None and not kept.reads(url, catalog):
+                return _said(409, f'{schema}.{name} is open already, with the same columns, from {kept.warehouse.base_url} '
+                                  f'({kept.catalog}): one of the two at a time')
+            if kept is None:
+                held = _workers().submit(compiler.HeldModel, written['model']).result()
+                self._warehouse_tables[written['model']] = _WarehouseTable(
+                    held, written, schema, name, warehouse.Warehouse(session, catalog), catalog)
+        said = {k: v for k, v in written.items() if k != 'accessor'}
+        return Answer(200, 'application/json', json.dumps(said).encode('utf-8'))
+
+    def _warehouse_table_of(self, body: str) -> _WarehouseTable | None:
+        """The warehouse table a plan-and-run's model is the model of, or None."""
+        try:
+            asked = json.loads(body)
+        except ValueError:
+            return None
+        model = asked.get('model') if isinstance(asked, dict) else None
+        if not isinstance(model, str):
+            return None
+        with self._warehouse_lock:
+            return self._warehouse_tables.get(model)
+
+    def _warehouse_plan_and_run(self, table: _WarehouseTable, body: str) -> Answer:
+        """PLANANDRUN over a warehouse table (C3): planned by the planner Python chose against the model it holds, on
+        the compiler's threads; against the live runtime its SQL runs on the warehouse as the signed-in person, the
+        server's Arrow chunks the rows, typed by the plan as Python's own are. The page sends Pure, never SQL (R4)."""
+        asked = json.loads(body)
+        if not all(isinstance(asked.get(k), str) for k in ('lambda', 'model', 'runtime')):
+            return _said(400, 'a plan-and-run is {"lambda", "model", "runtime"}, each a string')
+        if asked['runtime'] != table.runtime:
+            return _planned({'plan': self.planner.refused_plan(
+                f'{table.schema}.{table.name} is read on its warehouse, through its own runtime')})
+        # Python's own planner on the compiler's threads; a server's is its HTTP, on this one (as _plan_and_run awaits it)
+        on = (lambda f, *a: _workers().submit(f, *a).result()) if self.planner.plane == 'local' else (lambda f, *a: f(*a))
+        planned = on(self.planner.plan, asked['lambda'], table.held, asked['runtime'])
+        try:
+            plan = on(self.planner.read, planned)
+        except LegendError:
+            return _planned({'plan': planned})
+        try:
+            chunks = [pyarrow.ipc.open_stream(c).read_all() for c in table.warehouse.arrow_chunks(plan.sql)]
+            rows = typed_by_plan(pa.concat_tables(chunks) if len(chunks) > 1 else chunks[0], plan)
+        except (warehouse.WarehouseError, UntypedColumn, pa.ArrowInvalid) as refused:
+            return _planned({'plan': planned, 'error': f'{type(refused).__name__}: {refused}'}, 422)
+        return _arrow_rows(rows, planned)
+
     def _plan_and_run(self, body: str) -> Answer:
         """PLANANDRUN on Python (§15.2): ``{"lambda", "model", "runtime"}`` -- the plan request the page's planner makes
         (lite-planner.ts ``planRequest``), its model as text -- planned against the model Python holds of that text
@@ -839,11 +993,7 @@ class Engine:
                 rows = self.frames.run(plan)
             except (duckdb.Error, UntypedColumn) as refused:
                 return _planned({'plan': planned, 'error': f'{type(refused).__name__}: {refused}'}, 422)
-        rows = rows.replace_schema_metadata({**(rows.schema.metadata or {}), _PLAN_KEY: planned.encode('utf-8')})
-        sink = pa.BufferOutputStream()
-        with pyarrow.ipc.new_stream(sink, rows.schema) as writer:
-            writer.write_table(rows)
-        return Answer(200, 'application/vnd.apache.arrow.stream', sink.getvalue().to_pybytes())
+        return _arrow_rows(rows, planned)
 
     def _planner(self, body: str) -> Answer:
         """The planner protocol's requests (engine-client/src/legend/planner-protocol.ts) a page on Python sends,
@@ -864,6 +1014,10 @@ class Engine:
             with self.frames.serving() as models:
                 self._noted(models)
                 held = self.frames.model_for(model) if isinstance(model, str) else None
+                if held is None and isinstance(model, str):
+                    with self._warehouse_lock:
+                        table = self._warehouse_tables.get(model)
+                    held = table.held if table is not None else None
                 if held is None:
                     said = {'ok': True, 'answer': 'ERR\nMODEL\nthis engine serves no source of that model'}
                 else:
@@ -1235,7 +1389,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         # the API, an open page saying what it is now (page.json: Python's page.read()), a page's file in or out, the
         # saved pages, the page's settings, and PlanAndRun's calls
         if not (url.path.startswith(_API) or url.path.startswith(_LITE_API) or _model_home(url.path) or url.path in (
-                '/page.json', _FILE_IN, _FILE_PART, _FILE_OUT, _REMOTE, _SETTINGS, _PLAN_AND_RUN, _PLANNER)):
+                '/page.json', _FILE_IN, _FILE_PART, _FILE_OUT, _REMOTE, _SETTINGS, _PLAN_AND_RUN, _PLANNER, _WAREHOUSE)):
             self._refuse_unread(404, f'no such path: {url.path}')
             return
         if not self._admitted(url.path):

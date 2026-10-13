@@ -965,6 +965,8 @@ browser_test(
         ":upstream_arrow_answer",
         "//native:compiler",
         "//python:wheel_duckdb",
+        "//warehouse:duckdb_library",
+        "//warehouse:server_native",
     ],
     entry_point = "test/python-engine/python-engine.mjs",
     env = {
@@ -978,6 +980,9 @@ browser_test(
         "LEGEND_LITE_LIBRARY": "$(rlocationpath //native:compiler)",
         "PYTHON_ENGINE_PAGE": "$(rlocationpath :python_engine_page)",
         "UPSTREAM_ARROW_ANSWER": "$(rlocationpath :upstream_arrow_answer)",
+        # a warehouse the page reads through Python (C3), as live_snap_test starts it
+        "WAREHOUSE_BINARY": "$(rlocationpath //warehouse:server_native)",
+        "WAREHOUSE_DUCKDB_LIBRARY": "$(rlocationpath //warehouse:duckdb_library)",
     },
     # as //python:headless_test sets it: Python reads the architecture from it where it cannot ask WMI, and mini-racer's
     # V8 (a page's file read in Python) needs it; a test's environment on Windows does not carry it

@@ -46,8 +46,9 @@ import type { S3Credentials } from '../remote.ts';
 import { fileParts, type UploadResult } from '../upload.ts';
 import type {
   BrowserService, DatabaseService, FrameModel, LivePage, ModelHomeService, PageService, Plane, PlaneService, PlaneWord,
-  Services, Versions,
+  Services, Versions, WarehouseService,
 } from '../app/services.ts';
+import type { CatalogObject, WarehouseSession } from '../../../engine-client/src/warehouse.ts';
 
 /** How the page reaches Python's engine. */
 export interface PythonLink {
@@ -78,6 +79,8 @@ export interface PythonOffers {
   readonly pages: { readonly where: string; readonly user: string };
   /** Where its model home keeps the projects (B3: the native library's SDLC over a git repository), when it has one. */
   readonly modelHome?: { readonly where: string };
+  /** Whether it reads a warehouse's tables (C3: Python signs in as this user; the token never reaches the page). */
+  readonly warehouse?: boolean;
   readonly plane: PythonPlane;
   readonly planes: readonly PythonPlane[];
 }
@@ -332,7 +335,7 @@ function pythonBrowser(link: PythonLink, browser: BrowserService, kept: Record<s
 export async function askedOffers(link: PythonLink): Promise<PythonOffers> {
   const said = JSON.parse(await asked(link, 'services.json')) as {
     files?: unknown; remote?: unknown; pages?: { where?: unknown; user?: unknown }; modelHome?: { where?: unknown };
-    plane?: unknown; planes?: unknown;
+    warehouse?: unknown; plane?: unknown; planes?: unknown;
   };
   if (typeof said.files !== 'boolean' || typeof said.remote !== 'boolean') {
     throw new Error(`the engine did not say which of a page's files it reads: ${JSON.stringify(said)}`);
@@ -344,6 +347,7 @@ export async function askedOffers(link: PythonLink): Promise<PythonOffers> {
   return {
     files: said.files, remote: said.remote, pages: { where: said.pages.where, user: said.pages.user },
     ...(typeof said.modelHome?.where === 'string' ? { modelHome: { where: said.modelHome.where } } : {}),
+    ...(said.warehouse === true ? { warehouse: true } : {}),
     plane: planeOf(said.plane), planes: said.planes.map(planeOf),
   };
 }
@@ -415,6 +419,26 @@ export function pythonDatabase(link: PythonLink, offers: PythonOffers): Database
       mountRemote: async (url: string, s3: S3Credentials | undefined, name: string) =>
         JSON.parse(await posted(link, 'remote.json', { url, name, ...(s3 ? { s3 } : {}) })) as InferredModel,
     } : {}),
+  };
+}
+
+/**
+ * A WAREHOUSE ON PYTHON (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C3): Python signs in as the person running it (who is
+ * the person at this page) and lists what they may read; a table opened, Python writes its model with the tab's own
+ * writer and holds it, and the grid's queries are planned and run by Python (PlanAndRun, R4), Live on the warehouse.
+ * The session the page holds names the warehouse and the person, never a token: Python keeps that.
+ */
+function pythonWarehouse(link: PythonLink): WarehouseService {
+  return {
+    // the address is typed each time: what this page offered last is kept by the tab's own warehouse service only
+    offered: () => '',
+    remember: () => undefined,
+    connect: async (url, user, password) => JSON.parse(await posted(link, 'warehouse.json', { op: 'connect', url, user, password })) as
+      { session: WarehouseSession; objects: CatalogObject[] },
+    signInWithKey: () => Promise.reject(new Error('a page on Python signs in to a warehouse by its user and password')),
+    table: async (session, object) => JSON.parse(await posted(link, 'warehouse.json', {
+      op: 'table', url: session.baseUrl, catalog: object.catalog, schema: object.schema, name: object.name,
+    })) as InferredModel & { readonly snapRuntime: string },
   };
 }
 
@@ -502,6 +526,7 @@ export function pythonServices(o: PythonServicesOptions): Services {
     },
     pages: Promise.resolve(pythonPages(link, o.offers)),
     ...(o.offers.modelHome ? { modelHome: pythonModelHome(link, o.offers.modelHome.where) } : {}),
+    ...(o.offers.warehouse ? { warehouse: pythonWarehouse(link) } : {}),
     live: {
       watch: o.watch,
       ...('page' in o.shows ? { page: livePage(link, o.shows.page) } : {}),

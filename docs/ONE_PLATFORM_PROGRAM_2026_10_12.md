@@ -618,6 +618,37 @@ an audit.
   - Python's driver follows no redirect, which would carry the token elsewhere. A broken connection is said as one.
   - A failed step is an answer, not a refusal: it carries an `error` and a `step`.
 
+**Built 2026-10-13, step 5 Live (branch `datacube/python-parity`):**
+- **Python.** `services.json` offers `warehouse`. `POST /warehouse.json`:
+  - `connect` signs in as the person running Python (`warehouse.connect`) and answers the session with `token: ''`,
+    with what they may read. The token stays in Python. A table already open from that warehouse, as the same person,
+    goes on with the new token.
+  - `table` reads the objects again, so the columns are as the catalog has them now and the table is one the person
+    may read. It writes the model with the tab's own writer (`table_model`: read-only, its copy planned for DuckDB),
+    holds it, and answers it as that writer does.
+- **Refused at opening:** a table whose model text a frame or file of this Python, or a table from another warehouse
+  or catalog, already holds. A plan names its table by the model's text alone.
+- **Plan-and-run over that model** runs on the caller's thread, not the compiler pool. Planning and reading the plan
+  go to the compiler pool, as Python's own planner's do (a server's planner is its HTTP). The SQL runs on the
+  warehouse, through the binding, as the signed-in person; the server's Arrow chunks are the rows, typed by the plan
+  as Python's own are. The binding's calls run on the compiler pool (`warehouse.set_library_thread`): a thread that
+  calls the library is attached to it for good. The planner protocol's held kinds (a grid's column types) know the
+  table's model too.
+- **The page.** `WarehouseService` gains `table`, the host's own reading; `live` is the tab's. `pythonServices` gives
+  the warehouse when Python offers it. `sources.ts` opens a table through `table` when the service has it
+  (`openedHostTable`): its rows the host's runner, as a frame's are. Opening needs no `services.engine.local`. A page on
+  Python signs in by user and password: the launch key is the single-user warehouse's own page.
+- **Measured.** `//datacube:python_engine_test` starts the native warehouse, seeds it as its owner, and checks, in
+  Chromium on Python's page:
+  - a wrong password refused in the warehouse's words;
+  - a session without its token;
+  - only the table rita may read listed;
+  - the columns typed by Python's model;
+  - rows read Live through Python;
+  - a table not listed refused.
+- **Snap on Python's page** is the next step: the grid offers none yet, and says so ("this plane has no store in this
+  tab to snap into").
+
 #### C4. The small copies
 
 - One table of the site's file types, which Python reads.

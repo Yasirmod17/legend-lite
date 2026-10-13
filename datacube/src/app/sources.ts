@@ -281,10 +281,12 @@ function asSession(s: SignedIn): DatabaseSession {
 }
 
 /** Whether the source picker has a section to offer over these services: New ▸ Data Source… and the blank page's button
- *  are offered only then. A warehouse and saved queries are read through the page's own pair (`local`). */
+ *  are offered only then. Saved queries are read through the page's own pair (`local`); a warehouse through it, or by
+ *  a host that reads its tables itself. */
 export function picksSources(services: Services): boolean {
   const { database, local } = services.engine;
   return database.ingestFile !== undefined || database.mountRemote !== undefined
+    || services.warehouse?.table !== undefined
     || (local !== undefined && (services.queries !== undefined || services.warehouse !== undefined));
 }
 
@@ -294,8 +296,9 @@ export function pageSources(d: SourcesOf): PageSources {
   const { database } = services.engine;
   /** The page's own planner and database, where it has them (the tab): what only that shape opens needs it. */
   const local = services.engine.local;
-  /** A warehouse is read through the page's own pair (its model writer, its Snap): offered where both are. */
-  const warehouse = local ? services.warehouse : undefined;
+  /** A warehouse is read through the page's own pair (its model writer, its Snap), or by a host that reads its tables
+   *  itself (Python's, C3): offered where either is. */
+  const warehouse = local || services.warehouse?.table ? services.warehouse : undefined;
   const modelHome = services.modelHome;
   /** Who reads a remote file: the page's own database (the tab's, which the file's server must let this page read), or
    *  its host's (Python's). */
@@ -403,8 +406,9 @@ export function pageSources(d: SourcesOf): PageSources {
   /** A warehouse table for a grid: Live there as the user, Snap into the host's database; its own planner over its model. */
   async function openedTable(on: WarehouseService, session: WarehouseSession, chosen: CatalogObject, saved?: CubeDocument,
     capped = false): Promise<Opened> {
-    // read through the page's own pair: a warehouse is offered only where the page has one
-    if (!local) throw new Error('this page reads no warehouse');
+    if (on.table) return openedHostTable(on.table, session, chosen, saved, capped);
+    // read through the page's own pair: a warehouse the host does not read is offered only where the page has one
+    if (!local || !on.live) throw new Error('this page reads no warehouse');
     // A warehouse table is read-only: a column the compiler says must be converted to be declared cannot be, so it is
     // left out, and named.
     const m = await warehouseModel(local, chosen);
@@ -430,6 +434,33 @@ export function pageSources(d: SourcesOf): PageSources {
         own.dispose?.();
         snap.snapTarget.planner.dispose?.();
       },
+    };
+  }
+
+  /**
+   * A warehouse table its HOST reads (Python's, C3): the host writes its model with the tab's own writer and holds it,
+   * and the grid's rows are the host's -- planned and run there, Live on the warehouse as the person signed in there
+   * (R4: the page sends Pure).
+   */
+  async function openedHostTable(table: NonNullable<WarehouseService['table']>, session: WarehouseSession,
+    chosen: CatalogObject, saved?: CubeDocument, capped = false): Promise<Opened> {
+    const m = await table(session, chosen);
+    const rows = services.engine.rows(m.model, m.runtime, { bitColumns: m.bitColumns });
+    const columns = await sourceColumns(typer(rows), m.source);
+    const name = `${chosen.schema}.${chosen.name}`;
+    // where it is, never the sign-in: whoever reopens it signs in as themselves
+    const cubeSource: WarehouseSource = {
+      _type: 'warehouseTable', name, warehouse: session.baseUrl, catalog: chosen.catalog, schema: chosen.schema, table: chosen.name,
+      columns: columns.map((c) => ({ name: c.name, type: c.type })),
+    };
+    const r = rebuilt(saved, m.source, columns, name, capped);
+    return {
+      label: name,
+      notes: r.notes,
+      make: gridMaker(r.snapshot, r.configuration, [], {
+        ...rowsPlace(rows), cubeSource, label: name, ...(r.tree ? { tree: r.tree } : {}), foldPanel: capped,
+      }),
+      discard: async () => letGo(rows),
     };
   }
 

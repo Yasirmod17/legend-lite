@@ -25,7 +25,7 @@ import * as duckdb from '../../../engine-client/src/duckdb-wasm.ts';
 import { arrowResultTable, LegendEngineExecutor } from '../../../engine-client/src/engine-remote.ts';
 import { arrowIpcStream } from '../../../engine-client/src/pure-v1.ts';
 import type { ResultTable } from '../../../engine-client/src/result.ts';
-import type { Lambda } from '../../../pure-protocol/src/index.ts';
+import { from, type Lambda } from '../../../pure-protocol/src/index.ts';
 import { PlanThenRun, RemoteRun, type PlanAndRun } from '../../src/runner.ts';
 import type { CubeSnapshot } from '../../src/snapshot.ts';
 import { defaultChart } from '../../src/chart-spec.ts';
@@ -50,6 +50,8 @@ interface Served {
   readonly source: unknown;
   readonly columns: readonly string[];
   readonly rows: readonly (readonly (string | number | null)[])[];
+  /** A warehouse the harness started and seeded (python-engine.mjs): the page reads it through Python (C3). */
+  readonly warehouse: string;
 }
 
 interface Outcome {
@@ -304,6 +306,29 @@ async function run(): Promise<void> {
       await new Promise((r) => setTimeout(r, 50));
     }
     equal((await open()).browser.readSettings()?.['dataCube.grid.rowBuffer'], 30, 'the next page\'s:');
+  });
+
+  // A WAREHOUSE TABLE ON PYTHON'S PAGE (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C3): Python signs in as the person
+  // (rita), lists what she may read, writes and holds the table's model with the tab's own writer, and plans and runs
+  // the grid's queries Live there -- the page sends Pure, and never holds the warehouse's token
+  await check('a warehouse table read on Python\'s page: signed in there, its model Python\'s, its rows Live from the warehouse', async () => {
+    const link: PythonLink = { baseUrl: location.origin, fetch: (i, init) => fetch(i, init), authorization: served.authorization };
+    const offers = await askedOffers(link);
+    equal(offers.warehouse, true, 'Python offers a warehouse:');
+    const services = pythonServices({ link, shows: { frame: 'trades' }, offers, watch: () => () => undefined, browser: browserBasics });
+    const warehouse = services.warehouse!;
+    await rejects(warehouse.connect(served.warehouse, 'rita', 'wrong'), /sign-in failed — AUTH_INVALID: wrong user or password/);
+    const { session, objects } = await warehouse.connect(served.warehouse, 'rita', 'rita-pw');
+    deepEqual([session.principal, session.token], ['rita', ''], 'the session, without its token:');
+    deepEqual(objects.map((o) => o.name), ['POSITIONS'], 'what rita may read, and only that:');
+    const m = await warehouse.table!(session, objects[0]!);
+    const rows = services.engine.rows(m.model, m.runtime, { bitColumns: m.bitColumns });
+    const columns = await sourceColumns(rows.runner!, m.source);
+    deepEqual(columns.map((c) => `${c.name}:${c.type}`), ['desk:String', 'qty:Integer', 'px:Decimal'], 'its columns, as Python\'s model types them:');
+    const read = await rows.runner!.run(from(m.source).select(['desk', 'qty']).lambda(), { epoch: 0 } as CubeSnapshot);
+    equal(shape(read.rows, false), 'desk:String,qty:Integer\n["EQ",5]\n["FX",10]\n["FX",3]', 'its rows, read Live through Python:');
+    // a table it did not list is not one Python opens
+    await rejects(warehouse.table!(session, { ...objects[0]!, name: 'secret' }), /not a table rita may read/);
   });
 
   await check('a query\'s types, parse and print: the same compiler\'s answers', async () => {
