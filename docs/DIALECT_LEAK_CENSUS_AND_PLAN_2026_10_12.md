@@ -1,6 +1,121 @@
 # The dialect-leak census and the plan to close it (2026-10-12)
 
-**Status: PLAN, for review. Nothing below has been implemented.**
+**Status: PLAN, for review. Nothing below has been implemented, except five items that neema2/legend-lite#30 did on
+its way to main (listed in the evidence folder's README).**
+
+## 0. Start here: the handoff to the session that implements it (2026-10-12)
+
+**Before Phase 0.**
+1. **The baseline is main.** The ClickHouse and Postgres burn-downs that followed neema2/legend-lite#30 land on main
+   first, in neema2/legend-lite#34, so "pure moves produce zero rendered-SQL diffs" has one fixed baseline. That PR's
+   file list is what they touch: chiefly `ClickHouse.java`, `Postgres.java`, `SqlTypeCensus`, `Scalars` and
+   `SqlExpr.OrderedListAgg`, with the harness (`EmbeddedClickHouse`, `PctBackend`), the guards (`PctCensusGate`,
+   `ChannelBLane`, `DialectBoundaryTest`) and the ClickHouse and Postgres PCT ledgers.
+2. **Main moves under you.** Other sessions land in `sql/dialect` too: the `#SQL{...}#` line added `QuantileOrder`
+   and `RootNumericTypes` (see `docs/IN_FLIGHT.md`). Announce this program there before starting, re-read it before
+   each phase, and merge main between phases rather than at the end.
+3. **Re-run the census on the new head** (the evidence README, "To re-run"). The line numbers below cite 7afb645.
+   Since then the dialects have grown: ClickHouse's session table and Variant carriers, and Postgres' printf, maps,
+   string distances and jsonb decoding. One new leak to file is the ClickHouse session URL (`sessionJdbcUrl`) in
+   `testing/`, a P5/P6 item.
+4. **The user decides, before P1:** D1 to D8 (§6), and the base-renderer shape (P1b: the base keeps grammar only,
+   and every vocabulary point is abstract). The recommendations are written; none had been ratified when this was
+   written.
+
+**The proof for every pure move: a whole-lane SQL diff, not only the goldens.**
+- Run each lane with `--jvmopt=-Dlegend.diagnostics=dump-sql` before the move and after it, and copy each target's
+  `test.log` (under `bazel-testlogs/pct/<target>/`) out of the tree before anything deletes it.
+- Diff whole statements, not lines. The dump prints each statement as rendered, which spans several lines (FROM,
+  WHERE, GROUP BY, ORDER BY and LIMIT each start one; `AnsiSqlRenderer.nl`), and only its first line carries the tag.
+  So a record runs from one tag to the next, and every tag counts: `[sql:statement]`, `[sql:side]`, `[sql:let]`,
+  `[sql:value]`, `[sql:session]`, `[sql:system]` and `[script]` (`StatementOrigin`, `Executor`). A grep for one
+  tag's lines would compare SELECT lists only.
+- An empty diff is the evidence a move changed nothing: on all eight local databases every phase, and on the three
+  clouds when they run (§5: after Phase 2 and at the end). The dialect unit goldens alone cover a fraction of the
+  arms.
+
+**Running the lanes** (measured in a root cloud container, 4 cores, 15 GB, a ~40 GB disk allowance):
+- **Postgres refuses root.** Run it with
+  `--strategy=TestRunner=standalone --run_under="$PWD/tools/postgres/as_unprivileged.sh ubuntu"`, after
+  `chmod o+x /root` (`docs/GATES.md`). Never export `TEST_TMPDIR` in the shell: Bazel then takes it as its own output
+  root, starts a second server there, and fills the disk (2026-10-12). Bazel sets it for each test itself.
+- **The clouds** read their credentials from the file `LEGENDLITE_PCT_CLOUD_PROPERTIES` names
+  (`~/.legendlite/cloud-pct.properties`, outside the repo). Set it on the command,
+  `LEGENDLITE_PCT_CLOUD_PROPERTIES=$HOME/.legendlite/cloud-pct.properties bazel test ...`: it reaches the test only
+  through `env_inherit` (`pct/BUILD.bazel`), and the container does not set it. Never print the file's values.
+- **Disk.** A full run of every lane at once filled the allowance (the embedded servers' data, the test logs, and the
+  disk cache copying both). So run in batches of about 20 targets with `--disk_cache= --local_test_jobs=2`. Copy out each
+  `test.log` you need (its summary, and the whole log when it holds a SQL dump for the proof above), then delete
+  `bazel-testlogs/pct` between batches, and the batch's runfiles trees too
+  (`bazel-bin/pct/*.runfiles*`, about 130 MB a target, rebuilt on demand): 30 cloud targets after a local batch's
+  leftovers filled the disk again (2026-10-13).
+- **Memory.** ClickHouse and Trino in one batch at `--local_test_jobs=2` were killed by the container's memory limit
+  (two embedded servers plus two test JVMs; 2026-10-13). Run them in separate batches, or Trino at
+  `--local_test_jobs=1`.
+- **Times** (both channels, five suites; H2 runs the Relation suite only): DuckDB, SQLite, H2, MariaDB and MySQL
+  about 10 minutes a batch; ClickHouse
+  and Trino about 25 (Trino's channel B Essential alone about 4); Postgres about 6; the three clouds the longest.
+- **One failing test.** Channel B takes `-Dlegend.diagnostics=dump-sql,chb-only=<test-name-substring>` and prints
+  each statement, the failing ones marked `[sql-fail]`. Such a run always ends FAILED: the filter shrinks the
+  discovered list, and every channel B test asserts its discovery count equals the committed ratchet
+  (`ChannelBLane`). Read the log, not the status (`ChannelB.java`'s comment that a scoped run satisfies the pins is
+  stale). To read the IR with its types, a throwaway JUnit test in
+  `core/src/test/java/com/legend/sql/dialect/` can print `Compiler.query(ctx, q).lower(runtime, false).plan()` and
+  `.plan(runtime).sql()`. Use the dialect's `renderPasses()` to see what each pass does to a node's type. Delete the
+  test afterwards.
+
+**Measure in parallel: three containers, not one** (the user, 2026-10-13). Every phase re-measures the eight local
+databases on both channels, and the clouds join after Phase 2 and at the end (§5): about 3 hours for all eleven in
+one container, in small batches because of the memory and disk limits above. Spread it over sibling cloud sessions
+instead: sibling 1 started at Phase 0 and reused for every phase, sibling 2 only for the cloud runs:
+
+| container | databases | why |
+|---|---|---|
+| this session | DuckDB, SQLite, H2, MariaDB, MySQL | the light lanes, and the local gate |
+| sibling 1 | Postgres, ClickHouse, Trino | the heavy embedded servers (ClickHouse and Trino together hit the memory limit) |
+| sibling 2 | Snowflake, Databricks, BigQuery | the clouds, mostly waiting on the network |
+
+- **Starting one.** `create_session` (the claude-code-remote tools) with no `environment_id`: the sibling gets this
+  environment, so the same network policy and the `DB_AWS_*` variables the cloud credentials are read from. Give it
+  `source_url` and the branch as `source_revision`. Each sibling is a full session with its own tokens and compute,
+  and the clouds bill for their queries: start sibling 1 for a program that re-measures every phase, as this one
+  does, and sibling 2 when the clouds run.
+- **Its first job is the setup**, once: `docs/CLOUD_BACKENDS_PCT_2026_10_11.md` §6 (bazelisk, the bats and
+  reference-checkout overrides, the proxy flags in `~/.bazelrc`), the Postgres recipe above for sibling 1, the
+  credentials file for sibling 2 (§4 there; never print a value), and a first build. Expect about half an hour before
+  its first test; it stays warm for later phases until it is idle long enough to be reclaimed.
+- **Each phase:** commit and push the phase's head; send each sibling the commit to fetch and its list of targets;
+  each runs its lanes in the batches above and replies with every target's status and its channel B `measured:`
+  lines. A sibling may not push to the branch, so its results come back as text: its reply (`send_message`), or its
+  transcript (`get_session`, `list_events`) if no reply arrives.
+- **One database, one container.** A cloud lane's fixtures live in the warehouse, so two containers running the same
+  cloud database at once can collide; never assign a database to two containers.
+- **The SQL diff runs in the same split:** each container dumps and diffs its own databases' SQL, before and after the
+  move.
+
+**Guards that a move trips** (each moves only with a dated reason, AGENTS.md):
+- `CodeShapeGuardrailTest`: a method may have at most 250 lines; there may be at most 7 raw `new SqlExpr.Column(`
+  sites, and there are exactly 7 today (one each in AliasPrefix, UnqualifyPivotArgs, EngineStyleH2,
+  CarrierStrategies, Dedup, Fold and LambdaBinding), so a move that adds one trips it.
+- `CarrierPurityRatchetTest`: no new direct carrier emission (`SqlFn.LIST_*` and the like) before the dialect; lower
+  to a semantic node instead (`docs/CARRIER_REDESIGN.md` tenet #1). It blocked a fix in neema2/legend-lite#34.
+- `ArchitectureTest`: dependency directions, and `staticCollectionStateIsImmutableOrRegistered` (static collections
+  immutable, or registered).
+- `DialectBoundaryTest`: no new database-name decision outside the dialect.
+- `JdbcSurfaceCensusTest`, `RawSqlLedgerTest`, and the `SqlTextRatchetTest` and `TenetRatchetTest` that Phase 0
+  itself edits.
+- The census ceilings in `PctCensusGate`, and the channel B floors in `ChannelBLane`.
+
+**Out of scope here; they belong to other lanes:**
+- The platform's pins, the ones each database shares with DuckDB (34 on a database running all five suites; H2 runs
+  Relation only and shares 1), belong to the compiler lane (functions never ported, instance identity);
+  `docs/EXECUTION_PLAN_2026_09_26.md` is parked.
+- MongoDB, Elasticsearch and SingleStore are new targets, not consolidation.
+- The cloud corpus runs.
+
+**The work behind this plan** is in `docs/dialect-leak-census-2026-10-12/`; start with its README. It holds the
+method, the classification rules, the scanner that re-runs the census, and the nine reviewers' reports in full. The
+census was taken at 7afb645, so line numbers below cite that commit. The code it audits is on main since c03ac6b.
 
 **The ask (the user, 2026-10-12):** *everything SQL-related hidden in the SQL dialect; anything connection- or
 workspace-related behind its own interface; SqlTypeCensus probably behind the dialect too; first a comprehensive
@@ -34,8 +149,9 @@ tests (two slices), other modules' tests, tooling, and the dialect package plus 
 to hold exactly one row per site, with the same id set. Each slice also reported **misses**: leaks the patterns could
 not see. Those are in §7.
 
-The scanner and the per-site classifications are kept with the session's working files. Phase 0 below turns the
-census into a permanent guard.
+The scanners are kept in `docs/dialect-leak-census-2026-10-12/scanner/`, with the slices' reports beside them; the
+per-site tables were not kept (the evidence README says how to rebuild them). Phase 0 below turns the census into a
+permanent guard.
 
 **The classes:**
 
@@ -97,10 +213,12 @@ structural, not scattered:
      called directly).
    - About 4,000 behavioural tests open `jdbc:duckdb:` inline (about 330 sites).
    - 26 resolver tests each copy a `sqlOf()` pinned to `new DuckDb()`.
-9. **The guards that should catch all of this are blind to most databases:**
-   - `DialectBoundaryTest` counts 7 of the 11 dialect constructions and 3 of the 24 database types.
-   - Its driver census and `ArchitectureTest`'s driver rules miss the Postgres, SQLite, MariaDB, ClickHouse, Trino and
-     cloud drivers.
+9. **The guards that should catch all of this are blind to most databases** (at 7afb645):
+   - `DialectBoundaryTest` counted 7 of the 11 dialect constructions and 3 of the 24 database types.
+   - Its driver census and `ArchitectureTest`'s driver rules missed the Postgres, SQLite, MariaDB, ClickHouse, Trino
+     and cloud drivers.
+   - Since neema2/legend-lite#30's review, `DialectBoundaryTest` counts all 11 constructions and its driver census
+     names every driver; `ArchitectureTest`'s driver rules still name DuckDB and H2 only.
 
 **What is right today, and is the pattern to copy:**
 
@@ -149,15 +267,17 @@ Every phase lands green on its own:
 - the DuckDB and H2 corpus rosters unchanged;
 - the leak ratchet (Phase 0) only shrinking.
 
-**Pure moves must produce zero rendered-SQL diffs.** An unchanged golden is the proof that nothing moved but code.
+**Pure moves must produce zero rendered-SQL diffs.** The proof is the whole-lane SQL diff of §0; an unchanged golden
+is part of it, not all of it.
 
 The cloud lanes (Snowflake, Databricks and BigQuery) run once after Phase 2 and once at the end.
 
 ### Phase 0: the guards see everything (first; no behaviour change)
 
 - **`DialectBoundaryTest`:**
-  - count all 11 dialect constructions (its pin under-counts at 7);
-  - census all 24 `DatabaseType` constants and every driver package;
+  - count all 11 dialect constructions. *Done in #30, 3cd1c81: the pin is now 11.*
+  - name every driver package in its driver census. *Done in #30.*
+  - census all 24 `DatabaseType` constants and every product name (still H2, DuckDB and Postgres only);
   - walk `core/src/main/duckdb`.
 - **Driver-package rules** in `ArchitectureTest`, `JdbcSurfaceCensusTest` and `TenetRatchetTest`: add `org.postgresql`,
   `org.sqlite`, `org.mariadb`, `com.clickhouse`, `io.trino`, `net.snowflake`, `com.databricks`/`com.simba` and BigQuery.
@@ -185,11 +305,19 @@ Size: about 300 lines of tests.
   - Base arms throw `DialectCapability`, as `listCall` already does.
   - Every other dialect that inherits an arm today gets it explicitly or refuses it; see **decision D1**. First, an
     inventory of arm × dialect, read from the code and the PCT pins.
+  - **The proposed shape (2026-10-12, awaiting the user's yes): the base keeps grammar only, and every vocabulary
+    point becomes abstract.** No default spells any database's choice. javac then makes each dialect decide, which
+    turns D1 into compile errors rather than eleven judgment calls.
+    - Spellings shared by several databases become helpers that a dialect calls by name.
+    - Real families keep inheriting: MySql from MariaDb, H2Modern from H2, and the EngineStyle chain.
+    - The measurement behind this, and why fully separate dialects were not chosen, is in the evidence folder's
+      README ("The base-renderer question").
 - **1c. Raw SQL into each dialect.** One hook, `SqlDialect.fromEngineH2(String) → List<String>`, replaces
   `RawSqlBoundary.Target`, `rawTarget()`, `rawH2IsNative()` and the shared `RawSqlAdapt` pass:
   - H2 returns the text unchanged;
   - DuckDB does today's rewrite;
-  - Postgres does today's rewrite plus its types and lower-case folding;
+  - Postgres does today's rewrite plus its type names; its identifier rule follows D8 (it quotes a bare name as
+    written since d973b08);
   - the other eight refuse by name.
 
   A neutral H2-statement lexer stays shared. `RawSqlLedgerTest` and `DialectBoundaryTest.RAW_H2_CALLERS` are re-pinned
@@ -265,10 +393,20 @@ Size: about 400 lines.
   - `opening(spec, auth)`, the URL;
   - `inProcess()` / `openPrivate()`;
   - `bulkLoad()`, which absorbs `DuckDbAppenderLoad`;
-  - `cells()`, which absorbs `DuckDbCells`;
+  - `cells()`, which absorbs `DuckDbCells`. Postgres needs one too: pgjdbc hands a jsonb cell back as its `PGobject`,
+    which nothing turns into text, so `testConcatenateTypeInference` stays pinned on Postgres until it exists
+    (2026-10-12; converting it in the dialect's `normalize` broke the Postgres parity harness, which reads the object);
   - `heldRaise(Connection)` for MariaDB and MySQL; the SQL text comes from the dialect;
   - `inMemoryDeclaration()`, used by `StorelessRuntime` and `CreateClass`.
   - H2's private URL and its `H2Settings` suffix are spelled once, in H2's connector.
+  - ClickHouse's connector carries what its burn-down put on the test harness's URL (2026-10-12,
+    `docs/CLOUD_BACKENDS_PCT_2026_10_11.md` §19.1): the raised `max_query_size` and AST limits on every connection,
+    and, on a system connection, an HTTP session of its own (`session_id`), where its temporary tables live.
+    Two PCT tests pass only through these (`testFormatFloat`, getAll's `testBasic`; their ledgers say so). The
+    session needs more than the harness gives it (PR #34's review, 2026-10-13): `SystemDatabase.routeFor` keeps it
+    for the model's life, but the server ends it after `session_timeout` idle (then every system query fails
+    "unknown table"); it takes one statement at a time (SESSION_IS_LOCKED); and closing the JDBC connection does not
+    end it, so its tables outlive the model by up to an hour.
 - **`Sessions`' five per-concern switches collapse into `Connectors.of(type)`.**
   - `ConnectionResolver`'s `Opening` switch is a capability in disguise (`Named` means H2, `Held` means DuckDB or
     SQLite); it moves onto the connector.

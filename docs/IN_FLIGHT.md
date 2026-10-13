@@ -173,7 +173,23 @@ with the compiler's plan/execution split**, in this order:
    two tests now use too) and `gates/BUILD.bazel` (the new test's lane). Python's `create_class`, `create_association`
    and `create_data_space` are B4: twin TypeScript and Python libraries (the program's §5 B4; first shapes parked on
    branch `datacube/python-model-parked`). **The program is now a runbook** (rewritten 2026-10-13): every step's design,
-   files, proof and reviews, and the order of the pull requests (§6), the next being G1 + G5. **Step 2's second landing announced 2026-10-11 (rule 5; branch `datacube-m3`; the design's §15.6a,
+   files, proof and reviews, and the order of the pull requests (§6), the next being G1 + G5. **The rest of the
+   program is being built stacked on one branch, `datacube/python-parity`, pushed once with one CI run (the user,
+   2026-10-13: "make sure you stack the PRs so can push everything together").** Built and reviewed there so far: G5 +
+   G1 (Python parity), B4 (into a project: the new `model-changes/` package and `legend_lite/model.py`), D's first part
+   (a grid's export one core). Files beyond this line's own so far: `MODULE.bazel` (the iceberg and avro pins),
+   `core/BUILD.bazel` (`//core:server` visible to `//python`, one line), `tools/platforms/defs.bzl` (a comment),
+   `gates/BUILD.bazel`, `sdlc-client/src/{client,project-text,index}.ts` and its conformance test (a 204 save answers no
+   revision; `projectText` moved there -- the Studio line's, approved by it), each reviewed by its owner. **B5 announced
+   2026-10-13 (same branch): saved queries on one implementation.** Files: `core/src/main/java/com/legend/server/
+   SavedQueries.java` split from its storage -- the rules over a records interface (files on the server and in Python's
+   native library, records the page passes in the tab), the rules and records a library of their own over `//json` and
+   `//base` only, so they compile to WebAssembly; `core/BUILD.bazel` (that library); a new TeaVM module for the tab's
+   query store; `query-store/src` (the store in the page answered by that module, `local-server.ts`'s port deleted --
+   the Studio line's, reviewed by it); `native/` (`lite_saved_queries` over a folder, as `lite_sdlc_handle` is);
+   `python/` (Python serves `/api/pure/v1/query` from `ll.home()/queries` under the folder's lock); `datacube/` and
+   `query/demo/main.ts` (the store's factory). Reviews: the Studio line (query-store, query), the Compiler Rewrite line
+   (the BUILD files, the TeaVM target), an audit; the acceptance test is the Studio line's L1 saved-query differential. **Step 2's second landing announced 2026-10-11 (rule 5; branch `datacube-m3`; the design's §15.6a,
    agreed with the user): a cross-area edit in `core/`** -- the route renamed and two more beside it,
    `/api/lite/v1/model/createClass` (was `/api/lite/v1/relational/promoteRelationToModel`), `createAssociation`,
    `createDataSpace`, one atomic writer under them. Core files: `core/src/main/java/com/legend/server/`
@@ -983,6 +999,17 @@ carrier JSON <- VARCHAR); five suite classes and `ChannelBLane`'s pins.
 plan by outcome; `ArchitectureTest` registers its two tallies, dated); `spec/.../rcorpus/MinimalCorpus.java`
 attributes it per test; `tools/census/primitive_map.py` and `primitive_cover.py` (README section 3). The corpus needs
 244 primitives; 48 PCT never runs anywhere; 77 corpus tests carry all 244.
+**Landed 2026-10-13 (96e49c0, PR neema2/legend-lite#34, pushed to main at the user's request; main's run 38349639460
+green on every job; GATES "ClickHouse and Postgres burned down").** The ClickHouse and Postgres burn-downs (own pins
+31 -> 4 and 75 -> 9), `SqlExpr.OrderedListAgg` typed as a list, and the dialect plan's handoff. Files beyond the
+entries above: `sql/dialect/ClickHouse.java` and `Postgres.java` (the burn-downs), `SQLite.java`, `MariaDb.java` and
+`BigQuery.java` (a text list's LITERAL cast an identity), `lowering/Scalars.java`, `sql/SqlExpr.java`, `sql/Json.java`
+(an integer past a Long), `exec/SqlTypeCensus.java` (a map's entries delivered as an ARRAY, BigQuery and Postgres only),
+`testing/.../EmbeddedClickHouse.java`, `PctBackend`; guard edits, each dated: `DialectBoundaryTest` (`SqlTypeCensus`
+2 -> 3), `PctCensusGate` (Postgres's wire ceilings), `ChannelBLane`'s floors, the eight ClickHouse and Postgres ledgers;
+`ClickHouseDialectTest` (new). The independent review's blocker and should-fix findings were fixed before the landing.
+**The dialect consolidation program** (`docs/DIALECT_LEAK_CENSUS_AND_PLAN_2026_10_12.md`, §0 "Start here") starts
+from 96e49c0; it is not started. It touches every file under `sql/dialect/`: announce it here first.
 **Next** (the user's order): the corpus harness on any database, built for speed (§20: the fixture seeded once,
 packages in parallel, every round trip counted) -- Postgres first, then the 77 on every lane, then the whole corpus
 on Snowflake, Databricks and BigQuery; then MongoDB, Elasticsearch, SingleStore (the plan's §2).
