@@ -59,25 +59,36 @@ class Grids(unittest.TestCase):
         self.assertIn('GROUP BY', view.sql.upper())
 
     def test_a_grid_exports_as_its_export_menu_makes_the_file(self):
-        # the screen's own core (export-render.ts), run headless: each format DataCube's Export menu offers
-        grid = self.page.grid(TRADES, name='trades_exported', rows=['region'], measures={'qty': 'sum'})
-        csv = grid.export('csv')
-        self.assertIsInstance(csv, str)
-        header = csv.splitlines()[0]
+        # the screen's own core (export-render.ts), run headless: each format DataCube's Export menu offers, with the
+        # grid's formats (a sum past a thousand, written with its separator where a person reads it) and its heatmap
+        import csv
+        import io
+        import pandas as pd
+        frame = pd.DataFrame({'region': ['EMEA', 'EMEA', 'APAC'], 'qty': [1200, 34, 5000]})
+        grid = self.page.grid(frame, name='trades_exported', rows=['region'], measures={'qty': 'sum'})
+        grid.configure({'columns': {'qty': {'heatmap': {'from': '#ffffff', 'to': '#ff0000'}}}})
+        # CSV: the raw values, each group's sum on its own row
+        rows = list(csv.reader(io.StringIO(grid.export('csv'))))
+        header, body = rows[0], rows[1:]
         self.assertIn('qty', header)
-        for region, qty in TRADES.groupby('region').qty.sum().items():
-            self.assertIn(f'{region}', csv)
-            self.assertIn(str(qty), csv)
+        region, qty = header.index('region'), header.index('qty')
+        self.assertEqual({r[region]: r[qty] for r in body}, {'EMEA': '1234', 'APAC': '5000'}, rows)
+        # formatted where a person reads it: the separator, as the screen draws it
+        text, html = grid.export('text'), grid.export('html')
+        self.assertIn('1,234', text)
+        self.assertIn('5,000', html)
+        # the heatmap's colours, as the grid draws them: the top of the scale its `to`
+        self.assertRegex(html.lower(), r'background(-color)?:\s*(#ff0000|rgb\(255,\s*0,\s*0\))')
         self.assertTrue(grid.export('excel').startswith(b'PK'), 'a workbook is a zip')
         self.assertTrue(grid.export('pdf').startswith(b'%PDF'))
-        self.assertIn('<table', grid.export('html'))
-        self.assertIn('qty', grid.export('text'))
         with self.assertRaisesRegex(ValueError, "'csv', 'excel', 'html', 'text' or 'pdf'"):
             grid.export('docx')
         import tempfile
         with tempfile.TemporaryDirectory() as folder:
-            written = grid.export('excel', to=Path(folder) / 'trades.xlsx')
-            self.assertEqual(written.read_bytes()[:2], b'PK')
+            self.assertEqual(grid.export('excel', to=Path(folder) / 'trades.xlsx').read_bytes()[:2], b'PK')
+            # the file's bytes as the export wrote them, on every system (CSV's own CRLF kept, never doubled)
+            written = grid.export('csv', to=Path(folder) / 'trades.csv')
+            self.assertEqual(written.read_bytes(), grid.export('csv').encode('utf-8'))
 
     def test_a_filter_and_a_calculated_column_reach_the_relation_and_its_rows(self):
         grid = self.page.grid(TRADES, name='trades_shaped')

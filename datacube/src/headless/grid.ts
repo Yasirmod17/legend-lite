@@ -157,8 +157,8 @@ export async function gridExport(spec: GridSpec, kind: ExportKind): Promise<stri
       formats: columnFormats(config, state.snapshot, state.snapshot, view), formatters: new FormatterCache(),
       cellBackground: (leaf, row, value) => heatmapColour(heatmaps, view.treeRows, leaf, row, value), at: new Date(),
     });
-    const text = typeof file.content === 'string';
-    return JSON.stringify({ name: file.name, mime: file.mime, text,
-      content: typeof file.content === 'string' ? file.content : base64(file.content) });
+    const { content } = file;
+    return JSON.stringify({ name: file.name, mime: file.mime, text: typeof content === 'string',
+      content: typeof content === 'string' ? content : base64(content) });
   });
 }

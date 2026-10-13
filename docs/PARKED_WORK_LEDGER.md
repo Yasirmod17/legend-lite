@@ -886,7 +886,8 @@ what stands alone.
 
 **When.** With F1 (dashboards on classes), which reworks the board.
 
-**Anchor.** `PARK-32` in `datacube/src/headless/grid.ts` (`gridExport`).
+**Anchor.** `PARK-32` in `datacube/src/headless/grid.ts` (`gridExport`) (ParkedWorkLedgerTest reads core only; checked
+by hand).
 
 ## PARK-33 — a saved query is not opened as a grid on Python's page
 

@@ -457,10 +457,8 @@ class Grid(Tile):
         if to is None:
             return content
         path = Path(to)
-        if isinstance(content, str):
-            path.write_text(content, encoding='utf-8')
-        else:
-            path.write_bytes(content)
+        # the bytes as the export wrote them: CSV's own CRLF, no newline translated on any system
+        path.write_bytes(content.encode('utf-8') if isinstance(content, str) else content)
         return path
 
     def create_class(self, name: str | None = None, *, package: str | None = None,

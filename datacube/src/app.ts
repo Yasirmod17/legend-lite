@@ -66,7 +66,9 @@ import {
 } from './ui/alert.ts';
 import { pivotLabel, type PivotColumn } from './query.ts';
 import type { ExportPage } from './export-model.ts';
-import { columnFormats, heatmapColour, heatmapSetting, measureHeatmaps, renderExport, type Heatmap } from './export-render.ts';
+import {
+  columnFormats, heatmapColour, heatmapSetting, measureHeatmaps, renderExport, type ExportedFile, type ExportKind, type Heatmap,
+} from './export-render.ts';
 import { cubeScopeOf, newCubeScope } from './ui/scope.ts';
 import type { CubePage, ChartSource, SpawnedGrid, SpawnOptions } from './page/cube-page.ts';
 import { PAGE_CUBE, oneSheet, pageToJson, writePage, type ChartView, type PageDocument, type PageViews } from './page-document.ts';
@@ -2622,11 +2624,7 @@ export class CubeApp {
    * names an export: the title and the moment
    * (`exportFileName`), so a second export never overwrites the first.
    */
-  #render(kind: 'csv' | 'excel' | 'html' | 'text' | 'pdf'): {
-    name: string;
-    mime: string;
-    content: string | Uint8Array;
-  } | null {
+  #render(kind: ExportKind): ExportedFile | null {
     const view = this.#view;
     const model = this.#grid.columns;
     if (!view || !model) return null;
@@ -2672,7 +2670,7 @@ export class CubeApp {
    * mailer when it has one, else upstream's way -- an unsent `.eml`
    * draft, downloaded, that opens in the user's own mail client.
    */
-  async #email(kind: 'csv' | 'excel' | 'html' | 'text' | 'pdf'): Promise<void> {
+  async #email(kind: ExportKind): Promise<void> {
     const rendered = this.#render(kind);
     if (!rendered) return;
     const send = this.#options.email;
