@@ -423,8 +423,9 @@ describe('nothing is built and left unreachable', () => {
   // core's own entry points (renderExport, columnFormats, measureHeatmaps, heatmapColour), checked in app.ts itself
   const IN_EXPORT = new Set(['./export-rich.ts', './style.ts', 'heatColour(', 'columnRange(', 'exportTable(', 'toXlsx(',
     'toHtml(', 'toPlainText(', 'toPdf(', 'exportCsv(']);
+  const CORE = './export-render.ts';
   const product = (part: string): boolean => (IN_EXPORT.has(part.replace(/^from '|'$/g, ''))
-    ? EXPORT.includes(part) && APP.includes("from './export-render.ts'")
+    ? EXPORT.includes(part) && APP.includes(`from '${CORE}'`)
     : APP.includes(part));
 
   const REACHABLE: readonly [string, string][] = [
