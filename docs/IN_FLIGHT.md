@@ -155,7 +155,19 @@ with the compiler's plan/execution split**, in this order:
    checks, main's own 38327366349 green; GATES "DataCube one app, steps 1 and 2 and PlanAndRun").** Step 3 (Python's
    model home: the SDLC and Depot from the same Java in the native library) touches `sdlc-server/`'s BUILD (the Studio
    line's, reviewed by it) as well as `datacube/`, `python/` and `native/`, and is announced here before it is built;
-   step 5 (Studio and Query started from Python) is built with the Studio line. Python's `create_class`, `create_association` and `create_data_space` wait for its step 3 (parked on
+   step 5 (Studio and Query started from Python) is built with the Studio line. **The rest of the
+   program is `docs/ONE_PLATFORM_PROGRAM_2026_10_12.md`** (agreed 2026-10-12: twin hosts, one implementation per store,
+   one engine path, legend-lite as a drop-in legend-engine; its phase L taken by the Studio line). B1 (the model actions
+   over services) and B2 (the page's settings kept by Python) are built on branch `datacube/one-app-3`. **B3 announced
+   2026-10-12 (same branch): Python's model home, the SDLC and the Depot from the same Java in the native library.**
+   Files: `sdlc-server/BUILD.bazel` (`GitStorage` its own target; `:rules` visible to `//native`),
+   `sdlc-server/grammar/BUILD.bazel` and `depot-server/BUILD.bazel` (visible to `//native`) -- the Studio line's,
+   reviewed by it, and by the Compiler Rewrite line as Bazel; `native/BUILD.bazel` (`:entry` gains them) and a new
+   `native/src/main/java/com/legend/nativelib/ModelHome.java` (`lite_sdlc_handle`, `lite_depot_handle`: the rules over
+   `GitStorage` in `ll.home()/projects`, as `SdlcPage` and `SdlcServer` wire them); `python/` (the engine serves
+   `/sdlc/api` and `/depot/api` under its token and a lock held across processes; a page-sent model planned only when
+   every table it declares is one Python serves); `datacube/` (Python's pages' model home service). No edit in
+   `sdlc-server/src`, `depot-server/src` or `core/`. Python's `create_class`, `create_association` and `create_data_space` wait for its step 3 (parked on
    branch `datacube/python-model-parked`). **Step 2's second landing announced 2026-10-11 (rule 5; branch `datacube-m3`; the design's §15.6a,
    agreed with the user): a cross-area edit in `core/`** -- the route renamed and two more beside it,
    `/api/lite/v1/model/createClass` (was `/api/lite/v1/relational/promoteRelationToModel`), `createAssociation`,
