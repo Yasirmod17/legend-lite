@@ -1326,7 +1326,8 @@ copy_to_directory(
     name = "vendor",
     srcs = [
         "//engine-client:node_modules/@duckdb/duckdb-wasm",
-        # its extensions, pinned (MODULE.bazel): ICU, which the session's time zone loads
+        # its extensions, pinned (MODULE.bazel): ICU for the session's time zone; JSON, Parquet and httpfs when a
+        # page reads such a file
         "//engine-client:duckdb_extensions",
         "//legend-art:fonts",
         "//query-store:page",
@@ -1666,10 +1667,19 @@ browser_test(
     wasm = True,
 )
 
+# the browser tests' guard bites (tools/browser/pinned-chromium.mjs): a page cannot reach extensions.duckdb.org, under
+# either of Playwright's launches; on every platform, a few seconds
+browser_test(
+    name = "browser_guard_test",
+    data = [":node_modules/playwright"],
+    entry_point = "test/browser-guard.mjs",
+)
+
 # every browser test of this package (P4-09's //:browser names it)
 test_suite(
     name = "browser",
     tests = [
+        ":browser_guard_test",
         ":verify_features_test",
         ":verify_remote_test",
         ":verify_smoke_test",

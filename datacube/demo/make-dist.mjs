@@ -36,8 +36,8 @@ for (const f of ['classes.wasm', 'wasm-gc-module-runtime.js',
 }
 // the page's other modules, each fetched the first time the page asks for it: the saved stores' rules (vendor/queries,
 // the program's B5 and B6), the in-page SDLC (vendor/sdlc), the warehouse's API (vendor/warehouse, C3: the
-// single-user app signs in through it), and DuckDB's extensions (vendor/duckdb-extensions: ICU, which the session's
-// time zone loads)
+// single-user app signs in through it), and DuckDB's extensions (vendor/duckdb-extensions: ICU for the session's time
+// zone; JSON, Parquet and httpfs when a page reads such a file)
 for (const d of ['queries', 'sdlc', 'warehouse', 'duckdb-extensions']) {
   await cp(v(d), join(DIST, 'vendor', d), { recursive: true });
 }

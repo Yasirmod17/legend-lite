@@ -173,15 +173,27 @@ _DUCKDB_EXTENSIONS = [
     "parquet",
 ]
 
+# The DuckDB version this DuckDB-WASM asks a repository for (package.json's @duckdb/duckdb-wasm 1.33.1-dev57.0 is
+# DuckDB v1.5.4): MODULE.bazel's URLs spell it too, and move with it (a .bzl file cannot be loaded there). A stale one
+# fails loudly: the tab asks for another folder, and ICU's load fails every page's start.
+_DUCKDB_VERSION = "v1.5.4"
+
+# one per extension and browser build
+_DUCKDB_EXTENSION_BUILDS = [
+    (extension, build)
+    for extension in _DUCKDB_EXTENSIONS
+    for build in ("wasm_eh", "wasm_mvp")
+]
+
 [copy_file(
     name = "duckdb_extension_" + extension + "_" + build,
     src = "@duckdb_wasm_" + extension + "_extension_" + build + "//file",
-    out = "duckdb-extensions/v1.5.4/" + build + "/" + extension + ".duckdb_extension.wasm",
-) for extension in _DUCKDB_EXTENSIONS for build in ("wasm_eh", "wasm_mvp")]
+    out = "duckdb-extensions/" + _DUCKDB_VERSION + "/" + build + "/" + extension + ".duckdb_extension.wasm",
+) for extension, build in _DUCKDB_EXTENSION_BUILDS]
 
 filegroup(
     name = "duckdb_extensions",
-    srcs = [":duckdb_extension_" + extension + "_" + build for extension in _DUCKDB_EXTENSIONS for build in ("wasm_eh", "wasm_mvp")],
+    srcs = [":duckdb_extension_" + extension + "_" + build for extension, build in _DUCKDB_EXTENSION_BUILDS],
     visibility = [
         "//datacube:__pkg__",
         "//query:__pkg__",

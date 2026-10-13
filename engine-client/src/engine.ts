@@ -69,8 +69,8 @@ export interface QueryEngine {
  * written to it -- as legend-lite's server sets every session up as it opens it, and Python's Frames their own. Left
  * alone, DuckDB-WASM takes the browser's zone (a fixed offset of it at that), and `now()`, `today()` and a zoned value
  * answer otherwise than on the server. `setup` is the planner's answer for the database's type (WasmGrammar's
- * sessionSetup, DataCube's TableModels'). Every app's tab DuckDB is set up by it: startDuckDbInTab (Query's, Studio's)
- * and DataCube's browser services.
+ * sessionSetup, DataCube's TableModels'). Every app's tab DuckDB is set up by it, in startDuckDbInTab (the one start
+ * of a tab's DuckDB).
  */
 export async function setUpSession(engine: Pick<QueryEngine, 'run'> & { readonly databaseType: string },
   setup: (databaseType: string) => Promise<readonly string[]>): Promise<void> {

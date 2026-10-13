@@ -306,12 +306,14 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
   // the deployment's settings (config.json, the address's overrides), read once: the services hold what they say
   const configured = pageConfig();
   configured.catch(() => {});
-  status.textContent = 'starting DuckDB…';
+  status.textContent = 'starting DuckDB and the planner…';
 
   // the one start of a tab's DuckDB (engine-client's startDuckDbInTab): its files and extensions from ./vendor/, its
-  // session set up by the planner's rules before anything uses it
+  // session set up by the planner's rules before anything uses it. So the database is ready once the planner is too:
+  // DuckDB's start still overlaps the planner's (above), but the sample's rows and a remote mount below come after
+  // both -- before a value is written, the session is the planner's (C1), not the browser's zone.
   const duck = await startDuckDbInTab('./vendor/', (databaseType) => engineReady.then((p) => p.tables.sessionSetup(databaseType)));
-  performance.mark('dc:duckdb-ready');
+  performance.mark('dc:database-ready');
 
   // A REMOTE SOURCE, when one is named.
   //

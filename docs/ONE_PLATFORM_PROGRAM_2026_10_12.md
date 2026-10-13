@@ -1023,7 +1023,7 @@ From `docs/DATACUBE_MODEL_DESIGN_2026_10_10.md` §13. Each lands once, in the on
     - **The problem.** As each page opened, DuckDB-WASM downloaded extensions from extensions.duckdb.org:
       - ICU, when the session's time zone was set (`setUpSession`, every tab's DuckDB since C1);
       - JSON for a JSON file;
-      - Parquet for a remote Parquet file;
+      - Parquet for a Parquet file;
       - httpfs for a remote file.
 
       The apps, and a desk's browser tests, needed that site up; behind a firewall, a page could not open. CI passed
@@ -1036,10 +1036,27 @@ From `docs/DATACUBE_MODEL_DESIGN_2026_10_10.md` §13. Each lands once, in the on
     - **One start of a tab's DuckDB:** engine-client's `startDuckDbInTab`, which now returns the database too. DataCube's
       boot, and the stress, remote and Python-engine test pages, started theirs with copies of their own; each now calls
       it. Its session is set up there, and `browserServices` no longer sets it up again.
-    - **The guard:** every browser test makes extensions.duckdb.org unresolvable (`tools/browser/pinned-chromium.mjs`
-      wraps the test's own Playwright's `launch`). A page that needs another extension fails there, as it would behind
-      a firewall. Measured: every browser lane (`//gates:datacube`, `//gates:ui`, `//gates:sdlc`) and the warehouse lane's
-      browser tests, 186 tests, pass with it.
+    - **What that changed in DataCube's start:** the session's setup is the planner's, so the database is ready once
+      the planner is too. DuckDB's start still overlaps the planner's, but the sample's rows and a `?remote=` mount now
+      come after both instead of beside the planner's load: before a value is written, the session is set up (C1's
+      rule, which the old order broke). The mark is `dc:database-ready`.
+    - **The guard:** every browser test makes extensions.duckdb.org unresolvable. `tools/browser/pinned-chromium.mjs`
+      wraps both of Playwright's launches for the Playwright the test's entry script resolves beside itself;
+      `//site:verify_test`, which loads DataCube's, calls `hermetic` on it by hand. A Chromium flag, not Bazel's
+      block-network tag, which works only under a sandbox (Windows has none). A page that needs another extension fails
+      there, as it would behind a firewall.
+    - **Measured:**
+      - The guard bites: with the tab's `ownExtensions` taken out, `//studio:verify_test` failed in 4 s on "Failed to
+        load 'https://extensions.duckdb.org/v1.5.4/wasm_eh/icu.duckdb_extension.wasm'", and `//query:verify_test`
+        failed every step. `//datacube:browser_guard_test` keeps it so: a page under either launch must meet an unknown
+        host.
+      - All 19 browser tests pass under it. They ran with the lanes `//gates:datacube`, `//gates:ui` and `//gates:sdlc`,
+        plus the warehouse lane's browser tests: 186 tests in all.
+      - Only the `wasm_eh` files are loaded by a test: headless Chromium has exception handling, so DuckDB-WASM always
+        picks that build. The `wasm_mvp` files are pinned by content and laid out the same way.
+    - **On a DuckDB-WASM bump:** three places move together: `engine-client/package.json`, `_DUCKDB_VERSION` in
+      `engine-client/BUILD.bazel`, and the URLs in `MODULE.bazel`. A stale one fails loudly: the tab asks for another
+      folder, ICU does not load, and every page's start fails.
 
 ### H. Publishing
 

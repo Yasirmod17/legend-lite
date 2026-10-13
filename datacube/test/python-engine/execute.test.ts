@@ -115,7 +115,7 @@ before(async () => {
   await duck.run(`CREATE TABLE ${t.name} (${t.columns.map(([n, ty]) => `"${n}" ${ty}`).join(', ')})`, 0);
   await duck.run(`INSERT INTO ${t.name} VALUES ${served.rows.map((r) => `(${r.map(sqlValue).join(', ')})`).join(', ')}`, 0);
   // the zone a browser in Kathmandu gives DuckDB-WASM, then the session set up as every tab's DuckDB is as it opens
-  // (engine-client's setUpSession, which startDuckDbInTab and DataCube's services run): UTC, the server's
+  // (engine-client's setUpSession, which startDuckDbInTab runs): UTC, the server's
   await duck.run("SET TimeZone = 'Asia/Kathmandu'", 0);
   await setUpSession(duck, (databaseType) => grammar.sessionSetup(databaseType));
   tab = new BrowserEngine(grammar, duck, 'this browser');

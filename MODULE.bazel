@@ -498,7 +498,9 @@ http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_
 # Parquet for a Parquet file, httpfs for a remote one (the Compiler Rewrite line's finding, 2026-10-13: a desk's gate
 # and the apps needed that site up). Pinned 2026-10-13, as the user's rule for Python's extensions (hermetic in the
 # build, nothing downloaded where legend-lite runs); every browser test makes that site unresolvable
-# (tools/browser/pinned-chromium.mjs), so a page needing another fails.
+# (tools/browser/pinned-chromium.mjs), so a page needing another fails. On a DuckDB-WASM bump, three places move
+# together: engine-client/package.json, _DUCKDB_VERSION in engine-client/BUILD.bazel (the layout), and these URLs
+# (a .bzl file cannot be loaded here).
 [http_file(
     name = "duckdb_wasm_" + extension + "_extension_" + build,
     downloaded_file_path = extension + ".duckdb_extension.wasm",
