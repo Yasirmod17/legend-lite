@@ -4910,9 +4910,9 @@ public final class SqlToPure {
         int[] toChars = to.value().codePoints().toArray();
         Map<Integer, String> replacement = new LinkedHashMap<>();
         for (int i = 0; i < fromChars.length; i++) {
-            replacement.putIfAbsent(fromChars[i], i < toChars.length ? Character.toString(toChars[i]) : "");
+            replacement.putIfAbsent(fromChars[i], i < toChars.length ? character(toChars[i]) : "");
         }
-        replacement.entrySet().removeIf(e -> e.getValue().equals(Character.toString(e.getKey())));
+        replacement.entrySet().removeIf(e -> e.getValue().equals(character(e.getKey())));
         List<Map.Entry<Integer, String>> order = new ArrayList<>();
         Set<Integer> pending = new java.util.LinkedHashSet<>(replacement.keySet());
         while (!pending.isEmpty()) {
@@ -4934,11 +4934,17 @@ public final class SqlToPure {
         return strict(Kind.STRING, List.of(args.get(0)), v -> {
             ValueSpecification result = v.get(0);
             for (Map.Entry<Integer, String> e : order) {
-                result = call("replace", result, new CString(Character.toString(e.getKey())),
+                result = call("replace", result, new CString(character(e.getKey())),
                         new CString(e.getValue()));
             }
             return result;
         });
+    }
+
+    /** The one character {@code codePoint} as text ({@code Character.toString(int)} is not in TeaVM's class
+     *  library, which compiles this package for the browser). */
+    private static String character(int codePoint) {
+        return new String(Character.toChars(codePoint));
     }
 
     /** {@code split_part(s, delimiter, n)} of a constant delimiter and a constant n from 1 to 5: the n-th field of s,
