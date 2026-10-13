@@ -9,7 +9,9 @@
 // Run, after `bazel build //python:wheel` and installing it into a virtual environment, with Python serving:
 //   LEGEND_LITE_HOME=<empty folder> <venv>/bin/python -c "import json, time, legend_lite as ll; \
 //     print(json.dumps({'query': ll.query(browser=False), 'studio': ll.studio(browser=False)}), flush=True); time.sleep(1e6)"
-// then, with Bazel's node (22.16) and DataCube's Playwright:
+// (it prints a "Legend Query: ..." and a "Legend Studio: ..." line first, then the JSON), then, with Bazel's node
+// (22.16) and DataCube's Playwright (`bazel build //datacube:node_modules` for bazel-bin/datacube/node_modules; its
+// Chromium, Playwright's own download, not the chain's pinned headless shell):
 //   node docs/one-platform/evidence/e-apps-on-python.mjs '<the printed JSON>' "$PWD/bazel-bin/datacube/node_modules/"
 // Measured 2026-10-13 (Apple silicon laptop): all seven checks ok -- the demo published in 292 ms, the Depot's four
 // projects listed -- with no page error and no failed call, but the last run's

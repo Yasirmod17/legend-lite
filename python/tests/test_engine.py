@@ -709,8 +709,10 @@ class AppsServed(unittest.TestCase):
         finally:
             connection.close()
 
-    def cookie(self, token=None, name=None):
-        return {'Cookie': f'{name or self.server.cookie}={token or self.server.token}'}
+    def cookie(self, token=None, name=None, site='same-origin'):
+        # the page's own call, as the browser marks it
+        return {'Cookie': f'{name or self.server.cookie}={token or self.server.token}',
+                **({'Sec-Fetch-Site': site} if site is not None else {})}
 
     def test_each_apps_files_under_its_name(self):
         for app in ('query', 'studio'):
@@ -756,6 +758,37 @@ class AppsServed(unittest.TestCase):
         self.assertEqual(self.call('GET', '/sdlc/api/projects', self.cookie())[0], 200)
         self.assertEqual(self.call('GET', '/sdlc/api/projects')[0], 401)
 
+    def test_the_cookie_admits_the_pages_own_calls_only(self):
+        # a browser sends a host's cookies to its every port (SameSite or not): a page of another server on this
+        # machine sends it too, and is refused (the audit of E)
+        user = '/api/server/v1/currentUser'
+        for site in ('same-site', 'cross-site', 'none'):
+            self.assertEqual(self.call('GET', user, self.cookie(site=site))[0], 401, site)
+        self.assertEqual(self.call('POST', '/api/pure/v1/query/search', self.cookie(site='same-site'), '{}')[0], 401)
+        # a browser that marks no call: its Origin decides
+        own = f'http://127.0.0.1:{self.port}'
+        self.assertEqual(self.call('GET', user, {**self.cookie(site=None), 'Origin': own})[0], 200)
+        for origin in (f'http://127.0.0.1:{self.port + 1}', 'null', None):
+            headers = {**self.cookie(site=None), **({'Origin': origin} if origin else {})}
+            self.assertEqual(self.call('GET', user, headers)[0], 401, origin)
+
+    def test_another_servers_cookies_beside_it(self):
+        # the header carries every local server's cookies: one this engine cannot read, or one of its own name with
+        # another value, leaves its own readable
+        jar = self.cookie()
+        for others in ('x=a b', 'x={"a":1}', f'{self.server.cookie}=stale', 'bare'):
+            for header in (f'{others}; {jar["Cookie"]}', f'{jar["Cookie"]}; {others}'):
+                self.assertEqual(self.call('GET', '/api/server/v1/currentUser', {**jar, 'Cookie': header})[0], 200, header)
+
+    def test_an_apps_path_to_another_host_is_refused_once(self):
+        with socket.create_connection(('127.0.0.1', self.port), timeout=30) as raw:
+            raw.sendall(b'GET /query/demo/config.json HTTP/1.1\r\nHost: evil.example\r\n\r\n')
+            said = b''
+            while chunk := raw.recv(65536):
+                said += chunk
+        self.assertTrue(said.startswith(b'HTTP/1.0 403') or said.startswith(b'HTTP/1.1 403'), said[:80])
+        self.assertEqual(said.count(b'HTTP/1.'), 1, said)
+
     def test_lites_own_routes_answered_as_its_server_answers_them(self):
         model = json.dumps({'_type': 'text', 'code': 'Class demo::A { x: Integer[1]; y: Nope[1]; }'})
         status, headers, body = self.call('POST', '/api/lite/v1/compilation/compile',
@@ -774,6 +807,11 @@ class AppsServed(unittest.TestCase):
                 url = open_app(browser=False)
                 web = datacube._session._web
                 self.assertEqual(url, f'{web.url}/{app}/demo/index.html?token={web.token}')
+            # a cube shown and closed leaves the web server to the apps' tabs, which say nothing when they close
+            cube = ll.show(pd.DataFrame({'x': [1]}), browser=False, inline=False)
+            cube.close()
+            self.assertIs(datacube._session._web, web)
+            self.assertEqual(sorted(datacube._session.apps), ['query', 'studio'])
         finally:
             if datacube._session._web is not None:
                 datacube._session._web.close()

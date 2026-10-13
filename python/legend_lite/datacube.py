@@ -160,6 +160,9 @@ class _Session:
         self.cubes: dict[str, Cube | DataCube] = {}
         # the pages shown, each where it is shown: a tab's or a notebook's
         self.pages: list[PageTab | PageCube] = []
+        # Query's and Studio's links opened (ll.query(), ll.studio()): an app's tab says nothing when it closes, so the
+        # web server stays for it while the process lives
+        self.apps: dict[str, str] = {}
         self._engine: Engine | None = None
         # where the session plans (R3): the planner chosen (``choose_planner``; a server's, the program's G1), or None,
         # Python's own -- chosen for good once the engine is made, and never changed behind its pages
@@ -342,7 +345,7 @@ class _Session:
             self._stop_web_if_unused()
 
     def _stop_web_if_unused(self) -> None:
-        if self._web is not None and not any(isinstance(c, Cube) for c in self.cubes.values()) \
+        if self._web is not None and not self.apps and not any(isinstance(c, Cube) for c in self.cubes.values()) \
                 and not any(isinstance(p, PageTab) for p in self.pages):
             self._web.close()
             self._web = None
@@ -369,12 +372,13 @@ class _Session:
         cube is this process's."""
         with self._lock:
             open_cubes = [c for c in self.cubes.values() if isinstance(c, Cube)] + [p for p in self.pages if isinstance(p, PageTab)]
-        if not open_cubes or _stays():
+            apps = dict(self.apps)
+        if not (open_cubes or apps) or _stays():
             return
         if not self.waits():
             print('the script ended, and its DataCube with it (no cube was opened in a browser)', flush=True)
             return
-        links = '\n  '.join(c.url for c in open_cubes)
+        links = '\n  '.join([c.url for c in open_cubes] + [f'Legend {app.capitalize()}: {url}' for app, url in apps.items()])
         print(f'DataCube is still open at\n  {links}\npress Ctrl-C to finish', flush=True)
         try:
             while True:
@@ -494,8 +498,12 @@ def _app(app: str, browser: bool) -> str:
     """An app's link on this Python's engine: its first load trades the link's token for the cookie its page then
     carries (engine.py, E)."""
     session = _current()
-    web = session.web()
-    url = f'{web.url}/{app}/demo/index.html?token={web.token}'
+    with session._lock:
+        web = session.web()
+        url = f'{web.url}/{app}/demo/index.html?token={web.token}'
+        # the web server kept for it, and a plain script's end waits for it as for a cube
+        session.apps[app] = url
+        session._hook()
     print(f'Legend {app.capitalize()}: {url}', flush=True)
     if browser and webbrowser.open(url):
         session.opened = True

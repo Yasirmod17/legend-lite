@@ -31,7 +31,6 @@ import binascii
 import contextlib
 import functools
 import hmac
-import http.cookies
 import http.server
 import json
 import os
@@ -1210,14 +1209,26 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         return True
 
     def _carries_cookie(self) -> bool:
-        """Whether the request carries the cookie an app's page holds the engine's token in (E)."""
-        jar = http.cookies.SimpleCookie()
-        try:
-            jar.load(self.headers.get('Cookie', ''))
-        except http.cookies.CookieError:
+        """Whether the request carries the cookie an app's page holds the engine's token in (E), sent by that page
+        itself. A browser sends a host's cookies to its every port, SameSite or not (a site is a host, not an origin),
+        so a page of any other server on this machine would send it too: the cookie admits a call only when the browser
+        says the call is the page's own (``Sec-Fetch-Site: same-origin``), or, a browser that says nothing of it, when
+        its ``Origin`` is this engine's. The header is read by hand: it carries every local server's cookies, and
+        ``http.cookies`` drops the whole header at the first value it cannot read."""
+        web = self.server.web
+        token = web.token.encode('utf-8')
+        held = False
+        for part in self.headers.get('Cookie', '').split(';'):
+            name, eq, value = part.partition('=')
+            # each one compared: another server on this machine may have set one of the same name
+            if eq and name.strip() == web.cookie and hmac.compare_digest(value.strip().encode('utf-8'), token):
+                held = True
+        if not held:
             return False
-        held = jar.get(self.server.web.cookie)
-        return held is not None and hmac.compare_digest(held.value.encode('utf-8'), self.server.web.token.encode('utf-8'))
+        site = self.headers.get('Sec-Fetch-Site')
+        if site is not None:
+            return site == 'same-origin'
+        return self.headers.get('Origin') == f'http://{self.headers.get("Host")}'
 
     def do_POST(self) -> None:  # noqa: N802 -- the stdlib's name
         url = urlsplit(self.path)
@@ -1257,7 +1268,9 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         Host naming this machine."""
         url = urlsplit(self.path)
         app = _app_of(url.path)
-        if app is not None and self._admitted(url.path):
+        if app is not None:
+            if not self._admitted(url.path):
+                return
             self.server.answering(self.connection)
             token = parse_qs(url.query).get('token')
             if token is not None:
@@ -1269,7 +1282,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 rest = urlencode([(k, v) for k, v in parse_qsl(url.query, keep_blank_values=True) if k != 'token'])
                 self._send(Answer(303, 'text/plain; charset=utf-8', b'', {
                     'Location': f'{url.path}?{rest}' if rest else url.path,
-                    'Set-Cookie': f'{self.server.web.cookie}={token[0]}; Path=/; HttpOnly; SameSite=Strict',
+                    'Set-Cookie': f'{self.server.web.cookie}={self.server.web.token}; Path=/; HttpOnly; SameSite=Strict',
                 }))
                 return
             if url.path == f'/{app}/demo/config.json':

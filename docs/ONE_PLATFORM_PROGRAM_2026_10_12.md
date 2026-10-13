@@ -632,8 +632,19 @@ engine, as `ll.show()` opens DataCube.
   the token, setting a cookie `legend-lite-<port>` (HttpOnly, SameSite=Strict, Path=/); every private path admits the
   cookie as it admits the Bearer header. The cookie is named by the port because a browser sends a host's cookies to
   every port: two Python engines would otherwise replace each other's. Every `/api/` path is private now, not only
-  pure/v1's. The token passes once in an address on this machine, into the browser's history, and dies with the
-  process. Strict holds where the link is clicked on another site (Jupyter's output, at `localhost:8888`; the Studio
+  pure/v1's.
+- **What the cookie costs, and its guard (E's audit).** SameSite is by host, not by port, so a page of any other server
+  on 127.0.0.1 sends the cookie too. The cookie therefore admits a call only when the browser marks it the page's own
+  (`Sec-Fetch-Site: same-origin`), or, a browser that marks none, when its `Origin` is the engine's. A form or a
+  `no-cors` fetch from another port is refused (`AppsServed`). The header is read by hand: it carries every local
+  server's cookies, and `http.cookies` drops the whole header at the first value it cannot read. What stays: while the
+  browser runs, the token goes in that header to every server on 127.0.0.1 the browser visits, and any of them can
+  overwrite the cookie (the app then answers 401 until the link is opened again). It also passes once in an address,
+  into the browser's history. It dies with the process. A token the apps' own clients carry, as DataCube's does,
+  would end this; it goes to the user with E's landing.
+- **The session keeps the web server for an app.** An app's tab says nothing when it closes, so once `ll.query()` or
+  `ll.studio()` is called, the web server stays while the process lives (closing the last cube no longer stops it),
+  and a plain script's end waits for the app as for a cube. Strict holds where the link is clicked on another site (Jupyter's output, at `localhost:8888`; the Studio
   line's question, measured): the cookie is stored from the cross-site load, the page's files need none, and the
   page's own calls are same-site, so they carry it.
 - **The routes.** `/api/server/v1/currentUser` answers this user (`"this user"`, as the stores name it), and POST
