@@ -172,12 +172,12 @@ async function run(): Promise<void> {
   const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING), new Worker(bundle.mainWorker!));
   await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
   const local = new DuckDbEngine((await db.connect()) as unknown as ArrowishConnection);
+  const planner = new LitePlanner({ ...engine, workerUrl: new URL('planner-worker.js', location.href).href });
+  // set up as every tab's DuckDB is, before anything is written to it: this browser is in New York (python-engine.mjs)
+  await setUpSession(local, (databaseType) => planner.sessionSetup(databaseType));
   await local.run(`CREATE TABLE trades (region VARCHAR, desk VARCHAR, book VARCHAR, year INTEGER, qtr VARCHAR,
     notional DOUBLE, pnl DOUBLE, qty INTEGER)`, 0);
   await local.run(`INSERT INTO trades VALUES ${served.rows.map((r) => `(${r.map(sqlValue).join(', ')})`).join(', ')}`, 0);
-  const planner = new LitePlanner({ ...engine, workerUrl: new URL('planner-worker.js', location.href).href });
-  // set up as the tab sets its DuckDB up (services/browser.ts): this browser is in New York (python-engine.mjs)
-  await setUpSession(local, (databaseType) => planner.sessionSetup(databaseType));
   const tab = new PlanThenRun(planner, local);
 
   await check('every cube case answers the same on Python\'s engine and in the tab', async () => {

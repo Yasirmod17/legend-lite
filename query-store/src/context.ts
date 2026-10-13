@@ -33,7 +33,9 @@ export function contextOf(
   dataSpace: (path: string) => DataSpaceContexts | undefined,
 ): QueryContext {
   const ctx = q.executionContext;
-  if (ctx?._type === 'explicitExecutionContext' && ctx.mapping && ctx.runtime) {
+  if (ctx?._type === 'explicitExecutionContext') {
+    if (!ctx.mapping) throw new Error("the query's explicit execution context has no mapping");
+    if (!ctx.runtime) throw new Error("the query's explicit execution context has no runtime");
     return { mapping: ctx.mapping, runtime: ctx.runtime };
   }
   if (ctx?._type === 'dataSpaceExecutionContext' && ctx.dataSpacePath) {

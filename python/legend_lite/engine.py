@@ -83,7 +83,8 @@ _CUBES = _QUERIES + '/dataCube'
 # run on its DuckDB, in one call; and the planner protocol's other requests, answered as the tab's worker answers them
 _PLAN_AND_RUN, _PLANNER = '/plan-and-run.json', '/planner.json'
 # the planner protocol's kinds a page on Python sends to planner.json (DataCube's LitePlanner): every kind but the
-# page's own (hold, release) and those only another host's apps send (Query's unheld plan, execute's halves, a warm)
+# page's own (hold, release) and those only another host's apps send (Query's unheld plan, execute's halves, a warm);
+# the held kinds plan over the models Python serves only
 _PAGE_KINDS = frozenset({'plan', 'relationType', 'tableModel', 'catalogColumnsSql', 'planJson', 'pureV1', 'testData',
                          'sessionSetup'})
 # the planner's answer to the plan a page's rows are of, in their Arrow schema's metadata
@@ -821,8 +822,8 @@ class Engine:
         answered by the native library as the tab's worker answers them (legend_lite._planner): a held kind names its
         model by its text, never a handle (no handle crosses hosts, §15.3), and is answered against the model Python
         holds of that text. ``hold`` and ``release`` are the page's own, and the kinds a page's planner never sends here
-        (an unheld plan, execute's halves, a warm: Query's and the tab's) are refused, so a page compiles only the
-        models Python serves; none of these runs SQL."""
+        (an unheld plan, execute's halves, a warm: Query's and the tab's) are refused; the held kinds plan over the
+        models Python serves only. None of these runs SQL."""
         try:
             asked = json.loads(body)
         except ValueError:

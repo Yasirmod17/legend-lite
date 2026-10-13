@@ -68,13 +68,6 @@ public final class TabExports {
         return Folded.of(() -> Integer.toString(Boundary.holdModel(model)));
     }
 
-    /** {@link Boundary#releaseModel}: 1, so the call cannot be optimised away. */
-    @JSExport
-    public static int releaseModel(int handle) {
-        Boundary.releaseModel(handle);
-        return 1;
-    }
-
     /**
      * {@link Boundary#releaseModel}, folded: {@code OK\n}, or the failure as the planner protocol's other kinds answer
      * one -- as the native library's {@code lite_release_model} answers it (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C2).

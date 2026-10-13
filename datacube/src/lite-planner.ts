@@ -151,7 +151,6 @@ export class LitePlanner implements Planner, TableModels, ModelWriter {
     return other;
   }
 
-  /** True when the module should run off the main thread. */
   /**
    * One request of the planner protocol, answered by the worker or, in-thread, by the module through the same answer
    * the worker gives (engine-client's planner-answer.ts): one mapping of kinds to exports, wherever the module runs.
@@ -160,6 +159,7 @@ export class LitePlanner implements Planner, TableModels, ModelWriter {
     return this.#useWorker() ? this.#ask(request) : this.#load().then((m) => answerOf(m, request));
   }
 
+  /** True when the module should run off the main thread. */
   #useWorker(): boolean {
     return this.#options.worker !== undefined
       || (this.#options.workerUrl !== undefined && typeof Worker !== 'undefined');

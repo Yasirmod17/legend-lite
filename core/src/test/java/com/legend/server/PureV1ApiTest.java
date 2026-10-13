@@ -298,11 +298,15 @@ class PureV1ApiTest {
         assertEquals(500, PureV1Api.jsonPlan(request, List.of(model + "\n")).status());
         // a plan that is not jsonPlan's: refused, never cast
         assertEquals(500, PureV1Api.jsonAnswer("{\"builder\":5}", "[]").status());
-        // a value's answer, which the server's execute refuses, is refused by both plan halves alike
-        String scalar = "{\"function\":" + PureV1Api.grammarToJsonLambda("|#>{trades::h2::DB.TRADES_SCHEMA.TRADES}#->size()->from(trades::h2::RT)", false).json() + ",\"model\":" + textModel() + "}";
-        for (PureV1Api.Answer refused : List.of(PureV1Api.jsonPlan(scalar, List.of(model)), PureV1Api.arrowPlan(scalar, List.of(model)))) {
-            assertEquals(500, refused.status(), refused.json());
-            assertTrue(refused.json().contains("result's serialization is unprobed"), refused.json());
+        // a value's answer (one value, or a list of them), which the server's execute refuses, is refused by both plan
+        // halves alike
+        for (String value : List.of("|#>{trades::h2::DB.TRADES_SCHEMA.TRADES}#->size()->from(trades::h2::RT)",
+                "|[1, 2]->from(trades::h2::RT)")) {
+            String asked = "{\"function\":" + PureV1Api.grammarToJsonLambda(value, false).json() + ",\"model\":" + textModel() + "}";
+            for (PureV1Api.Answer refused : List.of(PureV1Api.jsonPlan(asked, List.of(model)), PureV1Api.arrowPlan(asked, List.of(model)))) {
+                assertEquals(500, refused.status(), refused.json());
+                assertTrue(refused.json().contains("result's serialization is unprobed"), value + ": " + refused.json());
+            }
         }
 
         String trading = resource("upstream-api/query-app/trading.pure");
