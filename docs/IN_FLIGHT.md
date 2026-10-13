@@ -199,7 +199,16 @@ with the compiler's plan/execution split**, in this order:
    (the server's start and stop out of `lite.test.ts`, for both suites) and `query-store/BUILD.bazel` (visibility to
    `//datacube`) -- the Studio line's; `native/` (`lite_saved_cubes`), `python/` (Python's dataCube routes over
    `ll.home()/pages`, `page.save()`), `datacube/` (the one client), `gates/BUILD.bazel` (the new test's lane). Reviews:
-   the Studio line, the Compiler Rewrite line, an audit. **Step 2's second landing announced 2026-10-11 (rule 5; branch `datacube-m3`; the design's §15.6a,
+   the Studio line, the Compiler Rewrite line, an audit. B6 built and approved there (Studio, Compiler Rewrite, the
+   audit's fixes). **PR 4 announced 2026-10-13 (same branch): C1 + C2 + C4, one engine path.** Files: C1 --
+   `core/src/main/java/com/legend/server/PureV1Api.java` (`jsonPlan`, execute's plan half in the engine's JSON, beside
+   `arrowPlan`, one planning step shared), `wasm/src/main/java/planner/{Boundary,TabExports}.java` (its export),
+   `engine-client/src/legend/{browser-engine,wasm-grammar,planner-answer}.ts` (the tab's execute answered by that Java,
+   its rows the tab's; return type and execution plan through the tab's pure/v1), the callers in `query/demo/main.ts`,
+   `studio/src/app/app.ts` and `studio/test/engine.test.ts`; C2 -- one planner protocol in `engine-client` answered by
+   the tab's worker and `python/legend_lite/_planner.py` (DataCube's, Query's and Studio's planners on it); C4 -- one
+   table of the site's file types, one saved-query context reader (DataCube's and Query's). Reviews: the Plan Gen /
+   Exec Split line (the boundary), the Compiler Rewrite line, the Studio line (Query, Studio), an audit. **Step 2's second landing announced 2026-10-11 (rule 5; branch `datacube-m3`; the design's §15.6a,
    agreed with the user): a cross-area edit in `core/`** -- the route renamed and two more beside it,
    `/api/lite/v1/model/createClass` (was `/api/lite/v1/relational/promoteRelationToModel`), `createAssociation`,
    `createDataSpace`, one atomic writer under them. Core files: `core/src/main/java/com/legend/server/`
