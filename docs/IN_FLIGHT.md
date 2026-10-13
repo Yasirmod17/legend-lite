@@ -228,7 +228,11 @@ with the compiler's plan/execution split**, in this order:
    `query/demo/main.ts` and `query/BUILD.bazel` (the module at `vendor/warehouse/`); `python/` (`legend_lite/warehouse.py`,
    the twin driver; Python signs in, writes and holds a table's model, runs its plans Live and snaps it into its
    DuckDB); `datacube/` (a table opened through its host). Reviews: the Compiler Rewrite line (the warehouse's and the
-   native library's BUILD), the Studio line (Query, engine-client), an audit. **Step 2's second landing announced 2026-10-11 (rule 5; branch `datacube-m3`; the design's §15.6a,
+   native library's BUILD), the Studio line (Query, engine-client), an audit. **Pull requests 1 to 6 landed 2026-10-13**
+   (one fast-forward of the stacked branch; its run 38398000209 green on all 50 jobs; GATES "The program's pull
+   requests 1 to 6"). Files beyond the announcements: `datacube/demo/make-dist.mjs` (the page modules in DataCube's
+   built folder), `engine-client/src/warehouse-session.ts`. Next on the stack: G2 and G4 on branch
+   `datacube/python-parity-2`; C5 (PARK-35, PARK-33) and F after the user's design answers. **Step 2's second landing announced 2026-10-11 (rule 5; branch `datacube-m3`; the design's §15.6a,
    agreed with the user): a cross-area edit in `core/`** -- the route renamed and two more beside it,
    `/api/lite/v1/model/createClass` (was `/api/lite/v1/relational/promoteRelationToModel`), `createAssociation`,
    `createDataSpace`, one atomic writer under them. Core files: `core/src/main/java/com/legend/server/`
@@ -1052,6 +1056,28 @@ from 96e49c0; it is not started. It touches every file under `sql/dialect/`: ann
 **Next** (the user's order): the corpus harness on any database, built for speed (§20: the fixture seeded once,
 packages in parallel, every round trip counted) -- Postgres first, then the 77 on every lane, then the whole corpus
 on Snowflake, Databricks and BigQuery; then MongoDB, Elasticsearch, SingleStore (the plan's §2).
+
+## A ninth line, 2026-10-13: the dialect consolidation program (the user's ask, rule 5)
+
+One place per database: every database decision inside its own dialect (or, for execution, its connector), checked
+by guards. The plan, its decisions (the user's, 2026-10-13) and how to run it: `docs/DIALECT_LEAK_CENSUS_AND_PLAN_2026_10_12.md`
+(§0 "Start here", §5 the phases, §6 the decisions). Branch `claude/great-wright-p6t5s1`, from main c4d2bad. Landing
+(D7): phase by phase on the branch, each green (every local lane's whole SQL dump unchanged for a pure move), with a
+pause for the user's review after Phase 1.
+- **Owned for the program's length: every file under `core/src/main/java/com/legend/sql/dialect/`.** Another line's
+  edit there is announced here first and merged into the branch between phases; the program merges main between
+  phases, never at the end.
+- **Announced 2026-10-13, Phase 0 (the guards see every database; no product file):** `DialectBoundaryTest` (all 24
+  `DatabaseType` constants and every product name; `core/src/main/duckdb`), the driver-package rules of
+  `ArchitectureTest`, `JdbcSurfaceCensusTest` and `TenetRatchetTest` (Postgres, SQLite, MariaDB, ClickHouse, Trino,
+  Snowflake, Databricks, BigQuery), `SqlTextRatchetTest` (`create schema`), and a new `DialectLeakRatchetTest` (the
+  census's mechanical part, shrink-only per file). Each corrected pin carries a dated reason.
+- **Next, announced before each lands:** Phase 1 (the dialect package: an exhaustive switch in every concrete dialect,
+  a base with no spellings, D1, D8's folding, raw SQL by the declared database), then Phases 2 to 7 (the IR, SQL
+  outside the dialect, reading results, connectors, test harnesses, the other modules). Phase 7's TypeScript items
+  (D5: no SQL text in TypeScript) touch `engine-client/src/snap.ts`, which the DataCube program's PR 4 also edits:
+  that phase waits for it.
+- Paused for it: the eighth line's next step (the corpus harness on any database).
 
 ## Rules between sessions
 

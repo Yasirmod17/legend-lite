@@ -9257,3 +9257,61 @@ green (51 checks). `//gates:local` green on 96e49c0, run in a root cloud contain
 4. **Known, and where it goes:** the classpath guard's skip is main's (a suggested task); `%0Nd` zero padding cuts on
    every database, Postgres's Levenshtein is slow on long text, a Postgres struct's date-time and map fields stay raw
    (each a suggested task); the dialect consolidation program starts from this commit (§0 of the plan).
+
+## 2026-10-13 — The program's pull requests 1 to 6: Python parity, twin model libraries, the stores and the engine path on one implementation, the warehouse and Studio and Query from Python (the DataCube + Python line)
+
+The program is `docs/ONE_PLATFORM_PROGRAM_2026_10_12.md` (§6, pull requests 1 to 6). It was built stacked on branch
+`datacube/python-parity` and pushed to main as one fast-forward, at the user's go ("yes push to main if green and up to
+date").
+- **CI:** run 38398000209 (a dispatch, every lane) on 861f36390. All 50 jobs green on every platform; the summary job
+  skips on a dispatch.
+- **Local:** `//gates:local` and `//gates:warehouse` on the stack merged with main. 369 of 375 passed and 2 were
+  skipped (`//tools/guards:classpath_test` and `markdown_inputs_test`, incompatible with macOS). The 4 that failed were
+  fixed before the CI run:
+  - the grid page's bundle budget (the warehouse driver now fetched at the first sign-in);
+  - DataCube's built folder, which lacked `vendor/queries`, `sdlc` and `warehouse` (`verify_app_test`,
+    `live_snap_test`);
+  - `:planner_worker` in DataCube's `:bundles` (`//tools/guards:compile_only_test`).
+
+  Each re-ran green, with its neighbours. The lane query is empty. Main's commits since are docs only.
+
+1. **What it is** (each pull request's Built notes in the runbook):
+   - **1, G1 + G5:** Python plans through legend-lite's server or legend-engine (`ll.planner`), still running the SQL
+     on its own DuckDB. Iceberg tables on Python, every file they name remote.
+   - **2, B4 + D:** a class, an association or a data space in any project, as twin TypeScript and Python libraries
+     (`model-changes/`, `legend_lite/model.py`). A grid's export as one core, and `page.save()`.
+   - **3, B5 + B6:** saved queries and DataCube's saved pages, each one set of Java rules (`//core:saved_queries`) in
+     the browser (WebAssembly), Python's native library and legend-lite's server.
+   - **4, C1 + C2 + C4:** the tab answers legend-engine's execute API with the server's Java. One planner protocol for
+     every app and Python. One table of the site's file types, and one saved-query context reader.
+   - **5, C3:** the warehouse's SQL API as one binding (`SqlApiCalls`) in the tab's module, the native library and the
+     JVM, both drivers held to one recorded corpus. A warehouse table on Python's page, Live there and snapped into
+     Python's DuckDB.
+   - **6, G11 + E:** the model home's lock in the repository, across processes. Query and Studio served by Python
+     (`ll.query()`, `ll.studio()`), the link's token traded for a cookie that admits only the page's own calls. Studio's
+     link from DataCube on Python.
+2. **What proves it:**
+   - Unit tests:
+     - the warehouse corpus, three ways (`SqlApiCallsTest`, `//engine-client:warehouse_corpus_test`,
+       `python/tests/test_warehouse.py`);
+     - `python/tests/test_engine.py`: `AppsServed`, `WarehouseOnPython`, and the routes;
+     - the saved stores' one conformance suite on each store;
+     - `datacube/test/plane.test.ts` (a host's snap).
+   - `//datacube:python_engine_test`, in Chromium against a native warehouse, on Python's page:
+     - sign-in;
+     - Live rows and their receipt;
+     - the plane button's Snap and back;
+     - Create a Class… opened in Studio.
+   - `//query:verify_test`, its warehouse suite over the binding. `//python:wheel_test`, both apps from the installed
+     wheel.
+   - Each pull request was reviewed by its owners (the Compiler Rewrite line, the Studio line, the Plan Gen line) and
+     audited; the last fixes were re-checked.
+3. **Known, and where it goes:**
+   - **PARK-35 and PARK-33:** a project's queries run only in a tab, so a saved query does not open as a grid on
+     Python's page. This is the runbook's C5, pull request 7, after the user's design answers.
+   - **PARK-34:** a Variant column's relational spelling is unprobed.
+   - **Ruling 7** (`docs/SERVER_PROGRAM_2026_09_26.md`): the binding is its own page module, not the planner's. Marked
+     there, for the user to confirm.
+   - **The wheel** carries the apps' shared modules more than once (52 MB): one shared `vendor/` is a small design.
+   - **G2 and G4** (rows streamed back from Python; a picked file read by its encoding) are built on
+     `datacube/python-parity-2`, next.
