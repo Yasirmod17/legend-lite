@@ -13,8 +13,9 @@ import java.util.Map;
  * THE BINDING, AS EVERY DRIVER CALLS IT (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C3): {@link NativeBinding}'s calls and
  * readings as JSON in and JSON out, so the tab (its page module, //warehouse:sqlapi_page) and Python (the native
  * library, {@code lite_warehouse_call} and {@code lite_warehouse_read}) speak the warehouse's API through this one
- * implementation, never a spelling of their own. A driver only makes the HTTP calls this names and hands back what came;
- * the Arrow bytes stay the driver's (a chunk's body is used as it came: only a failed chunk's answer is read here).
+ * implementation, never a spelling of their own. A driver only makes the HTTP calls this names and hands back what
+ * came; the Arrow bytes stay the driver's (a chunk's body is used as it came: only a failed chunk's answer is read
+ * here).
  *
  * <p>{@link #call}: the next call, {@code {method, path, headers, body}}. {@link #read}: what an answer says -- a
  * token, the objects, the history, or a statement's next step -- or {@code {"error": {code, message}}}, marked
@@ -39,6 +40,8 @@ public final class SqlApiCalls {
     /** The call {@code op} makes with {@code args} (a JSON object), or the refusal of its arguments. */
     public static String call(String op, String args) {
         try {
+            // a careless caller's null (JavaScript's, C's) is refused as any wrong argument is, never thrown
+            if (op == null || args == null) throw new IllegalArgumentException("a call names its op and its arguments");
             Json.Obj a = object(args);
             HttpCall call = switch (op) {
                 case "login" -> BINDING.login(text(a, "user"), text(a, "password"));
@@ -67,7 +70,8 @@ public final class SqlApiCalls {
      * {@code {"step": "done", statementId, rowCount, chunkCount}} or {@code {"step": "failed", statementId, error}}.
      */
     public static String read(String op, int status, String body) {
-        HttpResult result = new HttpResult(status, body);
+        if (op == null) return refusal(new ApiError(ErrorCode.BAD_REQUEST, "a reading names its op"), false);
+        HttpResult result = new HttpResult(status, body == null ? "" : body);
         boolean carriedToken = !op.equals("login") && !op.equals("loginKey");
         if (status == 401 && carriedToken) {
             return refusal(failure(result), true);
@@ -75,7 +79,8 @@ public final class SqlApiCalls {
         try {
             Json.Node answer = switch (op) {
                 case "login", "loginKey", "refresh" -> ok(status) ? ApiJson.token(BINDING.token(result)) : null;
-                // the poll's own call is asked for by the driver (call "poll"), with its token
+                // the poll's own call is asked for by the driver (call "poll"), with its token: the one next() builds
+                // here, for no token, is dropped by step()
                 case "submit", "poll" -> step(BINDING.next(result, ""));
                 case "objects" -> ok(status) ? ApiJson.objects(BINDING.objects(result)) : null;
                 case "history" -> ok(status) ? history(BINDING.history(result)) : null;

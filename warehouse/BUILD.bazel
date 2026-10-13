@@ -34,8 +34,9 @@ package(default_visibility = ["//visibility:public"])
 legend_java_library(
     name = "sqlapi",
     srcs = glob(["src/main/java/com/legend/warehouse/sqlapi/**/*.java"]),
-    # and Python's native library, which speaks the API through it (SqlApiCalls: docs/ONE_PLATFORM_PROGRAM_2026_10_12.md
-    # C3)
+    # Python's native library only, which speaks the API through it (SqlApiCalls:
+    # docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C3): narrower than the package's public default, an explicit list of who
+    # compiles it
     visibility = ["//native:__pkg__"],
     deps = [
         "//base",
@@ -422,9 +423,10 @@ legend_java_library(
 )
 
 # THE WAREHOUSE'S API IN THE PAGE (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md C3): the one binding (SqlApiCalls)
-# compiled to WebAssembly, the tab's driver's (engine-client/src/warehouse.ts), served at vendor/warehouse/ by DataCube's
-# and Query's sites. Its own small module, not the planner's: the planner runs in a worker, and a statement's every
-# HTTP step would be a round trip to it. TeaVM's annotations at compile time only (as //wasm:teavm_api).
+# compiled to WebAssembly, the tab's driver's (engine-client/src/warehouse.ts), served at vendor/warehouse/ by
+# DataCube's and Query's sites. Its own small module, not the planner's: the planner runs in a worker, and a
+# statement's every HTTP step would be a round trip to it. TeaVM's annotations at compile time only (as
+# //wasm:teavm_api).
 legend_java_library(
     name = "teavm_api",
     neverlink = True,

@@ -30,7 +30,7 @@ final class WarehouseCalls {
         return Compiler.answer(a);
     }
 
-    /** What the answer {@code status} (in digits), {@code body} to {@code op}'s call says ({@link SqlApiCalls#read}). */
+    /** What the answer ({@code status}, in digits; {@code body}) to {@code op}'s call says: SqlApiCalls.read. */
     @CEntryPoint(name = "lite_warehouse_read")
     static CCharPointer read(IsolateThread thread, CCharPointer op, CCharPointer status, CCharPointer body) {
         String a;

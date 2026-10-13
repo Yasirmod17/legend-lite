@@ -156,7 +156,8 @@ node_test(
         "SQLAPI_CORPUS": "$(rlocationpath //warehouse:sqlapi_corpus)",
         "SQLAPI_PAGE": "$(rlocationpath //warehouse:sqlapi_page_dir)",
     },
-    node_options = ["--experimental-wasm-exnref"],  # the flag only: this test loads the binding's module, not the planner
+    # the flag only: this test loads the binding's module, not the planner
+    node_options = ["--experimental-wasm-exnref"],
 )
 
 # every test here: the local gate and CI's `ui` lane run it
