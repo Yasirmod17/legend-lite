@@ -92,8 +92,9 @@ copy_to_directory(
         "//wasm:planner",
     ],
     out = "demo/vendor",
-    # no root of this package's own: every file here is another package's, and the copy tool takes the default root
-    # (`query`) as a prefix of `query-store/` too, stripping the saved queries' module out (measured 2026-10-13)
+    # no root of this package's own: every file here is another package's. The default root (`query`) would strip the
+    # saved queries' module out (measured 2026-10-13): bazel_lib 3.7.2's tool matches a root by characters of the
+    # directory, not path segments, against its own doc (tools/copy_to_directory/main.go, longestGlobMatch)
     root_paths = [],
     include_srcs_patterns = [
         "wasm/planner/classes.wasm",

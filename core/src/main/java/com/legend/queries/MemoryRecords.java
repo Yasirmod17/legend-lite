@@ -18,17 +18,26 @@ public final class MemoryRecords implements Records {
     private final Map<String, List<Json.Obj>> held = new TreeMap<>();
     private final Map<String, List<Json.Obj>> changed = new LinkedHashMap<>();
 
-    /** The records as JSON: each query's versions by its id. */
+    /**
+     * The records as JSON: each query's versions by its id. Their shape is checked, not cast: in the page's
+     * WebAssembly a failed cast stops the module, where records of another shape must be the 500 every host answers.
+     */
     public static MemoryRecords of(String json) {
         MemoryRecords out = new MemoryRecords();
         // strip().isEmpty(), not isBlank(): TeaVM reads only a space as blank
         Json.Obj all = Json.parseObject(json.strip().isEmpty() ? "{}" : json);
-        for (String id : all.fields().keySet()) {
-            List<Json.Obj> versions = new ArrayList<>();
-            for (Json.Node n : ((Json.Arr) all.get(id)).items()) {
-                versions.add((Json.Obj) n);
+        for (Map.Entry<String, Json.Node> e : all.fields().entrySet()) {
+            if (!(e.getValue() instanceof Json.Arr held)) {
+                throw new IllegalArgumentException("the records of query '" + e.getKey() + "' are not a list of versions");
             }
-            out.held.put(id, versions);
+            List<Json.Obj> versions = new ArrayList<>();
+            for (Json.Node n : held.items()) {
+                if (!(n instanceof Json.Obj version)) {
+                    throw new IllegalArgumentException("a version of query '" + e.getKey() + "' is not an object");
+                }
+                versions.add(version);
+            }
+            out.held.put(e.getKey(), versions);
         }
         return out;
     }

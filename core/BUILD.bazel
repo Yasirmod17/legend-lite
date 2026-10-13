@@ -78,10 +78,10 @@ legend_java_library(name = "error", srcs = glob(["src/main/java/com/legend/error
 legend_java_library(name = "diagnostics", srcs = glob(["src/main/java/com/legend/diagnostics/*.java"]), deps = ["//base"], visibility = ["//parser-equivalence:__pkg__"])
 legend_java_library(name = "lexer", srcs = glob(["src/main/java/com/legend/lexer/*.java"]), deps = ["//base"])
 legend_java_library(name = "sql", srcs = glob(["src/main/java/com/legend/sql/*.java"]), deps = ["//base"])
-# legend-engine's query store's rules (/api/pure/v1/query) over a records interface (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md
-# B5): the one implementation legend-lite's server, Python's native library and the page's module answer with, the
-# storage each host's own (a directory, or the page's records handed in). //base and //json only: it compiles to
-# WebAssembly (//query-store:page).
+# legend-engine's query store's rules (/api/pure/v1/query) over a records interface
+# (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B5): the one implementation legend-lite's server, Python's native library
+# and the page's module answer with, the storage each host's own (a directory, or the page's records handed in).
+# //base and //json only: it compiles to WebAssembly (//query-store:page).
 legend_java_library(
     name = "saved_queries",
     srcs = glob(["src/main/java/com/legend/queries/*.java"]),

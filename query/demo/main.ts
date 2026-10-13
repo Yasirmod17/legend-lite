@@ -121,9 +121,9 @@ async function boot(): Promise<void> {
     engine = new BrowserEngine(planner!, runner, isEnumeration, user);
     cubeRows = { kind: 'sql', engine: runner };
     // no server: the same API, answered in this page from this origin's IndexedDB by legend-lite's own rules (the
-    // server's, compiled to WebAssembly: query-store's module at vendor/queries/)
+    // server's, compiled to WebAssembly: query-store's module at vendor/queries/, fetched at the store's first call)
     store = new QueryStoreClient(LOCAL_API, wasmQueryServer({
-      module: await loadQueriesModule(new URL('./vendor/queries/', location.href).href), records: new BrowserRecords(), user,
+      load: () => loadQueriesModule(new URL('./vendor/queries/', location.href).href), records: new BrowserRecords(), user,
     }).fetch);
   }
   const ctx = new AppContext(config, engine, store, planner, projects, user, cubeRows);

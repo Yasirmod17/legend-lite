@@ -9,9 +9,9 @@ load("//tools/guards:defs.bzl", "guards_package")
 load("//tools/java:defs.bzl", "legend_java_library")
 load("//tools/teavm:defs.bzl", "teavm_wasm")
 
-# THE SAVED QUERIES IN THE PAGE (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B5): core's rules (//core:saved_queries, the ones
-# legend-lite's server and Python's native library answer with) compiled to WebAssembly, the page's records handed
-# in with each call (java/.../QueriesPage.java), which src/wasm-server.ts writes back to IndexedDB.
+# THE SAVED QUERIES IN THE PAGE (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B5): core's rules (//core:saved_queries,
+# the ones legend-lite's server and Python's native library answer with) compiled to WebAssembly, the page's records
+# handed in with each call (java/.../QueriesPage.java), which src/wasm-server.ts writes back to IndexedDB.
 # TeaVM's annotations, at compile time only (as //wasm:teavm_api).
 legend_java_library(
     name = "teavm_api",
@@ -74,7 +74,7 @@ node_test(
     ],
     entry_point = "test/wasm.test.ts",
     env = {"QUERIES_PAGE": "$(rlocationpath :page_dir)"},
-    node_options = ["--experimental-wasm-exnref"],
+    node_options = ["--experimental-wasm-exnref"],  # the flag only: this test loads the page's module, not the planner
 )
 
 # A saved query's share link, round trip over the shared fixture records.
@@ -110,6 +110,7 @@ node_test(
 # from DataCube's test: docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B5) are each held to it the same way
 js_library(
     name = "conformance",
+    testonly = True,
     srcs = ["test/conformance.ts"],
     visibility = ["//datacube:__pkg__"],
     deps = [":query_store"],

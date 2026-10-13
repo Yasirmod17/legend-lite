@@ -22,8 +22,9 @@
 //   model actions write through Python's native library (ModelWriting), so Create a Class… and the rest are offered.
 //
 // What Python does not answer yet is a service it does not give, and the app does not offer what reads it (§3.4): the
-// other planes (2c), saved queries (B5), a warehouse (C3), Studio (E). A share link needs an address others can open;
-// Python's is this machine's loopback.
+// other planes (2c), saved queries (Python serves their store, `/api/pure/v1/query`, B5; but a saved query opens with
+// the page's own compiler and database: PARK-33), a warehouse (C3), Studio (E). A share link needs an address others
+// can open; Python's is this machine's loopback.
 
 import { arrowIpcAnswer } from '../../../engine-client/src/arrow-ipc.ts';
 import { toRawTable } from '../../../engine-client/src/duckdb.ts';

@@ -19,7 +19,8 @@ public final class QueriesPage {
 
     /**
      * One {@code /api/pure/v1/query...} call ({@code rest}: the path after {@code /api/pure/v1/query}) over
-     * {@code records} ({@code {"id": [versions...]}}), as {@code user}: {@code {"status", "body", "changed"}}, JSON.
+     * {@code records} ({@code {"id": [versions...]}}), as {@code user}: {@code {"status", "body", "changed"}}, JSON --
+     * {@code changed} each query written, its versions as the JSON TEXT the page keeps (as the server's file holds it).
      */
     @org.teavm.jso.JSExport
     public static String answer(String method, String rest, String rawQuery, String body, String user, String records) {
@@ -29,7 +30,9 @@ public final class QueriesPage {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("status", a.status());
         out.put("body", a.json());
-        out.put("changed", held.changed());
+        Map<String, Object> changed = new LinkedHashMap<>();
+        held.changed().forEach((id, versions) -> changed.put(id, Json.toCompact(versions)));
+        out.put("changed", changed);
         return Json.toCompact(out);
     }
 

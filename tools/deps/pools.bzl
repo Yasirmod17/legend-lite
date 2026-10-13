@@ -31,7 +31,7 @@ POOL_USERS = {
     # rules (with depot-server's) compile to the page's SDLC module the same way (2026-10-04, the Studio line,
     # docs/STUDIO_DESIGN_2026_10_02.md S21: its :teavm_api and :page targets, as //wasm's)
     # warehouse: the SQL API compiled to WebAssembly, //warehouse:sqlapi_wasm (Bazel workplan P3-24)
-    # query-store: the saved queries' rules (//core:queries) compiled to WebAssembly for the page, //query-store:page
+    # query-store: the saved queries' rules (//core:saved_queries) compiled to WebAssembly for the page, //query-store:page
     # (2026-10-13, docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B5: one implementation for the server, Python and the page)
     # third_party/teavm_classlib: TeaVM's class library corrected where lite needs it exact, compiled against TeaVM's
     "maven_teavm": ["query-store", "sdlc-server", "third_party/teavm_classlib", "tools/teavm", "warehouse", "wasm"],

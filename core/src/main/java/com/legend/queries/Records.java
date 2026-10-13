@@ -19,6 +19,6 @@ public interface Records {
     /** The query {@code id}'s versions, all of them, in place of what was kept. */
     void write(String id, List<Json.Obj> versions);
 
-    /** Every query's versions, by its id. */
+    /** Every query's versions, by its id, in the order of the ids (so every host's search ties alike). */
     Map<String, List<Json.Obj>> all();
 }

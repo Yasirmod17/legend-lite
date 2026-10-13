@@ -165,7 +165,7 @@ function queryService(config: TabConfig, location: { readonly href: string }): Q
     store: () => (store ??= queryStores().then(async (m) => (url
       ? new m.QueryStoreClient(url)
       : new m.QueryStoreClient(m.LOCAL_API, m.wasmQueryServer({
-        module: await m.loadQueriesModule(new URL('./vendor/queries/', location.href).href),
+        load: () => m.loadQueriesModule(new URL('./vendor/queries/', location.href).href),
         records: new m.BrowserRecords(), user: config.user,
       }).fetch)))),
     where: url ? `on ${hostOf(url)}` : 'in this browser',

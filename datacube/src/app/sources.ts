@@ -301,7 +301,7 @@ export function pageSources(d: SourcesOf): PageSources {
    *  its host's (Python's). */
   const remoteReader: 'page' | 'host' = local ? 'page' : 'host';
   /** Saved queries are read by the page's own compiler and their test data made in its database: offered where both. */
-  const queries = local ? services.queries : undefined;
+  const queries = local ? services.queries : undefined; // PARK-33
   /** A grid's place from its rows: a planner and the engine it runs on, or the host's runner. */
   const rowsPlace = (rows: GridRows): Pick<GridPlace, 'planner' | 'engine' | 'runner'> =>
     (rows.runner ? { runner: rows.runner } : { planner: rows.planner, engine: rows.engine });

@@ -11,9 +11,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 
 /**
  * Saved queries kept in a directory, one JSON file per query holding every version (its id URL-encoded as the name):
@@ -50,12 +50,13 @@ public final class FileRecords implements Records {
 
     @Override
     public Map<String, List<Json.Obj>> all() {
-        Map<String, List<Json.Obj>> out = new LinkedHashMap<>();
+        // by the ids themselves, not their file names: "q-2.json" sorts before "q.json", "q" before "q-2"
+        Map<String, List<Json.Obj>> out = new TreeMap<>();
         if (!Files.isDirectory(directory)) {
             return out;
         }
         try (var files = Files.list(directory)) {
-            for (Path p : files.filter(f -> f.getFileName().toString().endsWith(".json")).sorted().toList()) {
+            for (Path p : files.filter(f -> f.getFileName().toString().endsWith(".json")).toList()) {
                 String name = p.getFileName().toString();
                 out.put(URLDecoder.decode(name.substring(0, name.length() - ".json".length()), StandardCharsets.UTF_8),
                         read(p));

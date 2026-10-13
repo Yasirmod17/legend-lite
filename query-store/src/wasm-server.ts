@@ -3,14 +3,14 @@
 // WebAssembly (//query-store:page), over the page's own records (records.ts: IndexedDB, so every app on this origin
 // shares them) -- one implementation, only the storage the page's (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B5). Each
 // call hands the module every record and writes back every query it wrote; the module keeps nothing between calls, so
-// two tabs over the one IndexedDB see each other's queries at their next call. It is handed to the one client
+// two tabs over the one IndexedDB see each other's queries at their next call; each call is one transaction of the
+// records, so no tab writes between another's read and its writes. It is handed to the one client
 // (client.ts) in place of the network, and the one wire-level suite (test/conformance.ts) runs against it and against
 // legend-lite's server alike.
 //
 // What it cannot be is a server: its queries live in this browser only, and its user is the name the page was
 // configured with, not someone signed in.
 
-import type { Query } from './wire.ts';
 import type { Records } from './records.ts';
 
 /** The API root the page's store answers at: never on the network (`fetch` below answers it). */
@@ -39,7 +39,8 @@ export async function loadQueriesModule(base: string, load?: (runtimeUrl: string
 }
 
 export interface WasmServerOptions {
-  readonly module: QueriesModule;
+  /** The module, fetched at the store's first call (never at the page's start): a page that never asks never loads it. */
+  readonly load: () => Promise<QueriesModule>;
   readonly records: Records;
   /** Who this page's caller is: the page's configured user (there is no sign-in here). */
   readonly user: string;
@@ -55,16 +56,21 @@ export interface LocalServer {
 const answer = (status: number, body: string): Response =>
   new Response(status === 204 ? null : body, { status, headers: { 'Content-Type': 'application/json' } });
 
-export function wasmQueryServer(options: WasmServerOptions): LocalServer {
-  const { module, records, user } = options;
-  // ONE CALL AT A TIME, as the server's `synchronized` methods: a read-modify-write is never interleaved in this tab
-  let queue: Promise<unknown> = Promise.resolve();
-  const serial = <T>(f: () => Promise<T>): Promise<T> => {
-    const next = queue.then(f, f);
-    queue = next.catch(() => undefined);
-    return next;
-  };
+/** The records as the module reads them, `{"id": [versions...]}`, from each query's text as kept. */
+const recordsJson = (held: ReadonlyMap<string, string>): string =>
+  `{${[...held].map(([id, text]) => `${JSON.stringify(id)}:${text}`).join(',')}}`;
 
+export function wasmQueryServer(options: WasmServerOptions): LocalServer {
+  const { records, user } = options;
+  // once, at the first call; a load that failed is tried again at the next, as a server not reached is
+  let loaded: Promise<QueriesModule> | undefined;
+  const module = (): Promise<QueriesModule> => (loaded ??= options.load().catch((e: unknown) => {
+    loaded = undefined;
+    throw e;
+  }));
+
+  // ONE CALL AT A TIME, as the server's `synchronized` methods: each call is one transaction of the records (records.ts),
+  // which no other call, in this tab or another, interleaves with
   const handle = async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
     const at = url.pathname.indexOf('/pure/v1/query');
@@ -73,17 +79,19 @@ export function wasmQueryServer(options: WasmServerOptions): LocalServer {
     }
     const rest = url.pathname.slice(at + '/pure/v1/query'.length);
     const body = request.method === 'GET' || request.method === 'DELETE' ? '' : await request.text();
-    return serial(async () => {
-      // every query's versions, by its id, as the rules read them
-      const held: Record<string, readonly Query[]> = {};
-      for (const versions of await records.all()) {
-        const id = versions[0]?.id;
-        if (id !== undefined) held[id] = versions;
+    const queries = await module();
+    return records.call((held) => {
+      let said: { status: number; body: string; changed: Record<string, string> };
+      try {
+        said = JSON.parse(queries.exports.answer(request.method, rest, url.search.replace(/^\?/, ''), body, user,
+          recordsJson(held))) as typeof said;
+      } catch (e) {
+        // what the rules answer of a body or records they cannot read is an exception out of the module (and a bug
+        // in them a trap): the engine's 500, naming it, as the server answers its own -- and nothing written
+        const error = e instanceof Error ? e : new Error(String(e));
+        return { changed: new Map(), answer: answer(500, JSON.stringify({ code: -1, message: `${error.name}: ${error.message}`, status: 'error' })) };
       }
-      const said = JSON.parse(module.exports.answer(request.method, rest, url.search.replace(/^\?/, ''), body, user,
-        JSON.stringify(held))) as { status: number; body: string; changed: Record<string, Query[]> };
-      for (const [id, versions] of Object.entries(said.changed)) await records.put(id, versions);
-      return answer(said.status, said.body);
+      return { changed: new Map(Object.entries(said.changed)), answer: answer(said.status, said.body) };
     });
   };
 

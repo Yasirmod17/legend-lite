@@ -345,10 +345,28 @@ the Studio line and Compiler Rewrite, and an audit.
   TypeScript port (`local-server.ts`, deleted).
 - Python: the native library's `lite_saved_queries` (`native/.../SavedQueriesHome.java`) over `ll.home()/queries`,
   served at `/api/pure/v1/query` under the folder's lock (GET, POST, PUT, DELETE); `services.json` says where.
+- Also changed from the draft: `python-host.ts` gives no `queries` service. What reads it opens a saved query with the
+  page's own compiler and database (PARK-33), so Python's page offers no Saved queries section yet; the Goal is met as
+  far as Python serving the store.
+- Reviewed (Studio, Compiler Rewrite, an audit), and fixed on the branch:
+  - A body or records of the wrong shape: the rules check each field's kind before reading it (the engine's 500
+    `IllegalArgumentException: ...` on every host). In the page's WebAssembly a failed cast stops the module, where
+    the JVM throws; the adapter also answers anything that escapes the module as that 500.
+  - One order on every host: `Records.all()` is in id order (`FileRecords` had listed by file name, so `q-2` came
+    before `q` on the server and Python, after it in the page). Search order among queries made in the same
+    millisecond is now by id on the server too (it was by file name: benign, now the page's order).
+  - The page keeps each query's versions as the JSON text the rules wrote (`records.ts` layout 3, layouts 1 and 2
+    moved over; `//query:verify_test` checks both), so a number keeps its spelling as in the server's file; and each
+    call is one IndexedDB transaction, so two tabs never interleave a read and a write.
+  - The module is fetched at the store's first call in both apps (Query had loaded it at boot).
+- Measured: one page call over 1,000 queries of 5 versions each (3.2 MB of records) takes about 55 ms in the module
+  (median; IndexedDB's read not included; `docs/one-platform/evidence/b5-page-call.mjs`). It grows with versions, since
+  every update keeps one; fine for one browser's store.
 - Proof: the one suite (`query-store/test/conformance.ts`) passes on the module (`//query-store:wasm_test`), the server
   (`:lite_test`) and Python (`//datacube:python_saved_queries_test`, new).
 - Owed: a saved query opened as a grid on Python's page (PARK-33: a mapping planned on Python, a project's data made
-  without the page's SQL), with E; L1's saved-query differential, the Studio line's acceptance.
+  without the page's SQL), with E. **Acceptance is pending L1** (the saved-query differential, legend-engine against
+  legend-lite: the Studio line's, waiting on the user's OK for phase L and on MongoDB).
 
 #### B6. Saved pages, one implementation
 

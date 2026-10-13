@@ -7,7 +7,7 @@ import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { QueryStoreClient, QueryStoreError } from '../src/client.ts';
-import { MemoryRecords } from '../src/records.ts';
+import { MemoryRecords, type Records } from '../src/records.ts';
 import { LOCAL_API, loadQueriesModule, wasmQueryServer } from '../src/wasm-server.ts';
 import { conformance } from './conformance.ts';
 import { runfileDirUrl } from '../../tools/js/runfiles.mts';
@@ -19,14 +19,14 @@ const module = await loadQueriesModule(DIR, async (runtimeUrl) => {
   return { load: (src: string, options?: unknown) => runtime.load(fileURLToPath(src), options) };
 });
 const records = new MemoryRecords();
-const server = wasmQueryServer({ module, records, user: 'anonymous' });
+const server = wasmQueryServer({ load: async () => module, records, user: 'anonymous' });
 conformance("the page's own store, legend-lite's rules in WebAssembly", () => ({ api: LOCAL_API, fetch: server.fetch, user: 'anonymous' }));
 
 describe("the page's own store: what a server here cannot be asked", () => {
   it('only the owner updates or deletes', async () => {
     const shared = new MemoryRecords();
-    const mine = new QueryStoreClient(LOCAL_API, wasmQueryServer({ module, records: shared, user: 'me' }).fetch);
-    const theirs = new QueryStoreClient(LOCAL_API, wasmQueryServer({ module, records: shared, user: 'someone' }).fetch);
+    const mine = new QueryStoreClient(LOCAL_API, wasmQueryServer({ load: async () => module, records: shared, user: 'me' }).fetch);
+    const theirs = new QueryStoreClient(LOCAL_API, wasmQueryServer({ load: async () => module, records: shared, user: 'someone' }).fetch);
     const q = await mine.create({
       id: 'owned', name: 'Owned', groupId: 'demo', artifactId: 'trading', versionId: '0.0.0', content: '|1',
     });
@@ -45,10 +45,33 @@ describe("the page's own store: what a server here cannot be asked", () => {
     assert.match(((await r.json()) as { message: string }).message, /^\w+(Exception|Error): /);
   });
 
+  it('records it cannot read: the engine 500, naming them, and nothing written', async () => {
+    let wrote = 0;
+    const odd: Records = {
+      call: async (f) => {
+        const said = f(new Map([['x', '5']]));
+        wrote += said.changed.size;
+        return said.answer;
+      },
+    };
+    const r = await wasmQueryServer({ load: async () => module, records: odd, user: 'me' }).fetch(`${LOCAL_API}/pure/v1/query/x`);
+    assert.equal(r.status, 500);
+    assert.match(((await r.json()) as { message: string }).message, /the records of query 'x' are not a list of versions/);
+    assert.equal(wrote, 0);
+  });
+
+  it('a query whose id names a property every object has (`__proto__`) is kept like any other', async () => {
+    const c = new QueryStoreClient(LOCAL_API, wasmQueryServer({ load: async () => module, records: new MemoryRecords(), user: 'me' }).fetch);
+    const made = await c.create({ id: '__proto__', name: 'Proto', groupId: 'demo', artifactId: 'trading', versionId: '0.0.0', content: '|1' });
+    assert.equal((await c.get('__proto__')).name, 'Proto');
+    assert.equal((await c.update({ ...made, name: 'Again' })).version, 2);
+    assert.deepEqual((await c.history('__proto__')).map((v) => v.version), [1]);
+  });
+
   it('keeps nothing between calls: another tab\'s query, written to the same records, is there at the next call', async () => {
     const shared = new MemoryRecords();
-    const one = new QueryStoreClient(LOCAL_API, wasmQueryServer({ module, records: shared, user: 'me' }).fetch);
-    const two = new QueryStoreClient(LOCAL_API, wasmQueryServer({ module, records: shared, user: 'me' }).fetch);
+    const one = new QueryStoreClient(LOCAL_API, wasmQueryServer({ load: async () => module, records: shared, user: 'me' }).fetch);
+    const two = new QueryStoreClient(LOCAL_API, wasmQueryServer({ load: async () => module, records: shared, user: 'me' }).fetch);
     await one.create({ id: 'from-one', name: 'One', groupId: 'demo', artifactId: 'trading', versionId: '0.0.0', content: '|1' });
     assert.equal((await two.get('from-one')).name, 'One');
   });

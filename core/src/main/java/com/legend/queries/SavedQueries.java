@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeSet;
 import java.util.function.LongSupplier;
+import java.util.function.Predicate;
 import java.util.regex.Pattern;
 
 /**
@@ -169,6 +170,7 @@ public final class SavedQueries {
     /** {@code POST query/search}. */
     public synchronized String search(String body, String currentUser) {
         Json.Obj spec = Json.parseObject(body.strip().isEmpty() ? "{}" : body);
+        searchShape(spec);
         List<Json.Obj> matches = new ArrayList<>();
         for (Json.Obj q : latestOfAll()) {
             if (matchesSearch(q, spec, currentUser)) {
@@ -264,6 +266,7 @@ public final class SavedQueries {
     /** {@code POST query}: a new query, owned by the caller, version 1. */
     public synchronized String create(String body, String currentUser) {
         Json.Obj query = Json.parseObject(body);
+        queryShape(query);
         validate(query);
         String id = query.getString("id");
         List<Json.Obj> versions = versions(id);
@@ -286,6 +289,7 @@ public final class SavedQueries {
     /** {@code PUT query/{id}}: the owner's new version; the old one becomes history. */
     public synchronized String update(String id, String body, String currentUser) {
         Json.Obj query = Json.parseObject(body);
+        queryShape(query);
         validate(query);
         if (!id.equals(query.getString("id"))) {
             throw new Refusal("Updating query ID is not supported", 400);
@@ -296,6 +300,7 @@ public final class SavedQueries {
     /** {@code PUT query/{id}/patchQuery}: the fields the body sets over the current version, as a new version. */
     public synchronized String patch(String id, String body, String currentUser) {
         Json.Obj patch = Json.parseObject(body);
+        queryShape(patch);
         get(id); // the engine patches what getQuery answers, which marks it opened
         Json.Obj current = java.util.Objects.requireNonNull(current(versions(id)), id);
         Map<String, Json.Node> fields = clientFields(current);
@@ -500,6 +505,91 @@ public final class SavedQueries {
         return text != null && text.toLowerCase(java.util.Locale.ROOT).contains(lowerNeedle);
     }
 
+    // ------------------------------------------------------------------ shapes
+    //
+    // A body's fields of the kinds the engine's classes take them as; another kind is the 500 for a body the engine
+    // cannot read. Checked before the rules read the body, not left to a failed cast: the page's WebAssembly has no
+    // ClassCastException (a failed cast there stops its module), so only a check answers the same on every host. A
+    // query's tagged values and stereotypes are checked as it is written, so the searches that read them later can.
+
+    private static final Predicate<Json.Node> TEXT = n -> n instanceof Json.Str;
+    private static final Predicate<Json.Node> FLAG = n -> n instanceof Json.Bool;
+    private static final Predicate<Json.Node> NUMBER = n -> n instanceof Json.Num;
+    private static final Predicate<Json.Node> OBJECT = n -> n instanceof Json.Obj;
+
+    /** The engine's {@code QuerySearchSpecification}, as far as the rules read it. */
+    private static void searchShape(Json.Obj spec) {
+        String where = "QuerySearchSpecification";
+        if (field(spec, "searchTermSpecification", OBJECT, "an object", false, where) instanceof Json.Obj term) {
+            field(term, "searchTerm", TEXT, "a string", false, "QuerySearchTermSpecification");
+            field(term, "exactMatchName", FLAG, "a boolean", false, "QuerySearchTermSpecification");
+            field(term, "includeOwner", FLAG, "a boolean", false, "QuerySearchTermSpecification");
+        }
+        field(spec, "showCurrentUserQueriesOnly", FLAG, "a boolean", false, where);
+        field(spec, "combineTaggedValuesCondition", FLAG, "a boolean", false, where);
+        field(spec, "sortByOption", TEXT, "a string", false, where);
+        field(spec, "limit", NUMBER, "a number", false, where);
+        for (Json.Obj c : objects(spec, "projectCoordinates", where, "QueryProjectCoordinates")) {
+            field(c, "groupId", TEXT, "a string", true, "QueryProjectCoordinates");
+            field(c, "artifactId", TEXT, "a string", true, "QueryProjectCoordinates");
+            field(c, "version", TEXT, "a string", false, "QueryProjectCoordinates");
+        }
+        tagsShape(spec, where);
+    }
+
+    /** The engine's {@code Query}, as far as the rules read it: its tagged values and stereotypes. */
+    private static void queryShape(Json.Obj q) {
+        tagsShape(q, "Query");
+    }
+
+    private static void tagsShape(Json.Obj o, String where) {
+        for (Json.Obj tv : objects(o, "taggedValues", where, "TaggedValue")) {
+            if (field(tv, "tag", OBJECT, "an object", true, "TaggedValue") instanceof Json.Obj tag) {
+                field(tag, "profile", TEXT, "a string", true, "TagPtr");
+                field(tag, "value", TEXT, "a string", true, "TagPtr");
+            }
+        }
+        for (Json.Obj s : objects(o, "stereotypes", where, "StereotypePtr")) {
+            field(s, "profile", TEXT, "a string", true, "StereotypePtr");
+            field(s, "value", TEXT, "a string", true, "StereotypePtr");
+        }
+    }
+
+    /** {@code o}'s {@code field}, of its kind; null when it is absent or null and need not be there. */
+    private static Json.@com.legend.base.Nullable Node field(Json.Obj o, String field, Predicate<Json.Node> kind,
+            String kindName, boolean required, String where) {
+        Json.Node n = o.has(field) ? o.get(field) : Json.nil();
+        if (n instanceof Json.Null) {
+            if (required) {
+                throw new IllegalArgumentException(where + "." + field + " is missing");
+            }
+            return null;
+        }
+        if (!kind.test(n)) {
+            throw new IllegalArgumentException(where + "." + field + " is not " + kindName);
+        }
+        return n;
+    }
+
+    /** {@code o}'s list {@code field}, each item an object ({@code item}); empty when it is absent or null. */
+    private static List<Json.Obj> objects(Json.Obj o, String field, String where, String item) {
+        Json.Node n = o.has(field) ? o.get(field) : Json.nil();
+        if (n instanceof Json.Null) {
+            return List.of();
+        }
+        if (!(n instanceof Json.Arr a)) {
+            throw new IllegalArgumentException(where + "." + field + " is not a list");
+        }
+        List<Json.Obj> out = new ArrayList<>();
+        for (Json.Node i : a.items()) {
+            if (!(i instanceof Json.Obj each)) {
+                throw new IllegalArgumentException(where + "." + field + " holds something not " + item);
+            }
+            out.add(each);
+        }
+        return out;
+    }
+
     // ------------------------------------------------------------------ records
 
     /** A query as the API writes it: every field in the engine's order, null when absent. */
@@ -559,10 +649,9 @@ public final class SavedQueries {
 
     private List<Json.Obj> latestOfAll() {
         List<Json.Obj> out = new ArrayList<>();
-        Map<String, List<Json.Obj>> all = records.all();
-        // by id, then by creation: the engine's natural order is insertion order
-        for (Map.Entry<String, List<Json.Obj>> e : new java.util.TreeMap<>(all).entrySet()) {
-            Json.Obj q = current(e.getValue());
+        // by id (the records' order), then by creation: the engine's natural order is insertion order
+        for (List<Json.Obj> versions : records.all().values()) {
+            Json.Obj q = current(versions);
             if (q != null) {
                 out.add(q);
             }
