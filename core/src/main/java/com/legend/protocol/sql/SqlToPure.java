@@ -3914,6 +3914,18 @@ public final class SqlToPure {
                     v.get(5)));
         });
         m.put("date_trunc", (t, f, a, s, r) -> dateTrunc(f, a));
+        m.put("isfinite", (t, f, a, s, r) -> {
+            arity(f, a, 1);
+            if (isNullConstant(a.get(0))) {
+                throw SqlTranslationException.invalid("function isfinite(unknown) is not unique", f.pos());
+            }
+            if (!isDate(a.get(0).kind())) {
+                throw SqlTranslationException.invalid("function isfinite(" + postgresName(a.get(0).kind()) + ") does"
+                        + " not exist", f.pos());
+            }
+            // no value here is infinite (Postgres's infinity constants are refused)
+            return strictTest(a, v -> new CBoolean(true));
+        });
         m.put("starts_with", (t, f, a, s, r) -> {
             kinds(f, a, Kind.STRING, Kind.STRING);
             return strictTest(a, v -> call("startsWith", v.get(0), v.get(1)));
@@ -4051,6 +4063,39 @@ public final class SqlToPure {
             Map.entry("months", "monthNumber"), Map.entry("day", "dayOfMonth"), Map.entry("days", "dayOfMonth"),
             Map.entry("doy", "dayOfYear"), Map.entry("isodow", "dayOfWeekNumber"), Map.entry("hour", "hour"),
             Map.entry("hours", "hour"), Map.entry("minute", "minute"), Map.entry("minutes", "minute"));
+
+    /** The date fields computed from Pure's: Postgres's day of the week from Sunday (0), from ISO's (Sunday 7); its
+     *  ISO week, as Pure's weekOfYear is (measured); a year's decade (year / 10), century ((year + 99) / 100) and
+     *  millennium ((year + 999) / 1000), Postgres's for years from 1; a day's epoch, its seconds since 1970-01-01. */
+    private static final Map<String, java.util.function.UnaryOperator<ValueSpecification>> COMPUTED_FIELDS =
+            computedFields();
+
+    private static Map<String, java.util.function.UnaryOperator<ValueSpecification>> computedFields() {
+        Map<String, java.util.function.UnaryOperator<ValueSpecification>> m = new LinkedHashMap<>();
+        m.put("dow", v -> call("rem", call("dayOfWeekNumber", v), new CInteger(7L)));
+        for (String week : List.of("week", "weeks")) {
+            m.put(week, v -> call("weekOfYear", v));
+        }
+        for (String decade : List.of("decade", "decades")) {
+            m.put(decade, v -> yearsDivided(v, 0, 10));
+        }
+        for (String century : List.of("century", "centuries")) {
+            m.put(century, v -> yearsDivided(v, 99, 100));
+        }
+        for (String millennium : List.of("millennium", "millennia")) {
+            m.put(millennium, v -> yearsDivided(v, 999, 1000));
+        }
+        m.put("epoch", v -> call("toEpochValue", v));
+        return java.util.Collections.unmodifiableMap(m);
+    }
+
+    /** {@code (year + offset) / by}, truncated (a year here is at least 1): exact, the quotient's double far from the
+     *  next whole number. */
+    private static ValueSpecification yearsDivided(ValueSpecification v, long offset, long by) {
+        ValueSpecification year = offset == 0 ? call("year", v) : AppliedFunction.infixRun("plus", List.of(
+                call("year", v), new CInteger(offset)));
+        return call("floor", call("divide", year, new CInteger(by)));
+    }
 
     /** The arguments' kinds, as Postgres resolves the function: a NULL constant makes it NULL (not supported here); a
      *  value of another kind has no such function. */
@@ -4828,18 +4873,22 @@ public final class SqlToPure {
         }
         Tx x = args.get(1);
         String name = fold(field.value());
-        String pure = DATE_FIELDS.get(name);
+        String simple = DATE_FIELDS.get(name);
+        java.util.function.UnaryOperator<ValueSpecification> computed = COMPUTED_FIELDS.get(name);
+        java.util.function.UnaryOperator<ValueSpecification> pure = simple != null ? v -> call(simple, v) : computed;
         if (pure == null) {
             throw SqlTranslationException.unsupported(fn + "(" + name + " ...) is not supported yet", field.pos());
         }
         boolean timeOfDay = TIME_FIELDS.contains(name);
-        if (!isDate(x.kind()) || timeOfDay && x.kind() != Kind.DATETIME) {
+        // Pure's toEpochValue is whole seconds: a timestamp's fraction would be lost
+        boolean dayOnly = name.equals("epoch");
+        if (!isDate(x.kind()) || timeOfDay && x.kind() != Kind.DATETIME || dayOnly && x.kind() != Kind.DATE) {
             throw SqlTranslationException.unsupported(fn + "(" + name + " ...) of a " + x.kind().name().toLowerCase(
                     Locale.ROOT) + " value is not supported yet", f.args().get(1).pos());
         }
         // extract is numeric in Postgres (14 on), date_part double precision: a field's whole number as either
-        return numeric ? strict(Kind.DECIMAL, List.of(x), v -> call(pure, v.get(0)))
-                : strict(Kind.FLOAT, List.of(x), v -> call("toFloat", call(pure, v.get(0))));
+        return numeric ? strict(Kind.DECIMAL, List.of(x), v -> pure.apply(v.get(0)))
+                : strict(Kind.FLOAT, List.of(x), v -> call("toFloat", pure.apply(v.get(0))));
     }
 
     /** Refuses another number of arguments as not supported: Postgres may have that overload (btrim(x, chars)). */
@@ -5165,84 +5214,28 @@ public final class SqlToPure {
         };
     }
 
-    /** A string constant read as a date ({@code yyyy-mm-dd}) or a timestamp ({@code yyyy-mm-dd hh:mm:ss[.f]}): the
-     *  ISO 8601 spellings every database reads alike; Postgres's other date spellings are refused. */
+    /** A string constant read as a date or a timestamp by Postgres's rules ({@link PostgresDateTime}): ISO 8601 and
+     *  Postgres's other spellings (month names, month/day/year, digits run together, a year's day, a Julian day, AM and
+     *  PM, epoch); a date drops a time of day. Its Pure constant spells the same day or instant, {@code
+     *  yyyy-mm-ddThh:mm:ss[.ffffff]} for a timestamp (24:00:00 is the next midnight). */
     private static Tx dateFromString(SqlAst.StringLit s, Kind target) {
-        String v = s.value();
-        boolean date = v.length() == 10 && isoDate(v);
-        boolean timestamp = v.length() >= 19 && isoDate(v.substring(0, 10)) && (v.charAt(10) == ' '
-                || v.charAt(10) == 'T') && isoTime(v.substring(11));
-        if (target == Kind.DATE && date) {
-            validDate(v, s.pos());
-            return Tx.value(new CDate(PureDateLiteral.parse(v), v, null), Kind.DATE, false);
-        }
-        if (target == Kind.DATETIME && (timestamp || date)) {
-            // the Pure spelling of the same instant: yyyy-mm-ddThh:mm:ss[.f]
-            String body = date ? v + "T00:00:00" : timestampBody(v, s.pos());
-            return Tx.value(new CDate(PureDateLiteral.parse(body), body, null), Kind.DATETIME, false);
-        }
-        throw SqlTranslationException.unsupported("'" + v + "' is not an ISO 8601 " + (target == Kind.DATE ? "date"
-                + " (yyyy-mm-dd)" : "timestamp (yyyy-mm-dd hh:mm:ss)") + "; other spellings are not supported",
+        PostgresDateTime.Value v = PostgresDateTime.read(s.value(), target == Kind.DATE ? "date" : "timestamp",
                 s.pos());
-    }
-
-    /** Refuses a date no calendar has, as Postgres does ({@code 2023-02-30}). */
-    private static java.time.LocalDate validDate(String v, SqlAst.Pos pos) {
-        try {
-            return java.time.LocalDate.of(Integer.parseInt(v.substring(0, 4)), Integer.parseInt(v.substring(5, 7)),
-                    Integer.parseInt(v.substring(8, 10)));
-        } catch (java.time.DateTimeException e) {
-            throw SqlTranslationException.invalid("date/time field value out of range: \"" + v + "\"", pos);
+        if (target == Kind.DATE) {
+            String body = v.date().toString();
+            return Tx.value(new CDate(PureDateLiteral.parse(body), body, null), Kind.DATE, false);
         }
-    }
-
-    /** An ISO timestamp's Pure spelling, read by Postgres's rules: {@code 24:00:00} is the next day's midnight, and
-     *  a fraction finer than a microsecond is rounded to one (half to even, Postgres's rint), carrying as far as it
-     *  must. */
-    private static String timestampBody(String v, SqlAst.Pos pos) {
-        java.time.LocalDate day = validDate(v.substring(0, 10), pos);
-        int hour = Integer.parseInt(v.substring(11, 13));
-        int minute = Integer.parseInt(v.substring(14, 16));
-        int second = Integer.parseInt(v.substring(17, 19));
-        String fraction = v.length() > 20 ? v.substring(20) : "";
-        boolean zeroFraction = fraction.chars().allMatch(c -> c == '0');
-        if (hour == 24 && minute == 0 && second == 0 && zeroFraction) {
-            return day.plusDays(1) + "T00:00:00";
+        java.time.LocalDateTime t = v.date().atStartOfDay().plusNanos(v.micros() * 1000);
+        if (t.getYear() > 9999) {
+            throw SqlTranslationException.unsupported("'" + s.value() + "' as a timestamp is not supported yet (a"
+                    + " timestamp outside the years 1 to 9999)", s.pos());
         }
-        if (hour > 23 || minute > 59 || second > 59) {
-            throw SqlTranslationException.invalid("date/time field value out of range: \"" + v + "\"", pos);
-        }
-        if (fraction.length() <= 6) {
-            return v.substring(0, 10) + "T" + v.substring(11);
-        }
-        BigDecimal micros = new BigDecimal("0." + fraction).movePointRight(6).setScale(0,
-                java.math.RoundingMode.HALF_EVEN);
-        java.time.LocalDateTime t = day.atTime(hour, minute, second).plusNanos(micros.longValueExact() * 1000);
         String body = String.format(Locale.ROOT, "%sT%02d:%02d:%02d", t.toLocalDate(), t.getHour(), t.getMinute(),
                 t.getSecond());
-        return t.getNano() == 0 ? body : body + "." + String.format(Locale.ROOT, "%06d", t.getNano() / 1000);
-    }
-
-    private static boolean isoDate(String v) {
-        return v.length() == 10 && digits(v, 0, 4) && v.charAt(4) == '-' && digits(v, 5, 7) && v.charAt(7) == '-'
-                && digits(v, 8, 10);
-    }
-
-    private static boolean isoTime(String v) {
-        if (v.length() < 8 || !digits(v, 0, 2) || v.charAt(2) != ':' || !digits(v, 3, 5) || v.charAt(5) != ':'
-                || !digits(v, 6, 8)) {
-            return false;
+        if (t.getNano() != 0) {
+            body += "." + String.format(Locale.ROOT, "%06d", t.getNano() / 1000);
         }
-        return v.length() == 8 || v.charAt(8) == '.' && v.length() > 9 && digits(v, 9, v.length());
-    }
-
-    private static boolean digits(String v, int from, int to) {
-        for (int i = from; i < to; i++) {
-            if (v.charAt(i) < '0' || v.charAt(i) > '9') {
-                return false;
-            }
-        }
-        return true;
+        return Tx.value(new CDate(PureDateLiteral.parse(body), body, null), Kind.DATETIME, false);
     }
 
     // ------------------------------------------------------------------ jsonb

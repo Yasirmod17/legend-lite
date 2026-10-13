@@ -563,8 +563,11 @@ class SqlToPureTest {
         List<Col> dated = List.of(new Col("d", "StrictDate", false));
         assertEquals("#>{s::DB.T}#->filter(r|$r.d >= %2024-01-31)->select(~[d])",
                 pure("select d from tb('s::DB.T') where d >= '2024-01-31'", dated));
+        // Postgres's other spellings are read by its rules (PostgresDateTime); a time zone's name is refused
+        assertEquals("#>{s::DB.T}#->filter(r|$r.d >= %1999-01-08)->select(~[d])",
+                pure("select d from tb('s::DB.T') where d >= 'January 8, 1999'", dated));
         assertEquals(SqlTranslationException.Kind.UNSUPPORTED, assertThrows(SqlTranslationException.class,
-                () -> pure("select d from tb('s::DB.T') where d >= 'January 8, 1999'", dated)).kind());
+                () -> pure("select d from tb('s::DB.T') where d >= 'January 8, 1999 PST'", dated)).kind());
     }
 
     @Test
