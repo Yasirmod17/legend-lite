@@ -240,9 +240,10 @@ class SqlToPureTest {
                 refusal("select sum(rank() over (order by ID)) over () from tb('s::DB.T')").getMessage());
         assertEquals("window function rank requires an OVER clause",
                 refusal("select rank() from tb('s::DB.T')").getMessage());
-        assertEquals("EXCLUDE CURRENT ROW is not supported yet", refusal("select sum(age) over (order by ID rows"
-                + " between unbounded preceding and unbounded following exclude current row) from tb('s::DB.T')")
-                .getMessage());
+        // EXCLUDE is read for count, sum, avg, min and max (aggregateAndWindowPermutationsArePostgresDefinitions)
+        assertEquals("EXCLUDE CURRENT ROW of stddev(...) is not supported yet", refusal("select stddev(age) over"
+                + " (order by ID rows between unbounded preceding and unbounded following exclude current row) from"
+                + " tb('s::DB.T')").getMessage());
     }
 
     // ------------------------------------------------------------------ functions and casts
@@ -351,6 +352,46 @@ class SqlToPureTest {
         // the remainder of numerics is exact: Pure's rem
         assertEquals("#>{s::DB.T}#->extend(~[m:r|$r.ID->rem(2.5D)])->select(~[m])",
                 pure("select mod(ID, 2.5) as m from tb('s::DB.T')"));
+    }
+
+    @Test
+    void aggregateAndWindowPermutationsArePostgresDefinitions() {
+        // ORDER BY inside an aggregate whose answer has no order is dropped; under DISTINCT it must be the argument
+        assertEquals(pure("select sum(age) as s from tb('s::DB.T')"),
+                pure("select sum(age order by dept) as s from tb('s::DB.T')"));
+        assertEquals("in an aggregate with DISTINCT, ORDER BY expressions must appear in argument list",
+                refusal("select count(distinct age order by ID) as c from tb('s::DB.T')").getMessage());
+        // a regression's count: the pairs holding both values, each read as a double
+        assertEquals("#>{s::DB.T}#->aggregate(~[n:r|if(if($r.age->isEmpty(), |[], |$r.age->toOne()->toFloat())"
+                + "->isEmpty(), |[], |$r.ID->toFloat()):y|$y->count()])->select(~[n])",
+                pure("select regr_count(age, ID) as n from tb('s::DB.T')"));
+        // FILTER on a window aggregate: the aggregate of CASE WHEN c THEN x END
+        assertEquals("#>{s::DB.T}#->extend(~[_sql_1:r|if($r.age->isNotEmpty() && ($r.age->toOne() > 3), |1, |[])])"
+                + "->extend(over([]), ~c:{p, w, r|$r._sql_1}:y|$y->count())->select(~[ID, c])",
+                pure("select ID, count(*) filter (where age > 3) over () as c from tb('s::DB.T')"));
+        assertEquals(SqlTranslationException.Kind.INVALID, refusal("select ID, row_number() filter (where age > 3)"
+                + " over () as c from tb('s::DB.T')").kind());
+        // EXCLUDE CURRENT ROW: the frame's count and sum less the row's own, NULL where no value remains
+        assertEquals("#>{s::DB.T}#->extend(over([], [~ID->ascending(meta::pure::functions::relation::NullOrder.LAST)],"
+                + " -1->rows(1)), ~_sql_1:{p, w, r|$r.age}:y|$y->count())->extend(over([], [~ID->ascending("
+                + "meta::pure::functions::relation::NullOrder.LAST)], -1->rows(1)), ~_sql_2:{p, w, r|$r.age}:y|$y"
+                + "->sum())->extend(~s:r|if($r._sql_1 - if($r.age->isEmpty(), |0, |1) == 0, |[], |if($r._sql_2"
+                + "->isEmpty(), |0, |$r._sql_2->toOne()) - if($r.age->isEmpty(), |0, |$r.age->toOne())))"
+                + "->select(~[ID, s])", pure("select ID, sum(age) over (order by ID rows between 1 preceding and 1"
+                + " following exclude current row) as s from tb('s::DB.T')"));
+        // EXCLUDE TIES of a whole partition: the partition's count less the peers', the row's own back
+        assertEquals("#>{s::DB.T}#->extend(over([]), ~_sql_1:{p, w, r|$r.age}:y|$y->count())->extend(over(~[dept]),"
+                + " ~_sql_2:{p, w, r|$r.age}:y|$y->count())->extend(~s:r|($r._sql_1 - $r._sql_2) + if($r.age"
+                + "->isEmpty(), |0, |1))->select(~[ID, s])", pure("select ID, count(age) over (order by dept rows"
+                + " between unbounded preceding and unbounded following exclude ties) as s from tb('s::DB.T')"));
+        // min over a partial frame, and a RANGE frame not bracketing the row (a NULL key's frame is its peers'),
+        // are refused
+        assertEquals("EXCLUDE CURRENT ROW of min(...) over this frame is not supported yet", refusal("select ID,"
+                + " min(age) over (order by age rows between 1 preceding and 1 following exclude current row) as s"
+                + " from tb('s::DB.T')").getMessage());
+        assertEquals("EXCLUDE CURRENT ROW of sum(...) over this frame is not supported yet", refusal("select ID,"
+                + " sum(age) over (order by age range between 3 preceding and 1 preceding exclude current row) as s"
+                + " from tb('s::DB.T')").getMessage());
     }
 
     @Test

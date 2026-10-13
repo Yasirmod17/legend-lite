@@ -1687,23 +1687,50 @@ public final class SqlToPure {
                 partitionKeys.add(key.name());
             }
             List<ValueSpecification> sorts = new ArrayList<>();
+            List<String> sortKeys = new ArrayList<>();
             Kind sortKind = null;
             for (SqlAst.SortItem o : spec.orderBy()) {
                 Col key = windowKey(o.expr(), scope, present, computed);
                 notJsonKey(key.kind(), "a window's ORDER BY", o.expr().pos());
                 sortKind = sortKind == null ? key.kind() : sortKind;
+                sortKeys.add(key.name());
                 boolean nullsFirst = o.nullsFirst() != null ? java.util.Objects.requireNonNull(o.nullsFirst())
                         : o.descending();
                 sorts.add(call(o.descending() ? "descending" : "ascending", colSpec(key.name()),
                         new EnumValue(NULL_ORDER, nullsFirst ? "FIRST" : "LAST")));
             }
-            WindowColumn column = windowColumn(w.call(), scope, present, computed);
+            SqlAst.FunctionCall call = windowCall(w.call());
             SqlAst.Frame frame = spec.frame();
-            Bounds bounds = frame == null ? null : frame(frame, sorts.size(), sortKind);
+            String exclude = frame == null ? null : frame.exclude();
+            if (frame != null && exclude != null && exclude.equals("CURRENT ROW")
+                    && frame.unit() == SqlAst.FrameUnit.ROWS && !holdsCurrentRow(frame)) {
+                // a ROWS frame without the current row: excluding it leaves the frame (a RANGE frame's offsets do
+                // not say so: a row with a NULL key is in its NULL peers' frame whatever they are)
+                frame = new SqlAst.Frame(frame.unit(), frame.start(), frame.end(), null, frame.pos());
+                exclude = null;
+            }
+            Bounds bounds = frame == null ? null : frame(exclude == null ? frame : new SqlAst.Frame(frame.unit(),
+                    frame.start(), frame.end(), null, frame.pos()), sorts.size(), sortKind);
+            String want = named.get(w);
+            if (frame != null && exclude != null) {
+                Excluded x = excluded(call, frame, bounds, partitionKeys, sortKeys, sorts, scope, present, computed);
+                if (!computed.isEmpty()) {
+                    rel = call("extend", rel, new ColSpecArray(computed));
+                }
+                for (ValueSpecification[] step : x.windows()) {
+                    rel = call("extend", rel, step[0], (ColSpec) step[1]);
+                }
+                String name = want != null && !present.contains(want) && !want.startsWith(SYNTHETIC) ? want
+                        : fresh(present);
+                present.add(name);
+                rel = call("extend", rel, new ColSpec(name, lambda(row, x.value()), null, null));
+                columns.put(w, Col.of(name, x.kind(), x.nullable()));
+                continue;
+            }
+            WindowColumn column = windowColumn(call, scope, present, computed);
             if (!computed.isEmpty()) {
                 rel = call("extend", rel, new ColSpecArray(computed));
             }
-            String want = named.get(w);
             String name = want != null && !present.contains(want) && !want.startsWith(SYNTHETIC) ? want
                     : fresh(present);
             present.add(name);
@@ -1802,6 +1829,218 @@ public final class SqlToPure {
                 List.of(body));
     }
 
+    /**
+     * A window call as Postgres reads it: DISTINCT and an ORDER BY inside the call are its errors over a window; an
+     * aggregate's {@code FILTER (WHERE c)} is the aggregate of the rows c holds for, {@code agg(CASE WHEN c THEN x
+     * END)} -- every aggregate here skips a NULL ({@code count(*)} counts the constant 1 where c holds).
+     */
+    private static SqlAst.FunctionCall windowCall(SqlAst.FunctionCall f) {
+        if (f.name().size() != 1) {
+            return f;
+        }
+        String fn = functionName(f.name().get(0));
+        if (f.distinct()) {
+            throw SqlTranslationException.invalid("DISTINCT is not implemented for window functions", f.pos());
+        }
+        if (!f.orderBy().isEmpty()) {
+            throw SqlTranslationException.invalid("aggregate ORDER BY is not implemented for window functions",
+                    f.pos());
+        }
+        SqlAst.Expr filter = f.filter();
+        if (filter == null) {
+            return f;
+        }
+        if (WINDOW_FUNCTIONS.contains(fn)) {
+            throw SqlTranslationException.invalid("FILTER is not implemented for non-aggregate window functions",
+                    f.pos());
+        }
+        if (containsAggregate(filter)) {
+            throw SqlTranslationException.invalid("aggregate functions are not allowed in FILTER", filter.pos());
+        }
+        List<SqlAst.Expr> args = new ArrayList<>();
+        if (f.star()) {
+            args.add(new SqlAst.Case(null, List.of(new SqlAst.When(filter, new SqlAst.IntegerLit(
+                    java.math.BigInteger.ONE, f.pos()))), null, f.pos()));
+        } else {
+            for (SqlAst.Expr a : f.args()) {
+                args.add(new SqlAst.Case(null, List.of(new SqlAst.When(filter, a)), null, a.pos()));
+            }
+        }
+        return new SqlAst.FunctionCall(f.name(), args, false, false, f.orderBy(), f.withinGroup(), null, f.pos());
+    }
+
+    /** Whether a frame's bounds hold the current row: it starts at or before it and ends at or after it (a RANGE
+     *  frame's offsets are from the current row's value, which is 0 from itself; a row with a NULL key is in its NULL
+     *  peers' frame whatever the bounds). */
+    private static boolean holdsCurrentRow(SqlAst.Frame f) {
+        return offset(f.start()) <= 0 && offset(f.end()) >= 0;
+    }
+
+    /** A bound's offset from the current row: PRECEDING negative, the unbounded ones the furthest. */
+    private static long offset(SqlAst.FrameBound b) {
+        return switch (b.kind()) {
+            case UNBOUNDED_PRECEDING -> Long.MIN_VALUE;
+            case UNBOUNDED_FOLLOWING -> Long.MAX_VALUE;
+            case CURRENT_ROW -> 0;
+            case PRECEDING, FOLLOWING -> {
+                SqlAst.Expr e = java.util.Objects.requireNonNull(b.offset());
+                long v = e instanceof SqlAst.IntegerLit n && n.value().bitLength() <= 31 ? n.value().longValue() : 0;
+                yield b.kind() == SqlAst.BoundKind.PRECEDING ? -v : v;
+            }
+        };
+    }
+
+    /** A window aggregate over a frame with EXCLUDE: the windows its parts are computed in (each an over() and its
+     *  column), then its value from them, its kind, and whether it may be NULL. */
+    private record Excluded(List<ValueSpecification[]> windows, ValueSpecification value, Kind kind,
+            boolean nullable) {
+    }
+
+    /** Zero in a numeric kind's Pure type. */
+    private static ValueSpecification zero(Kind kind) {
+        return switch (kind) {
+            case FLOAT, INEXACT -> new com.legend.protocol.spec.CFloat(0.0);
+            case DECIMAL, NUMBER -> new CDecimal(BigDecimal.ZERO);
+            default -> new CInteger(0L);
+        };
+    }
+
+    /** The aggregates EXCLUDE is read for. */
+    private static final Set<String> EXCLUDABLE = Set.of("count", "sum", "avg", "min", "max");
+
+    /**
+     * {@code agg(x) OVER (... frame EXCLUDE ...)}: Pure's frames have no EXCLUDE, so the aggregate is computed from
+     * windows that do not need it.
+     * - count, sum, avg: the frame's count and sum, less what is excluded: EXCLUDE CURRENT ROW (of a ROWS or RANGE
+     *   frame) the current row's own value; EXCLUDE GROUP (of a whole partition) the current row's peers', a window
+     *   partitioned by the ORDER BY keys too; EXCLUDE TIES the peers' less the current row's own. A sum or an
+     *   average is NULL where no value remains, as Postgres's is.
+     * - min, max with EXCLUDE CURRENT ROW (of a whole partition): the partition's, unless the current row holds it
+     *   alone; then the least (greatest) of the rest.
+     * Others (a frame that is not the whole partition but for CURRENT ROW's sums, min and max of GROUP or TIES, other
+     * aggregates) are not supported yet.
+     */
+    private Excluded excluded(SqlAst.FunctionCall f, SqlAst.Frame frame, @com.legend.base.Nullable Bounds bounds,
+            List<String> partitionKeys, List<String> sortKeys, List<ValueSpecification> sorts, Scope scope,
+            Set<String> present, List<ColSpec> computed) {
+        String exclude = java.util.Objects.requireNonNull(frame.exclude());
+        String fn = f.name().size() == 1 ? functionName(f.name().get(0)) : "";
+        boolean whole = frame.start().kind() == SqlAst.BoundKind.UNBOUNDED_PRECEDING
+                && frame.end().kind() == SqlAst.BoundKind.UNBOUNDED_FOLLOWING
+                || frame.unit() == SqlAst.FrameUnit.RANGE && sortKeys.isEmpty() && frame.start().offset() == null
+                && frame.end().offset() == null;
+        boolean minMax = fn.equals("min") || fn.equals("max");
+        boolean currentRow = exclude.equals("CURRENT ROW");
+        if (!EXCLUDABLE.contains(fn) || !whole && !(currentRow && !minMax && (frame.unit() == SqlAst.FrameUnit.ROWS
+                || frame.unit() == SqlAst.FrameUnit.RANGE && holdsCurrentRow(frame))) || minMax && !currentRow) {
+            throw SqlTranslationException.unsupported("EXCLUDE " + exclude + " of " + (fn.isEmpty() ? "this function"
+                    : fn + "(...)") + (whole ? "" : " over this frame") + " is not supported yet", frame.pos());
+        }
+        Col arg = null;
+        if (f.star()) {
+            if (!fn.equals("count")) {
+                throw SqlTranslationException.invalid(fn + "(*) is not a function; only count(*) is", f.pos());
+            }
+        } else {
+            windowArguments(f, 1, 1);
+            arg = windowKey(f.args().get(0), scope, present, computed);
+            if (minMax) {
+                notJsonKey(arg.kind(), fn, f.pos());
+            } else if (!fn.equals("count") && !arg.kind().numeric()) {
+                throw SqlTranslationException.invalid("function " + fn + "(" + postgresName(arg.kind())
+                        + ") does not exist", f.pos());
+            }
+        }
+        ValueSpecification x = arg == null ? new CInteger(1L) : property(row, arg.name());
+        boolean xNullable = arg != null && arg.nullable();
+        ValueSpecification whole0 = over(partitionKeys, List.of(), null);
+        List<ValueSpecification[]> windows = new ArrayList<>();
+        if (minMax) {
+            Col a = java.util.Objects.requireNonNull(arg);
+            String best = fresh(present);
+            windows.add(new ValueSpecification[] {whole0, new ColSpec(best, windowLambda(x), lambda(group,
+                    call(fn, new Variable(group))), null)});
+            ValueSpecification b = call("toOne", property(row, best));
+            ValueSpecification one = xNullable ? call("toOne", x) : x;
+            // the current row's value where it is the partition's best, and the rest's best beyond it
+            String ties = fresh(present);
+            ValueSpecification tie = call("if", call("equal", one, b), thunk(new CInteger(1L)), thunk(empty()));
+            windows.add(new ValueSpecification[] {whole0, new ColSpec(ties, windowLambda(xNullable ? call("if",
+                    call("isEmpty", x), thunk(empty()), thunk(tie)) : tie), lambda(group, call("count",
+                    new Variable(group))), null)});
+            String rest = fresh(present);
+            ValueSpecification beyond = call("if", call(fn.equals("min") ? "greaterThan" : "lessThan", one, b),
+                    thunk(one), thunk(empty()));
+            windows.add(new ValueSpecification[] {whole0, new ColSpec(rest, windowLambda(xNullable ? call("if",
+                    call("isEmpty", x), thunk(empty()), thunk(beyond)) : beyond), lambda(group, call(fn,
+                    new Variable(group))), null)});
+            ValueSpecification alone = call("and", call("equal", one, b), call("equal", property(row, ties),
+                    new CInteger(1L)));
+            if (xNullable) {
+                alone = call("and", call("isNotEmpty", x), alone);
+            }
+            return new Excluded(windows, call("if", alone, thunk(property(row, rest)), thunk(property(row, best))),
+                    a.kind(), true);
+        }
+        // the frame's (or the partition's) count and sum
+        ValueSpecification frameOver = currentRow ? over(partitionKeys, sorts, bounds) : whole0;
+        String count = fresh(present);
+        windows.add(new ValueSpecification[] {frameOver, new ColSpec(count, windowLambda(x), lambda(group,
+                call("count", new Variable(group))), null)});
+        String sum = null;
+        if (!fn.equals("count")) {
+            sum = fresh(present);
+            windows.add(new ValueSpecification[] {frameOver, new ColSpec(sum, windowLambda(x), lambda(group,
+                    call("sum", new Variable(group))), null)});
+        }
+        // the current row's own value, and its count (1 where it holds one)
+        ValueSpecification zero = zero(arg == null ? Kind.INTEGER : arg.kind());
+        ValueSpecification own = xNullable ? call("if", call("isEmpty", x), thunk(zero), thunk(call("toOne", x))) : x;
+        ValueSpecification ownCount = xNullable ? call("if", call("isEmpty", x), thunk(new CInteger(0L)),
+                thunk(new CInteger(1L))) : new CInteger(1L);
+        ValueSpecification remaining;
+        ValueSpecification total = sum == null ? null : call("if", call("isEmpty", property(row, sum)),
+                thunk(zero), thunk(call("toOne", property(row, sum))));
+        if (currentRow) {
+            remaining = AppliedFunction.infixRun("minus", List.of(property(row, count), ownCount));
+            if (total != null) {
+                total = AppliedFunction.infixRun("minus", List.of(total, own));
+            }
+        } else {
+            List<String> peers = new ArrayList<>(partitionKeys);
+            peers.addAll(sortKeys);
+            ValueSpecification groupOver = over(peers, List.of(), null);
+            String groupCount = fresh(present);
+            windows.add(new ValueSpecification[] {groupOver, new ColSpec(groupCount, windowLambda(x), lambda(group,
+                    call("count", new Variable(group))), null)});
+            remaining = AppliedFunction.infixRun("minus", List.of(property(row, count), property(row, groupCount)));
+            boolean ties = exclude.equals("TIES");
+            if (ties) {
+                remaining = AppliedFunction.infixRun("plus", List.of(remaining, ownCount));
+            }
+            if (total != null) {
+                String groupSum = fresh(present);
+                windows.add(new ValueSpecification[] {groupOver, new ColSpec(groupSum, windowLambda(x), lambda(group,
+                        call("sum", new Variable(group))), null)});
+                ValueSpecification peersSum = call("if", call("isEmpty", property(row, groupSum)), thunk(zero),
+                        thunk(call("toOne", property(row, groupSum))));
+                total = AppliedFunction.infixRun("minus", List.of(total, peersSum));
+                if (ties) {
+                    total = AppliedFunction.infixRun("plus", List.of(total, own));
+                }
+            }
+        }
+        if (fn.equals("count")) {
+            return new Excluded(windows, remaining, Kind.INTEGER, false);
+        }
+        Kind argKind = java.util.Objects.requireNonNull(arg).kind();
+        ValueSpecification none = call("equal", remaining, new CInteger(0L));
+        ValueSpecification value = fn.equals("sum") ? java.util.Objects.requireNonNull(total)
+                : call("divide", java.util.Objects.requireNonNull(total), remaining);
+        return new Excluded(windows, call("if", none, thunk(empty()), thunk(value)),
+                fn.equals("sum") ? sumKind(argKind) : statisticKind(argKind), true);
+    }
+
     /** A window call's function: a ranking function, a value function (lag, lead, first_value, last_value, nth_value:
      *  the other row's column), or an aggregate over the window's frame. */
     private WindowColumn windowColumn(SqlAst.FunctionCall f, Scope scope, Set<String> present,
@@ -1811,12 +2050,8 @@ public final class SqlToPure {
                     f.pos());
         }
         String fn = functionName(f.name().get(0));
-        if (f.distinct()) {
-            throw SqlTranslationException.unsupported("DISTINCT is not implemented for window functions", f.pos());
-        }
-        if (f.filter() != null || !f.orderBy().isEmpty() || !f.withinGroup().isEmpty()) {
-            throw SqlTranslationException.unsupported("FILTER, ORDER BY or WITHIN GROUP in a window call is not"
-                    + " supported yet", f.pos());
+        if (!f.withinGroup().isEmpty()) {
+            throw SqlTranslationException.unsupported("WITHIN GROUP in a window call is not supported yet", f.pos());
         }
         if (f.star() && !fn.equals("count")) {
             throw SqlTranslationException.invalid(fn + "(*) is not a function; only count(*) is", f.pos());
@@ -2349,7 +2584,12 @@ public final class SqlToPure {
 
     private static final Set<String> AGGREGATES = Set.of("count", "sum", "avg", "min", "max", "stddev", "stddev_samp",
             "stddev_pop", "variance", "var_samp", "var_pop", "string_agg", "bool_and", "bool_or", "every",
-            "percentile_cont", "percentile_disc", "corr", "covar_pop", "covar_samp");
+            "percentile_cont", "percentile_disc", "corr", "covar_pop", "covar_samp", "regr_count", "regr_avgx",
+            "regr_avgy", "regr_sxx", "regr_syy", "regr_sxy", "regr_slope", "regr_intercept", "regr_r2");
+
+    /** Postgres's linear regressions of y on x: double precision, over the pairs that hold both values. */
+    private static final Set<String> REGRESSIONS = Set.of("regr_count", "regr_avgx", "regr_avgy", "regr_sxx",
+            "regr_syy", "regr_sxy", "regr_slope", "regr_intercept", "regr_r2");
 
     /** Postgres's ordered-set aggregates that Pure's percentile computes. */
     private static final Set<String> PERCENTILES = Set.of("percentile_cont", "percentile_disc");
@@ -2450,9 +2690,11 @@ public final class SqlToPure {
             String fn = functionName(f.name().get(0));
             String want = preferred.get(canon);
             String name = want != null && !names.contains(want) && !want.startsWith(SYNTHETIC) ? want : fresh(names);
-            if (fn.equals("string_agg") || PERCENTILES.contains(fn) || BIVARIATE.containsKey(fn)) {
+            if (fn.equals("string_agg") || PERCENTILES.contains(fn) || BIVARIATE.containsKey(fn)
+                    || REGRESSIONS.contains(fn)) {
                 Aggregate aggregate = fn.equals("string_agg") ? new Aggregate(stringAgg(f, in, name), Kind.STRING)
-                        : PERCENTILES.contains(fn) ? percentile(f, in, name) : bivariate(f, in, name, names);
+                        : PERCENTILES.contains(fn) ? percentile(f, in, name)
+                        : REGRESSIONS.contains(fn) ? regression(f, in, name, names) : bivariate(f, in, name, names);
                 names.add(name);
                 byCanon.put(canon, Col.of(name, aggregate.kind(), true));
                 aggregates.addAll(aggregate.specs());
@@ -2477,9 +2719,7 @@ public final class SqlToPure {
                 throw SqlTranslationException.invalid("WITHIN GROUP is required for ordered-set aggregates only; "
                         + fn + " is not one", f.pos());
             }
-            if (!f.orderBy().isEmpty()) {
-                throw SqlTranslationException.unsupported("ORDER BY inside an aggregate is not supported yet", f.pos());
-            }
+            orderedKeys(f, in);
             if (f.distinct()) {
                 // the distinct values of the group, each once (Postgres's DISTINCT inside an aggregate)
                 notJsonKey(arg.kind(), fn + "(DISTINCT ...)", f.pos());
@@ -2633,10 +2873,11 @@ public final class SqlToPure {
             throw SqlTranslationException.invalid("WITHIN GROUP is required for ordered-set aggregates only; " + fn
                     + " is not one", f.pos());
         }
-        if (f.distinct() || f.star() || !f.orderBy().isEmpty() || f.args().size() != 2) {
+        if (f.distinct() || f.star() || f.args().size() != 2) {
             throw SqlTranslationException.unsupported(fn + " other than of two values is not supported yet",
                     f.pos());
         }
+        orderedKeys(f, in);
         List<Tx> pair = new ArrayList<>();
         for (SqlAst.Expr a : f.args()) {
             if (containsAggregate(a)) {
@@ -2682,6 +2923,133 @@ public final class SqlToPure {
                         call("covarPopulation", new Variable(group))), null)),
                 Kind.FLOAT, new ColSpec(name, lambda(row, call("if", flat, thunk(empty()), thunk(property(row, raw)))),
                         null, null));
+    }
+
+    /** An aggregate's {@code ORDER BY}, for one whose answer no order changes (all but string_agg): Postgres orders
+     *  the values it reads, and reads the same answer from them in any order. Its keys are still checked as Postgres
+     *  checks them; under DISTINCT each must be the argument. */
+    private void orderedKeys(SqlAst.FunctionCall f, Input in) {
+        for (SqlAst.SortItem o : f.orderBy()) {
+            if (containsAggregate(o.expr())) {
+                throw SqlTranslationException.invalid("aggregate function calls cannot be nested", o.expr().pos());
+            }
+            if (f.distinct() && (f.args().size() != 1 || !canon(o.expr(), in).equals(canon(f.args().get(0), in)))) {
+                throw SqlTranslationException.invalid("in an aggregate with DISTINCT, ORDER BY expressions must"
+                        + " appear in argument list", o.expr().pos());
+            }
+            tx(o.expr(), in, row);
+        }
+    }
+
+    /**
+     * Postgres's regressions of y on x ({@code regr_slope(y, x)} and the others), over the pairs that hold both
+     * values, each value read as a double as Postgres reads it. They are computed from the pairs' count and averages
+     * and their population variances and covariance (Pure's covarPopulation over rowMapper pairs), the column itself
+     * after the grouping: Sxx is N times x's variance, Syy and Sxy alike; the slope Sxy / Sxx and the intercept
+     * avg(y) - slope * avg(x), NULL where Sxx is 0; r2 Sxy^2 / (Sxx * Syy), 1 where only Syy is 0. As for corr, a
+     * variance Postgres's running sums leave near 0 for equal values is exactly 0 here.
+     */
+    private Aggregate regression(SqlAst.FunctionCall f, Input in, String name, Set<String> names) {
+        String fn = functionName(f.name().get(0));
+        if (!f.withinGroup().isEmpty()) {
+            throw SqlTranslationException.invalid("WITHIN GROUP is required for ordered-set aggregates only; " + fn
+                    + " is not one", f.pos());
+        }
+        if (f.star() || f.args().size() != 2) {
+            throw SqlTranslationException.invalid("function " + fn + " takes two arguments", f.pos());
+        }
+        if (f.distinct()) {
+            throw SqlTranslationException.unsupported(fn + "(DISTINCT ...) is not supported yet", f.pos());
+        }
+        orderedKeys(f, in);
+        List<ValueSpecification> pair = new ArrayList<>();
+        List<Boolean> nullable = new ArrayList<>();
+        for (SqlAst.Expr a : f.args()) {
+            if (containsAggregate(a)) {
+                throw SqlTranslationException.invalid("aggregate function calls cannot be nested", a.pos());
+            }
+            Tx t = tx(a, in, row);
+            if (!t.kind().numeric()) {
+                throw SqlTranslationException.unsupported(fn + " of " + postgresName(t.kind()) + " values is not"
+                        + " supported yet", a.pos());
+            }
+            ValueSpecification v = valueOf(t);
+            // Postgres reads each value as a double precision
+            pair.add(t.kind() == Kind.FLOAT || t.kind() == Kind.INEXACT ? v : t.nullable() ? call("if",
+                    call("isEmpty", v), thunk(empty()), thunk(call("toFloat", call("toOne", v)))) : call("toFloat", v));
+            nullable.add(t.nullable());
+        }
+        ValueSpecification y = pair.get(0);
+        ValueSpecification x = pair.get(1);
+        boolean maybeNull = nullable.get(0) || nullable.get(1);
+        SqlAst.Expr filter = f.filter();
+        if (filter != null) {
+            if (containsAggregate(filter)) {
+                throw SqlTranslationException.invalid("aggregate functions are not allowed in FILTER", filter.pos());
+            }
+            ValueSpecification test = condition(filter, in, "FILTER");
+            y = call("if", test, thunk(y), thunk(empty()));
+            x = call("if", test, thunk(x), thunk(empty()));
+            maybeNull = true;
+        }
+        // each value where its pair holds both
+        ValueSpecification yPaired = maybeNull ? call("if", call("isEmpty", x), thunk(empty()), thunk(y)) : y;
+        ValueSpecification xPaired = maybeNull ? call("if", call("isEmpty", y), thunk(empty()), thunk(x)) : x;
+        Variable g = new Variable(group);
+        switch (fn) {
+            case "regr_count" -> {
+                return new Aggregate(new ColSpec(name, lambda(row, xPaired), lambda(group, call("count", g)), null),
+                        Kind.INTEGER);
+            }
+            case "regr_avgx", "regr_avgy" -> {
+                return new Aggregate(new ColSpec(name, lambda(row, fn.equals("regr_avgx") ? xPaired : yPaired),
+                        lambda(group, call("average", g)), null), Kind.FLOAT);
+            }
+            default -> {
+            }
+        }
+        String n = fresh(names);
+        String vx = fresh(names);
+        String vy = fresh(names);
+        String cxy = fresh(names);
+        String ax = fresh(names);
+        String ay = fresh(names);
+        List<ColSpec> parts = List.of(
+                new ColSpec(n, lambda(row, xPaired), lambda(group, call("count", g)), null),
+                new ColSpec(vx, lambda(row, call("rowMapper", x, xPaired)), lambda(group, call("covarPopulation", g)),
+                        null),
+                new ColSpec(vy, lambda(row, call("rowMapper", y, yPaired)), lambda(group, call("covarPopulation", g)),
+                        null),
+                new ColSpec(cxy, lambda(row, call("rowMapper", y, x)), lambda(group, call("covarPopulation", g)),
+                        null),
+                new ColSpec(ax, lambda(row, xPaired), lambda(group, call("average", g)), null),
+                new ColSpec(ay, lambda(row, yPaired), lambda(group, call("average", g)), null));
+        ValueSpecification count = call("toFloat", property(row, n));
+        ValueSpecification sxx = one(vx);
+        ValueSpecification slope = call("divide", one(cxy), sxx);
+        ValueSpecification flat = call("or", call("isEmpty", property(row, vx)), call("equal", sxx,
+                new CInteger(0L)));
+        ValueSpecification value = switch (fn) {
+            case "regr_sxx" -> call("if", call("isEmpty", property(row, vx)), thunk(empty()), thunk(
+                    AppliedFunction.infixRun("times", List.of(count, sxx))));
+            case "regr_syy" -> call("if", call("isEmpty", property(row, vy)), thunk(empty()), thunk(
+                    AppliedFunction.infixRun("times", List.of(count, one(vy)))));
+            case "regr_sxy" -> call("if", call("isEmpty", property(row, cxy)), thunk(empty()), thunk(
+                    AppliedFunction.infixRun("times", List.of(count, one(cxy)))));
+            case "regr_slope" -> call("if", flat, thunk(empty()), thunk(slope));
+            case "regr_intercept" -> call("if", flat, thunk(empty()), thunk(AppliedFunction.infixRun("minus",
+                    List.of(one(ay), AppliedFunction.infixRun("times", List.of(slope, one(ax)))))));
+            default -> call("if", flat, thunk(empty()), thunk(call("if", call("equal", one(vy), new CInteger(0L)),
+                    thunk(call("toFloat", new CInteger(1L))), thunk(call("divide", AppliedFunction.infixRun("times",
+                            List.of(one(cxy), one(cxy))), AppliedFunction.infixRun("times", List.of(sxx,
+                            one(vy))))))));
+        };
+        return new Aggregate(parts, Kind.FLOAT, new ColSpec(name, lambda(row, value), null, null));
+    }
+
+    /** A grouped column's one value (where it holds one). */
+    private ValueSpecification one(String column) {
+        return call("toOne", property(row, column));
     }
 
     /** Whether a grouped column holds 0: known and equal to 0. */
