@@ -405,6 +405,12 @@ export function pythonServices(o: PythonServicesOptions): Services {
         return { runner: pythonRunner(link, model, runtime) };
       },
       database: pythonDatabase(link, o.offers),
+      // the model actions: Python's native library writes, a project's facts planned and run in Python (PlanAndRun)
+      modelWriting: {
+        place: 'Python',
+        writer: new LitePlanner({ model: '', runtime: '', worker: () => pythonWorker(link) }),
+        rows: (model, runtime) => pythonRunner(link, model, runtime),
+      },
     },
     pages: Promise.resolve(pythonPages(link, o.offers)),
     live: {

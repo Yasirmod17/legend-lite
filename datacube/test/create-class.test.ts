@@ -10,6 +10,8 @@ import { SdlcError, type SdlcClient } from '../../sdlc-client/src/client.ts';
 import type { PureChange } from '../../sdlc-client/src/wire.ts';
 import { PageModel, artifactIdOf, projectText, saveFresh } from '../src/page-model.ts';
 import { writesModels } from '../src/model-writer.ts';
+import { pageGrids } from '../src/model-actions.ts';
+import { PlanAndRun } from '../src/runner.ts';
 import { isPackage, isPureName, suggestedClassName, suggestedDataSpaceName, suggestedPackage } from '../src/model-names.ts';
 import { classLambda, duplicateLambda, sampleLambda, storeTableOf } from '../src/query.ts';
 import type { CubeSnapshot } from '../src/snapshot.ts';
@@ -79,6 +81,31 @@ describe("the grid's rows, as a class's", () => {
     assert.deepEqual(storeTableOf(accessor('local::DB', 'main', 'trades')), { database: 'local::DB', schema: 'main', table: 'trades' });
     assert.equal(storeTableOf({ _type: 'var', name: 'x' } as never), undefined);
     assert.match(toJson(sampleLambda(SOURCE, 100)), /"limit"/);
+  });
+
+  it('a grid is read where its rows are planned and run, on whichever host: a Python grid too (B1)', async () => {
+    // a grid whose rows the host plans and runs (as every grid on Python's page is): its source said by its planner,
+    // its sample read through its PlanAndRun -- never the page's own planner or engine, which a Python host has not
+    const asked: string[] = [];
+    const host = {
+      name: 'python',
+      planner: { source: () => ({ model: 'M', runtime: 'local::R' }) } as never,
+      planAndRun: async (query: unknown) => {
+        asked.push(toJson(query as never));
+        return { plan: { sql: 'SELECT 1', columns: [] }, rows: { columns: [], rowCount: 0, epoch: 0, elapsedMs: 0 } };
+      },
+      stream: async () => undefined,
+    };
+    const rows = new PlanAndRun(host);
+    const [grid] = pageGrids(['g1'], () => ({ snapshot: snapshot(), label: 'trades', rows }), () => undefined,
+      { classLambda, storeTableOf, sampleLambda });
+    assert.ok(grid && !('refused' in grid.made), 'a class candidate');
+    assert.deepEqual(grid.made.source, { model: 'M', runtime: 'local::R' });
+    assert.equal(grid.rows, rows);
+    // its rows read where they are: the host's PlanAndRun answers the grid's queries
+    await grid.rows.host.planAndRun(grid.made.sample, 0);
+    assert.equal(asked.length, 1);
+    assert.match(asked[0]!, /"limit"/);
   });
 
   it('the model\'s writer is the one that answers the three routes', () => {

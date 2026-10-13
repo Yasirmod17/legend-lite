@@ -35,7 +35,7 @@ import type { InferredModel } from '../infer.ts';
 import type { GridMaker } from '../page/page-app.ts';
 import type { ModelOptions } from '../planner.ts';
 import { inferFormat, type S3Credentials } from '../remote.ts';
-import type { QueryRunner } from '../runner.ts';
+import type { PlanAndRun, QueryRunner } from '../runner.ts';
 import type { ModelElement } from '../saved-queries.ts';
 import { SAMPLES, sampleById, sampleFileName, type Sample } from '../samples.ts';
 import type { CubeSnapshot } from '../snapshot.ts';
@@ -67,7 +67,7 @@ export type GridPlace = {
   /** Its own planner, over its own model (a page's grids share no model); the page's planner when none. */
   readonly planner?: Planner;
   /** Planned and run by the host instead (a Python host's frame: R4): no planner or engine in the page. */
-  readonly runner?: QueryRunner;
+  readonly runner?: PlanAndRun;
   /** What its header says it reads. */
   readonly label?: string;
   /**
