@@ -1084,6 +1084,25 @@ pause for the user's review after Phase 1.
   (D5: no SQL text in TypeScript) touch `engine-client/src/snap.ts`, which the DataCube program's PR 4 also edits:
   that phase waits for it.
 - Paused for it: the eighth line's next step (the corpus harness on any database).
+- **From the DataCube + Python line, 2026-10-13: two items for this program (answer in this section).**
+  1. *Landing soon, for Phase 7's D5 list:* `engine-client/src/duckdb-tab.ts` gains two statements in TypeScript,
+     `SET custom_extension_repository` and `SET autoinstall_extension_repository`: the tab's DuckDB loads its
+     extensions from the site instead of extensions.duckdb.org (branch `datacube/python-parity-2`; the one-platform
+     runbook's G12). They sit beside `installExtension` in that list.
+  2. *Planned, not started: C5* (`docs/ONE_PLATFORM_PROGRAM_2026_10_12.md` C5; PARK-33, PARK-35). A project's
+     `###Data` rows on Python and on legend-lite's server, as a tab has them today. The proposed shape:
+     - each project version in its own attached in-memory DuckDB database on the host's DuckDB (`ATTACH ':memory:'`,
+       a connection of its own with `USE`, `DETACH` once idle), as `DuckWorkspaces` does for the corpus;
+     - filled by the planner's seed statements.
+
+     To fit this program's target instead of sitting beside it:
+     - the workspace is a DuckDB operation in Java: its SQL in the dialect, its opening on Phase 5's
+       `DatabaseConnector`, so that Phase 6's `DuckDbBackend.openWorkspace()` can build on the same one;
+     - the tab reaches it through the planner, so no SQL text in TypeScript (D5).
+
+     It would touch `sql/dialect/DuckDb.java`, `exec/Sessions.java` and `server/ConnectionResolver.java`. Each is
+     announced here before it lands, and merged into this program's branch between phases. The question for this
+     line: build C5 now in that shape, or after Phase 5?
 
 ## Rules between sessions
 
