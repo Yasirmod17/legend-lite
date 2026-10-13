@@ -18,7 +18,7 @@ import { AppContext, gavOf, type AppConfig, type CubeRows, type LoadedProject } 
 import { App } from '../src/app/app.ts';
 import { BrowserEngine } from '../../engine-client/src/legend/browser-engine.ts';
 import { HttpEngine, RoutedEngine, type Engine, type Grammar, type QueryStore } from '../src/backend/engine.ts';
-import { BrowserRecords, LOCAL_API, localQueryServer, QueryStoreClient } from '../../query-store/src/index.ts';
+import { BrowserRecords, LOCAL_API, loadQueriesModule, QueryStoreClient, wasmQueryServer } from '../../query-store/src/index.ts';
 import { WasmGrammar, WorkerPort } from '../../engine-client/src/legend/wasm-grammar.ts';
 import { ModelGraph } from '../src/model/graph.ts';
 import { h, mount } from '../src/ui/dom.ts';
@@ -120,8 +120,11 @@ async function boot(): Promise<void> {
     }
     engine = new BrowserEngine(planner!, runner, isEnumeration, user);
     cubeRows = { kind: 'sql', engine: runner };
-    // no server: the same API, answered in this page from this origin's IndexedDB (query-store)
-    store = new QueryStoreClient(LOCAL_API, localQueryServer({ records: new BrowserRecords(), user }).fetch);
+    // no server: the same API, answered in this page from this origin's IndexedDB by legend-lite's own rules (the
+    // server's, compiled to WebAssembly: query-store's module at vendor/queries/)
+    store = new QueryStoreClient(LOCAL_API, wasmQueryServer({
+      module: await loadQueriesModule(new URL('./vendor/queries/', location.href).href), records: new BrowserRecords(), user,
+    }).fetch);
   }
   const ctx = new AppContext(config, engine, store, planner, projects, user, cubeRows);
   ctx.byName = byName?.load;

@@ -102,7 +102,7 @@ export async function browserServices(o: BrowserServicesOptions): Promise<Servic
     },
     // opened now and waited for where a page is saved or opened: the start's first grid does not wait on IndexedDB
     pages: browserPages(),
-    queries: queryService(config),
+    queries: queryService(config, o.location),
     ...(modelHome ? { modelHome } : {}),
     warehouse: warehouseService(config),
     browser: {
@@ -155,15 +155,19 @@ async function browserPages(): Promise<PageService> {
 /**
  * THE QUERY STORE, through the one client (query-store/README.md): the server the deployment names, or -- none named --
  * the same API answered in this page from this origin's browser store, the one Legend Query keeps its saved queries in
- * when it runs without a server.
+ * when it runs without a server, by legend-lite's own rules (the server's, compiled to WebAssembly: the module at
+ * `vendor/queries/`, fetched the first time the store is asked; docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B5).
  */
-function queryService(config: TabConfig): QueryService {
+function queryService(config: TabConfig, location: { readonly href: string }): QueryService {
   const url = config.queryStore;
   let store: Promise<QueryReader> | undefined;
   return {
-    store: () => (store ??= queryStores().then((m) => (url
+    store: () => (store ??= queryStores().then(async (m) => (url
       ? new m.QueryStoreClient(url)
-      : new m.QueryStoreClient(m.LOCAL_API, m.localQueryServer({ records: new m.BrowserRecords(), user: config.user }).fetch)))),
+      : new m.QueryStoreClient(m.LOCAL_API, m.wasmQueryServer({
+        module: await m.loadQueriesModule(new URL('./vendor/queries/', location.href).href),
+        records: new m.BrowserRecords(), user: config.user,
+      }).fetch)))),
     where: url ? `on ${hostOf(url)}` : 'in this browser',
     // the browser's store: a query saved in another tab (Legend Query) appears without reopening
     ...(url ? {} : {

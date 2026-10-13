@@ -30,6 +30,9 @@
 # refuses a declaration whose parameter names differ from the platform's own version with a ModelException, the model error it is.
 # 2026-10-10 (DataCube's Create a Class…, docs/DATACUBE_MODEL_DESIGN_2026_10_10.md §15.6): `pure_v1` reaches `compiler` --
 # server/PromoteRelationToModel types the relation it writes as a class over the model it compiles (a ModelContext).
+# 2026-10-13 (the one-platform program's B5, docs/ONE_PLATFORM_PROGRAM_2026_10_12.md): `saved_queries` (queries/: the
+# saved queries' rules over a records interface, base and json only, so the page's module and Python's native library
+# answer with the server's rules); server_lib reaches it.
 spi	
 cache	base
 values	base
@@ -62,4 +65,5 @@ pure_v1	base compiler compiler_element_type error json parser plan planner proto
 driver	base builtin cache compiler compiler_element_type database diagnostics error exec lineage lowering model normalizer parser plan planner platform protocol resolver setup sql sql_dialect testdatagen validation values
 ide	base lexer model parser
 test	base compiler driver error exec model planner protocol sql values
-server_lib	base cache compiler compiler_element_type database driver error exec json lowering model parser plan planner protocol pure_v1 sql_dialect
+saved_queries	base json
+server_lib	base cache compiler compiler_element_type database driver error exec json lowering model parser plan planner protocol pure_v1 saved_queries sql_dialect

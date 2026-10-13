@@ -55,7 +55,7 @@ from . import _json, _planner, compiler
 from .compiler import LegendError
 from ._library import library
 from .frames import Frames, UntypedColumn
-from ._home import SavedPages, Settings, home, model_home_folder
+from ._home import SavedPages, Settings, home, locked, model_home_folder, queries_folder
 
 _API = '/api/pure/v1/'
 _EXECUTE = _API + 'execution/execute'
@@ -75,6 +75,9 @@ _SETTINGS = '/settings.json'
 # PYTHON'S MODEL HOME (B3): the SDLC's API and the Depot's, as the model home's server mounts them, answered by the
 # native library's SDLC over this user's git repository of projects
 _SDLC_API, _DEPOT_API = '/sdlc/api/', '/depot/api/'
+# legend-engine's query store (/api/pure/v1/query): the saved queries' rules, the server's and the page's, over this
+# user's folder (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B5); and who a caller is there, as Python's saved pages name it
+_QUERIES, _QUERY_USER = '/api/pure/v1/query', 'this user'
 # PLANANDRUN (docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md §15): a page's grid planned against the model Python holds and
 # run on its DuckDB, in one call; and the planner protocol's other requests, answered as the tab's worker answers them
 _PLAN_AND_RUN, _PLANNER = '/plan-and-run.json', '/planner.json'
@@ -215,6 +218,11 @@ def private(path: str) -> bool:
         _PLAN_AND_RUN, _PLANNER)
 
 
+def _saved_query(path: str) -> bool:
+    """A call of the query store's (``/api/pure/v1/query``, ``.../{id}``, ``.../search``, ...)."""
+    return path == _QUERIES or path.startswith(_QUERIES + '/')
+
+
 def _model_home(path: str) -> bool:
     """A call of the model home's: the SDLC's API or the Depot's."""
     return path.startswith(_SDLC_API) or path.startswith(_DEPOT_API)
@@ -351,6 +359,9 @@ class Engine:
         """One call: ``POST`` to the API, or ``GET`` of a frame's cube (``cube.json``), its version (``version.json``) or
         a file of the site. It waits for its answer, which the compiler's threads compute when it needs the compiler,
         so it is called from a thread of the caller's own (a connection's, a message's), never a compiler thread."""
+        if _saved_query(path):
+            # on the caller's thread, as the model home's: it waits for the folder's lock holding no compiler thread
+            return self._saved_queries(method, path, query, body or '')
         if _model_home(path):
             # on the caller's thread: it waits for the repository's lock (another process's call) holding no compiler
             # thread, and only the library's call goes to one
@@ -406,8 +417,10 @@ class Engine:
         pages = {'where': str(self.saved_pages().folder), 'user': 'this user'}
         # where the model home keeps the projects (B3): Create a Class… and the rest are offered over it
         model_home = {'where': str(self.model_home_folder())}
+        # where the query store keeps the saved queries (B5), and whose they are
+        queries = {'where': str(queries_folder()), 'user': _QUERY_USER}
         return {'files': self.takes_files(), 'remote': self.takes_remote(), 'pages': pages, 'modelHome': model_home,
-                'plane': plane, 'planes': [plane]}
+                'queries': queries, 'plane': plane, 'planes': [plane]}
 
     def saved_pages(self) -> SavedPages:
         """Where the page's saved pages are kept: the folder given, else this user's (``home()``), as it is now."""
@@ -437,6 +450,29 @@ class Engine:
             return _said(500, f'{type(failure).__name__}: {failure}')
         if not answered:
             return Answer(int(status), 'text/plain; charset=utf-8', b'')
+        return Answer(int(status), 'application/json', answered.encode('utf-8'))
+
+    def _saved_queries(self, method: str, path: str, query: str, body: str) -> Answer:
+        """One call of the query store (B5): answered by legend-lite's saved-query rules in the native library -- the
+        ones its server runs and the page runs compiled to WebAssembly -- over this user's folder (``ll.home()/queries``,
+        one JSON file per query, the server's layout), under its lock (several Python processes share it). Its caller
+        is this user: there is no sign-in."""
+        if method not in ('GET', 'POST', 'PUT', 'DELETE'):
+            return _said(405, 'the query store answers GET, POST, PUT and DELETE')
+        folder = queries_folder()
+        try:
+            with locked(folder):
+                said = _workers().submit(library().call, 'lite_saved_queries', str(folder), method,
+                                         path[len(_QUERIES):], query, body, _QUERY_USER).result()
+        except Exception as failure:
+            traceback.print_exc()
+            return _said(500, f'{type(failure).__name__}: {failure}')
+        tag, _, rest = said.partition('\n')
+        if tag != 'OK':
+            return _said(500, rest.partition('\n')[2] or rest)
+        status, _, answered = rest.partition('\n')
+        if int(status) == 204:
+            return Answer(204, 'text/plain; charset=utf-8', b'')
         return Answer(int(status), 'application/json', answered.encode('utf-8'))
 
     def _settings_kept(self, body: str) -> Answer:
@@ -1150,12 +1186,25 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.server.answering(self.connection)
             self._send(self.server.web.engine.answer('GET', url.path, url.query, None))
 
-    def do_DELETE(self) -> None:  # noqa: N802
-        """The model home's one DELETE (the SDLC's: a workspace, a review), with the token; its body, when it has one."""
+    def do_PUT(self) -> None:  # noqa: N802
+        """The query store's PUTs (a saved query updated or patched), with the token."""
         url = urlsplit(self.path)
-        if not _model_home(url.path):
-            self._refuse_unread(405, 'this engine answers DELETE for its model home only')
+        if not _saved_query(url.path):
+            self._refuse_unread(405, 'this engine answers PUT for its query store only')
             return
+        self._with_body('PUT', url)
+
+    def do_DELETE(self) -> None:  # noqa: N802
+        """The model home's DELETEs (the SDLC's: a workspace, a review) and the query store's (a saved query), with the
+        token; its body, when it has one."""
+        url = urlsplit(self.path)
+        if not (_model_home(url.path) or _saved_query(url.path)):
+            self._refuse_unread(405, 'this engine answers DELETE for its model home and its query store only')
+            return
+        self._with_body('DELETE', url)
+
+    def _with_body(self, method: str, url: Any) -> None:
+        """A call that may carry a body (PUT, DELETE), answered by the engine once its body is read."""
         if not self._admitted(url.path):
             return
         length = self._length() or 0
@@ -1172,7 +1221,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         except UnicodeDecodeError:
             self._send(_said(400, 'a request body is UTF-8'))
             return
-        self._send(self.server.web.engine.answer('DELETE', url.path, url.query, body))
+        self._send(self.server.web.engine.answer(method, url.path, url.query, body))
 
     def do_OPTIONS(self) -> None:  # noqa: N802
         # no cross-origin request is answered: only the engine's own page calls it

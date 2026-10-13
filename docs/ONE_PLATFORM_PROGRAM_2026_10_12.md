@@ -333,6 +333,23 @@ goes, and Python's pages get saved queries.
 **Reviews.** Announce in IN_FLIGHT: a core edit (`SavedQueries.java`, `PureV1Api`), and `query-store/`, Studio's. Then
 the Studio line and Compiler Rewrite, and an audit.
 
+**Built 2026-10-13 (branch `datacube/python-parity`; announced in IN_FLIGHT on main, 89b25e667):**
+- The rules moved to `core/src/main/java/com/legend/queries/` (`//core:saved_queries`, over `//base` and `//json`
+  only) over `Records`: `FileRecords` (a directory, one JSON file per query, the server's layout) and `MemoryRecords`
+  (the page's records handed in). Changed from this plan's first draft: the routes stay `SavedQueries.answer`'s (the
+  server's, the module's and the native library's one entry), not `PureV1Api.route`'s, since they take a method and a
+  user the pure/v1 router does not; and the module keeps nothing between calls (each call is handed every record),
+  so two tabs see each other's queries without the SDLC's stamps.
+- The page: a TeaVM module of its own, `//query-store:page` (230 KB; `query-store/java/.../QueriesPage.java`, one
+  export), served by DataCube and Query at `vendor/queries/`; `query-store/src/wasm-server.ts` replaces the
+  TypeScript port (`local-server.ts`, deleted).
+- Python: the native library's `lite_saved_queries` (`native/.../SavedQueriesHome.java`) over `ll.home()/queries`,
+  served at `/api/pure/v1/query` under the folder's lock (GET, POST, PUT, DELETE); `services.json` says where.
+- Proof: the one suite (`query-store/test/conformance.ts`) passes on the module (`//query-store:wasm_test`), the server
+  (`:lite_test`) and Python (`//datacube:python_saved_queries_test`, new).
+- Owed: a saved query opened as a grid on Python's page (PARK-33: a mapping planned on Python, a project's data made
+  without the page's SQL), with E; L1's saved-query differential, the Studio line's acceptance.
+
 #### B6. Saved pages, one implementation
 
 `cube-store.ts`'s `RuleStore` rules move to Java beside `SavedQueries`, records per host as now (IndexedDB in the tab,

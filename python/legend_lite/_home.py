@@ -190,3 +190,9 @@ def model_home_folder() -> Path:
     """Where this user's model home keeps its projects: a git repository in their legend-lite folder, as it is now
     (the program's B3; Python's engine serves it, legend_lite.model writes into it)."""
     return home() / 'projects'
+
+
+def queries_folder() -> Path:
+    """Where this user's saved queries are kept: one JSON file per query, every version of it, as legend-lite's server
+    keeps them (the program's B5; Python's engine serves them at /api/pure/v1/query)."""
+    return home() / 'queries'

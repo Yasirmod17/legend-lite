@@ -1004,6 +1004,32 @@ node_test(
     }),
 )
 
+# Python's saved queries (the native library's saved-query rules over this user's folder) held to the one query-store
+# suite, as the page's module and legend-lite's server are (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B5)
+node_test(
+    name = "python_saved_queries_test",
+    size = "medium",
+    data = [
+        "test/python-engine/saved-queries.test.ts",
+        ":dist",
+        ":engine_fixture",
+        ":headless_bundle",
+        "//native:compiler",
+        "//query-store:conformance",
+    ],
+    entry_point = "test/python-engine/saved-queries.test.ts",
+    env = {
+        "DATACUBE_SITE": "$(rlocationpath :dist)",
+        "ENGINE_FIXTURE": "$(rlocationpath :engine_fixture)",
+        "LEGEND_LITE_DATACUBE": "$(rlocationpath :headless_bundle)",
+        "LEGEND_LITE_LIBRARY": "$(rlocationpath //native:compiler)",
+    },
+    platform_env = select({
+        "//tools/platforms:windows_x86_64": {"PROCESSOR_ARCHITECTURE": "AMD64"},
+        "//conditions:default": {},
+    }),
+)
+
 # A NOTEBOOK'S CUBE IN REAL NOTEBOOKS (docs/DATACUBE_PYTHON_SHOW_DESIGN_2026_10_08.md, "In a notebook" and "In a marimo
 # notebook"), in the pinned Chromium, each installed as a developer installs it: test/notebooks/notebook_fixture.py makes
 # a fresh virtual environment of the repository's Python and pip-installs legend-lite's wheel (its notebook and pandas
@@ -1193,6 +1219,7 @@ copy_to_directory(
     srcs = [
         "//engine-client:node_modules/@duckdb/duckdb-wasm",
         "//legend-art:fonts",
+        "//query-store:page",
         "//sdlc-server:page",
         "//wasm:planner",
     ],
@@ -1213,12 +1240,16 @@ copy_to_directory(
         "wasm/planner/wasm-gc-module-runtime.js",
         "sdlc-server/page/classes.wasm",
         "sdlc-server/page/wasm-gc-module-runtime.js",
+        # the saved queries' rules, compiled to WebAssembly (the program's B5)
+        "query-store/page/classes.wasm",
+        "query-store/page/wasm-gc-module-runtime.js",
     ],
     replace_prefixes = {
         "legend-art/fonts/": "fonts/",
         "**/dist/": "",
         "wasm/planner/": "",
         "sdlc-server/page/": "sdlc/",
+        "query-store/page/": "queries/",
     },
 )
 

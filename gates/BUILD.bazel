@@ -184,6 +184,8 @@ test_suite(
         "//datacube:python_engine_test",
         # Python's model home (the native library's SDLC) held to the one SDLC suite
         "//datacube:python_model_home_test",
+        # Python's saved queries (the native library's saved-query rules) held to the one query-store suite (B5)
+        "//datacube:python_saved_queries_test",
         # DataCube's own non-screen tests in V8 inside Python: the native library's planner, Python's DuckDB, no
         # WebAssembly (docs/DATACUBE_HEADLESS_PYTHON_DESIGN_2026_10_11.md §6; not in //gates:local: run it by name)
         "//datacube:headless_test",
@@ -227,7 +229,7 @@ test_suite(
     tests = [
         "//studio:tests",
         "//query:tests",
-        "//query-store:local_test",
+        "//query-store:wasm_test",
         "//query-store:share_test",
         "//query-store:lite_test",
         # where queries run in the tab, shared by Studio, Query and DataCube: a model's own test data in DuckDB, Snap

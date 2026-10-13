@@ -1,0 +1,58 @@
+package com.legend.queries;
+
+import com.legend.json.Json;
+
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
+
+/**
+ * Saved queries held in memory, as the page hands its records in (its IndexedDB's, docs/ONE_PLATFORM_PROGRAM_2026_10_12.md
+ * B5): read from their JSON ({@code {"id": [versions...], ...}}), and every query a call writes kept apart
+ * ({@link #changed}), which the page writes back.
+ */
+public final class MemoryRecords implements Records {
+
+    private final Map<String, List<Json.Obj>> held = new TreeMap<>();
+    private final Map<String, List<Json.Obj>> changed = new LinkedHashMap<>();
+
+    /** The records as JSON: each query's versions by its id. */
+    public static MemoryRecords of(String json) {
+        MemoryRecords out = new MemoryRecords();
+        // strip().isEmpty(), not isBlank(): TeaVM reads only a space as blank
+        Json.Obj all = Json.parseObject(json.strip().isEmpty() ? "{}" : json);
+        for (String id : all.fields().keySet()) {
+            List<Json.Obj> versions = new ArrayList<>();
+            for (Json.Node n : ((Json.Arr) all.get(id)).items()) {
+                versions.add((Json.Obj) n);
+            }
+            out.held.put(id, versions);
+        }
+        return out;
+    }
+
+    @Override
+    public List<Json.Obj> versions(String id) {
+        return new ArrayList<>(held.getOrDefault(id, List.of()));
+    }
+
+    @Override
+    public void write(String id, List<Json.Obj> versions) {
+        held.put(id, new ArrayList<>(versions));
+        changed.put(id, new ArrayList<>(versions));
+    }
+
+    @Override
+    public Map<String, List<Json.Obj>> all() {
+        Map<String, List<Json.Obj>> out = new LinkedHashMap<>();
+        held.forEach((id, versions) -> out.put(id, new ArrayList<>(versions)));
+        return out;
+    }
+
+    /** Every query written since these records were read, by its id: what the page writes back. */
+    public Map<String, List<Json.Obj>> changed() {
+        return changed;
+    }
+}

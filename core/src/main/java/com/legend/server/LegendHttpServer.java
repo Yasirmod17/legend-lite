@@ -1,4 +1,7 @@
 package com.legend.server;
+
+import com.legend.queries.FileRecords;
+import com.legend.queries.SavedQueries;
 import com.legend.json.Json;
 
 
@@ -123,13 +126,13 @@ public class LegendHttpServer {
             }
             String body = readBody(exchange);
             String rest = exchange.getRequestURI().getRawPath().substring("/api/pure/v1/query".length());
-            PureV1Api.Answer a = SavedQueries.answer(queryStore, exchange.getRequestMethod(), rest,
+            SavedQueries.Answer a = SavedQueries.answer(queryStore, exchange.getRequestMethod(), rest,
                     exchange.getRequestURI().getRawQuery(), body, SavedQueries.ANONYMOUS);
             if (a.status() == 204) {
                 exchange.sendResponseHeaders(204, -1);
                 exchange.close();
             } else {
-                sendResponse(exchange, a.status(), a.json(), a.contentType());
+                sendResponse(exchange, a.status(), a.json(), "application/json");
             }
         });
         route("/api/server/v1/currentUser", exchange -> {
@@ -334,7 +337,7 @@ public class LegendHttpServer {
         SavedQueries queryStore = null;
         for (int i = 0; i < args.length; i++) {
             if ("--query-store".equals(args[i]) && i + 1 < args.length) {
-                queryStore = new SavedQueries(java.nio.file.Path.of(args[++i]), System::currentTimeMillis);
+                queryStore = new SavedQueries(new FileRecords(java.nio.file.Path.of(args[++i])), System::currentTimeMillis);
             } else {
                 try {
                     port = Integer.parseInt(args[i]);

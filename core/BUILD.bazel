@@ -78,6 +78,16 @@ legend_java_library(name = "error", srcs = glob(["src/main/java/com/legend/error
 legend_java_library(name = "diagnostics", srcs = glob(["src/main/java/com/legend/diagnostics/*.java"]), deps = ["//base"], visibility = ["//parser-equivalence:__pkg__"])
 legend_java_library(name = "lexer", srcs = glob(["src/main/java/com/legend/lexer/*.java"]), deps = ["//base"])
 legend_java_library(name = "sql", srcs = glob(["src/main/java/com/legend/sql/*.java"]), deps = ["//base"])
+# legend-engine's query store's rules (/api/pure/v1/query) over a records interface (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md
+# B5): the one implementation legend-lite's server, Python's native library and the page's module answer with, the
+# storage each host's own (a directory, or the page's records handed in). //base and //json only: it compiles to
+# WebAssembly (//query-store:page).
+legend_java_library(
+    name = "saved_queries",
+    srcs = glob(["src/main/java/com/legend/queries/*.java"]),
+    deps = ["//base", "//json"],
+    visibility = ["//native:__pkg__", "//query-store:__pkg__"],
+)
 # visible to //datacube: its catalog corpus and offer facts generators read the protocol directly
 legend_java_library(name = "protocol", srcs = glob(["src/main/java/com/legend/protocol/**/*.java"]), deps = ["//base", "//json", ":values"], visibility = ["//datacube:__pkg__"])
 legend_java_library(name = "model", srcs = glob(["src/main/java/com/legend/model/*.java"]), deps = ["//base", ":protocol"])
@@ -258,14 +268,14 @@ legend_java_library(
             "src/main/java/com/legend/server/PureV1Api.java",
         ],
     ),
-    deps = ["//base", "//json", ":cache", ":compiler", ":compiler_element_type", ":database", ":driver", ":error", ":exec", ":lowering", ":model", ":parser", ":plan", ":planner", ":protocol", ":pure_v1", ":sql_dialect"],
+    deps = ["//base", "//json", ":cache", ":compiler", ":compiler_element_type", ":database", ":driver", ":error", ":exec", ":lowering", ":model", ":parser", ":plan", ":planner", ":protocol", ":pure_v1", ":saved_queries", ":sql_dialect"],
 )
 
 _CORE_TARGETS = [
     "//base", "//json", ":spi", ":cache", ":values", ":error", ":diagnostics", ":lexer", ":sql", ":protocol", ":model", ":parser",
     ":builtin", ":platform", ":compiler_element_type", ":sql_dialect", ":database", ":compiler", ":normalizer",
     ":lineage", ":validation", ":lowering", ":plan", ":resolver", ":setup", ":exec", ":probe", ":testdatagen",
-    ":execution_plan", ":planner", ":pure_v1", ":driver", ":ide", ":test", ":server_lib",
+    ":execution_plan", ":planner", ":pure_v1", ":saved_queries", ":driver", ":ide", ":test", ":server_lib",
 ]
 
 # THE PLAN SIDE (C2a, docs/PLAN_EXECUTION_SPLIT_AND_DATABASE_OWNER_2026_10_03.md): the planner and every library it

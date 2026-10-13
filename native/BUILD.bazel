@@ -26,6 +26,8 @@ legend_java_library(
     resource_strip_prefix = "native/src/main/resources",
     deps = [
         ":graal_api",
+        # the saved queries' rules over a folder (SavedQueriesHome: the program's B5)
+        "//core:saved_queries",
         "//depot-server:rules",
         "//sdlc-server:git_storage",
         "//sdlc-server:rules",
