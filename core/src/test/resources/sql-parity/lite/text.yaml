@@ -60,3 +60,5 @@ tests:
     sql: "SELECT id, '[' || ltrim(val, ' ') || ']' AS a, '[' || rtrim(val, ' ') || ']' AS b, '[' || btrim(val, ' ') || ']' AS c, '[' || trim(BOTH ' ' FROM val) || ']' AS e, '[' || trim(LEADING ' ' FROM empty_val) || ']' AS g FROM strings ORDER BY id"
   - id: trim_of_other_characters_is_refused
     sql: "SELECT btrim(val, 'hx') AS a FROM strings WHERE id = 1"
+  - id: split_part_of_a_delimiter_beyond_the_basic_plane
+    sql: "SELECT id, split_part(val || '🎉x🎉yz', '🎉', 2) AS a, split_part(val || '🎉x🎉yz', '🎉', 3) AS b FROM strings ORDER BY id"

@@ -395,6 +395,32 @@ class SqlToPureTest {
     }
 
     @Test
+    void theReviewsFindingsOnTheLongTailStayFixed() {
+        // log to the constant base 10 is log10, exact at 10's powers; another base is refused (ln(x) / ln(b) misses
+        // them: log(10, 1000) by natural logarithms is 2.9999999999999996)
+        assertEquals("#>{s::DB.T}#->extend(~[l:r|$r.ID->log10()])->select(~[l])",
+                pure("select log(10::numeric, ID) as l from tb('s::DB.T')"));
+        assertEquals(SqlTranslationException.Kind.UNSUPPORTED,
+                refusal("select log(2, ID) as l from tb('s::DB.T')").kind());
+        // split_part steps over a delimiter by its characters, not its UTF-16 units
+        assertTrue(pure("select split_part(dept, '\uD83C\uDF89', 2) as p from tb('s::DB.T')").contains(
+                "->indexOf('\\uD83C\\uDF89') + 1)"));
+        // only count takes *, FILTER or not; min and max of booleans are Postgres's errors
+        assertEquals("sum(*) is not a function; only count(*) is", refusal("select ID, sum(*) filter (where age > 1)"
+                + " over () as s from tb('s::DB.T')").getMessage());
+        List<Col> flagged = List.of(new Col("ID", "Integer", false), new Col("flag", "Boolean", true));
+        assertEquals("function max(boolean) does not exist",
+                refusal("select max(flag) as m from tb('s::DB.T')", flagged).getMessage());
+        assertEquals("function min(boolean) does not exist",
+                refusal("select ID, min(flag) over () as m from tb('s::DB.T')", flagged).getMessage());
+        // a sum of doubles less the row's own loses digits: EXCLUDE of it is refused
+        List<Col> doubles = List.of(new Col("ID", "Integer", false), new Col("f", "Float", true));
+        assertEquals(SqlTranslationException.Kind.UNSUPPORTED, refusal("select ID, sum(f) over (rows between"
+                + " unbounded preceding and unbounded following exclude current row) as s from tb('s::DB.T')",
+                doubles).kind());
+    }
+
+    @Test
     void dateArithmeticIsPostgresDaysIntervalsAndTruncation() {
         List<Col> dated = List.of(new Col("d", "StrictDate", false), new Col("ts", "DateTime", false));
         // months, then days, then seconds, as Postgres adds an interval; a date is a timestamp at midnight first

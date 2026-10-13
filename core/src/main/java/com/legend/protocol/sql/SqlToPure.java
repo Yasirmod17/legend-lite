@@ -1850,6 +1850,9 @@ public final class SqlToPure {
         if (filter == null) {
             return f;
         }
+        if (f.star() && !fn.equals("count")) {
+            throw SqlTranslationException.invalid(fn + "(*) is not a function; only count(*) is", f.pos());
+        }
         if (WINDOW_FUNCTIONS.contains(fn)) {
             throw SqlTranslationException.invalid("FILTER is not implemented for non-aggregate window functions",
                     f.pos());
@@ -1894,6 +1897,14 @@ public final class SqlToPure {
      *  column), then its value from them, its kind, and whether it may be NULL. */
     private record Excluded(List<ValueSpecification[]> windows, ValueSpecification value, Kind kind,
             boolean nullable) {
+    }
+
+    /** A min or max argument: Postgres has neither of a boolean (bool_and and bool_or are its), nor of jsonb. */
+    private static void minMaxable(Kind kind, String fn, SqlAst.Pos pos) {
+        notJsonKey(kind, fn, pos);
+        if (kind == Kind.BOOLEAN) {
+            throw SqlTranslationException.invalid("function " + fn + "(boolean) does not exist", pos);
+        }
     }
 
     /** Zero in a numeric kind's Pure type. */
@@ -1945,10 +1956,14 @@ public final class SqlToPure {
             windowArguments(f, 1, 1);
             arg = windowKey(f.args().get(0), scope, present, computed);
             if (minMax) {
-                notJsonKey(arg.kind(), fn, f.pos());
+                minMaxable(arg.kind(), fn, f.pos());
             } else if (!fn.equals("count") && !arg.kind().numeric()) {
                 throw SqlTranslationException.invalid("function " + fn + "(" + postgresName(arg.kind())
                         + ") does not exist", f.pos());
+            } else if (!fn.equals("count") && (arg.kind() == Kind.FLOAT || arg.kind() == Kind.INEXACT)) {
+                // a frame's sum of doubles less the row's own loses the digits Postgres's sum of the rest keeps
+                throw SqlTranslationException.unsupported("EXCLUDE " + exclude + " of " + fn + "(...) of double"
+                        + " precision values is not supported yet", f.pos());
             }
         }
         ValueSpecification x = arg == null ? new CInteger(1L) : property(row, arg.name());
@@ -2147,7 +2162,7 @@ public final class SqlToPure {
                     default -> statisticKind(argKind);
                 };
                 if (fn.equals("min") || fn.equals("max")) {
-                    notJsonKey(argKind, fn, f.pos());
+                    minMaxable(argKind, fn, f.pos());
                 }
                 if (!fn.equals("count") && !fn.equals("min") && !fn.equals("max") && !argKind.numeric()) {
                     throw SqlTranslationException.invalid("function " + fn + "(" + argKind.name().toLowerCase(
@@ -2769,12 +2784,12 @@ public final class SqlToPure {
                         reduce = call("average", values);
                     }
                     case "min" -> {
-                        notJsonKey(arg.kind(), fn, f.pos());
+                        minMaxable(arg.kind(), fn, f.pos());
                         kind = arg.kind();
                         reduce = call("min", values);
                     }
                     case "max" -> {
-                        notJsonKey(arg.kind(), fn, f.pos());
+                        minMaxable(arg.kind(), fn, f.pos());
                         kind = arg.kind();
                         reduce = call("max", values);
                     }
@@ -4961,8 +4976,9 @@ public final class SqlToPure {
             return call("if", none, thunk(rest), thunk(call("substring", rest, new CInteger(1L),
                     AppliedFunction.infixRun("minus", List.of(at, new CInteger(1L))))));
         }
+        // the delimiter's length in characters, as SQL's substring counts them (not UTF-16's units)
         ValueSpecification after = call("substring", rest, AppliedFunction.infixRun("plus", List.of(at,
-                new CInteger(delimiter.value().length()))));
+                new CInteger(delimiter.value().codePointCount(0, delimiter.value().length())))));
         return call("if", none, thunk(new CString("")), thunk(field(after, delimiter, n - 1)));
     }
 
@@ -5014,7 +5030,9 @@ public final class SqlToPure {
     }
 
     /** {@code log(b, x)}: the logarithm of x to the base b. Postgres has it for numerics only (exact there; an integer
-     *  is read as one): ln(x) / ln(b) here, a double, so an inexact numeric. */
+     *  is read as one). Of the constant base 10 it is Pure's log10, as {@code log(x)} is (an inexact numeric, exact
+     *  at 10's powers). Another base is refused: ln(x) / ln(b) misses the exact powers that compare equal in Postgres
+     *  ({@code log(10, 1000)} by natural logarithms is 2.9999999999999996). */
     private static Tx logBase(SqlAst.FunctionCall f, List<Tx> args) {
         for (int i = 0; i < 2; i++) {
             numericOperand(args.get(i), f.args().get(i));
@@ -5023,7 +5041,17 @@ public final class SqlToPure {
             throw SqlTranslationException.invalid("function log(" + postgresName(args.get(0).kind()) + ", "
                     + postgresName(args.get(1).kind()) + ") does not exist", f.pos());
         }
-        return strict(Kind.INEXACT, args, v -> call("divide", call("log", v.get(1)), call("log", v.get(0))));
+        SqlAst.Expr b = f.args().get(0);
+        if (b instanceof SqlAst.Cast c && c.type().modifiers().isEmpty() && NUMERIC_TYPES.contains(c.type().name())) {
+            b = c.operand();
+        }
+        BigDecimal base = numberConstant(b);
+        if (base == null || base.compareTo(BigDecimal.TEN) != 0) {
+            throw SqlTranslationException.unsupported("log(b, x) of a base other than the constant 10 is not supported"
+                    + " yet: Postgres's is exact, and a quotient of natural logarithms misses the exact powers",
+                    f.args().get(0).pos());
+        }
+        return strict(Kind.INEXACT, args.subList(1, 2), v -> call("log10", v.get(0)));
     }
 
     /** The names of Postgres's numeric type. */

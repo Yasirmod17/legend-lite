@@ -9041,3 +9041,47 @@ Announced in `docs/IN_FLIGHT.md` as the semi-structured step's widenings (5cb0ac
 6. **Not done, recorded in the study:** regular expressions (`~`, `regexp_*`); `mode()` (DuckDB breaks ties
    otherwise); `corr` over a window; text cast to a number; intervals as values and timestamp differences; the
    semi-structured step's open findings (DuckDB's JSON numbers as doubles among them, for the user to decide).
+
+## 2026-10-13 — `#SQL{...}#`: the long tail — text, numbers, date spellings, aggregate and window permutations
+
+Announced in `docs/IN_FLIGHT.md` (3839307). Same branch `claude/loving-euler-gjta59`; it lands in one pull request.
+The study, `docs/LEGEND_SQL_STUDY_2026_10_11.md` §9.4, says what reads, what is refused and why.
+
+1. **What lands.** The user's order after the basics: the functions' long tail, the dates among them, every
+   permutation of aggregates and windows; regular expressions last.
+   - **Text:** `concat_ws`, `format` (`%s`, `%%`), `overlay`, `quote_literal`, `quote_nullable`, `translate`,
+     `split_part`, the trims naming `' '`.
+   - **Numbers:** `div`, `mod` and `%` of numerics, `log(10, x)`, `log10`, `cot`, `width_bucket` in both forms, a
+     numeric `power` and `^` of an integer.
+   - **Dates:** Postgres's date and timestamp spellings (`PostgresDateTime`, datetime.c ported); `extract`'s `dow`,
+     `week`, `decade`, `century`, `millennium` and a date's `epoch`; `isfinite`.
+   - **Aggregates:** the `regr_*` family; ORDER BY inside an aggregate whose answer has no order.
+   - **Windows:** FILTER on a window aggregate; frame `EXCLUDE` (CURRENT ROW, GROUP, TIES) for count, sum, avg, and
+     min and max of a whole partition.
+2. **One cross-area edit, a guard file:** `CodeShapeGuardrailTest` -- eleven fields of the date decoder (datetime.c's
+   struct pg_tm and its field mask, one constant's read) allowlisted, dated. Nothing in `sql/dialect/` or `lowering/`.
+3. **The parity corpus,** identical in both lanes (`//core:sql_parity_test`, `//core:sql_parity_postgres_test`):
+
+   | | upstream's 1,703 | own 477 (381 at the step above) |
+   |---|---|---|
+   | PASS | 1,183 (1,122 at the step above) | 344 |
+   | FAIL, BUG, ERROR | 0 | 0 |
+   | REFUSED by name | 391 | 58 |
+   | BOTH_ERROR | 61 | 75 |
+   | SKIP | 68 | 0 |
+
+   New own cases: `lite/text.yaml` (26), `lite/math.yaml` (23), `lite/aggregates.yaml` (10); `lite/dates.yaml` (44
+   now), `lite/windows.yaml` (65 now).
+4. **The randomized checks.** The SQL generator grew with each piece: four seeds, about 2,700 queries, both lanes
+   against Postgres; its one finding (EXCLUDE over a RANGE frame for a row with a NULL key) is fixed and pinned. A
+   second generator compared 10,000 date and timestamp spellings read by Postgres and by `PostgresDateTime`: every one
+   read here agrees; `PostgresDateTimeTest` pins a table of them, errors word for word.
+5. **Judges,** on the branch with main 3839307 merged in (47f3e67; the later commits touch `protocol/sql/` and tests
+   only):
+   - **The six corpus passes**, against a baseline built from main 3839307: 22 of 22 result files identical.
+   - **The independent review** (an agent that wrote none of it): four wrong answers in the step and two older ones it
+     reaches, each fixed and pinned (the study's §9.4 lists them).
+   - **The local suite and the full CI run:** recorded at the pull request.
+6. **Recorded, not fixed (the study):** DuckDB's trims strip every Unicode space separator, Postgres's only U+0020 (it
+   predates this step; the user's to decide); `cot(0)`; a numeric `width_bucket` within 1e-15 below an edge; the
+   regressions' variance of equal doubles, as corr's.

@@ -31,7 +31,9 @@ tests:
     sql: "SELECT width_bucket(int_val, 5, 5, 3) AS a FROM numbers WHERE id = 1"
   # log(b, x), cot
   - id: log_to_a_base
-    sql: "SELECT id, log(2, int_val) AS a, log(10::numeric, abs(numeric_val) + 1) AS b, log(3, 81) AS c FROM numbers WHERE int_val > 0 ORDER BY id"
+    sql: "SELECT id, log(10, int_val) AS a, log(10::numeric, abs(numeric_val) + 1) AS b, log(10, 1000) = 3 AS c, log(10.0, big_val) >= 6 AS e FROM numbers WHERE int_val > 0 AND big_val > 0 ORDER BY id"
+  - id: log_to_another_base_is_refused
+    sql: "SELECT log(2, 8) AS a FROM numbers WHERE id = 1"
   - id: log_of_doubles_does_not_exist
     sql: "SELECT log(2.0::float8, float_val) AS a FROM numbers WHERE id = 1"
   - id: cot_of_doubles_and_integers

@@ -1713,6 +1713,7 @@ lite/aggregates/regression_of_text_is_refused	BOTH_ERROR	BOTH_ERROR
 lite/aggregates/order_by_inside_aggregates	PASS	PASS
 lite/aggregates/distinct_ordered_by_its_argument	PASS	PASS
 lite/aggregates/distinct_ordered_by_another_value_is_an_error	BOTH_ERROR	BOTH_ERROR
+lite/aggregates/max_of_a_boolean_is_an_error	BOTH_ERROR	BOTH_ERROR
 lite/dates/date_plus_and_minus_days	PASS	PASS
 lite/dates/days_between_dates	PASS	PASS
 lite/dates/date_minus_date_in_a_filter	PASS	PASS
@@ -1756,6 +1757,7 @@ lite/dates/extract_epoch_of_a_date	PASS	PASS
 lite/dates/extract_epoch_of_a_timestamp_is_refused	REFUSED	REFUSED
 lite/dates/dow_in_a_group	PASS	PASS
 lite/dates/isfinite_of_dates_and_timestamps	PASS	PASS
+lite/dates/a_date_before_the_year_1000_is_refused	REFUSED	REFUSED
 lite/functions/sqrt_exp_ln_log	PASS	PASS
 lite/functions/trigonometry	PASS	PASS
 lite/functions/pi_and_cbrt	PASS	PASS
@@ -2026,6 +2028,7 @@ lite/math/width_bucket_in_a_group	PASS	PASS
 lite/math/width_bucket_of_no_buckets_is_an_error	BOTH_ERROR	BOTH_ERROR
 lite/math/width_bucket_of_equal_bounds_is_an_error	BOTH_ERROR	BOTH_ERROR
 lite/math/log_to_a_base	PASS	PASS
+lite/math/log_to_another_base_is_refused	REFUSED	REFUSED
 lite/math/log_of_doubles_does_not_exist	BOTH_ERROR	BOTH_ERROR
 lite/math/cot_of_doubles_and_integers	PASS	PASS
 lite/math/power_of_an_integer_read_as_a_numeric	PASS	PASS
@@ -2112,6 +2115,7 @@ lite/text/split_part_of_field_zero_is_an_error	BOTH_ERROR	BOTH_ERROR
 lite/text/split_part_from_the_end_is_refused	REFUSED	REFUSED
 lite/text/trims_of_named_spaces	PASS	PASS
 lite/text/trim_of_other_characters_is_refused	REFUSED	REFUSED
+lite/text/split_part_of_a_delimiter_beyond_the_basic_plane	PASS	PASS
 lite/windows/row_number_over_order	PASS	PASS
 lite/windows/row_number_per_partition_nulls_first_descending	PASS	PASS
 lite/windows/row_number_nulls_last_written	PASS	PASS
@@ -2174,3 +2178,6 @@ lite/windows/exclude_group_of_a_minimum_is_refused	REFUSED	REFUSED
 lite/windows/exclude_of_a_partial_range_frame_is_refused	PASS	PASS
 lite/windows/exclude_current_row_of_range_frames	PASS	PASS
 lite/windows/exclude_current_row_of_a_range_frame_before_the_row_is_refused	REFUSED	REFUSED
+lite/windows/window_sum_of_a_star_with_a_filter_is_an_error	BOTH_ERROR	BOTH_ERROR
+lite/windows/exclude_of_a_sum_of_doubles_is_refused	REFUSED	REFUSED
+lite/windows/window_max_of_a_boolean_is_an_error	BOTH_ERROR	BOTH_ERROR

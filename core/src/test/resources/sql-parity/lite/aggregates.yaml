@@ -23,3 +23,5 @@ tests:
     sql: "SELECT count(DISTINCT dept_id ORDER BY dept_id) AS c, sum(DISTINCT age ORDER BY age DESC) AS s FROM persons"
   - id: distinct_ordered_by_another_value_is_an_error
     sql: "SELECT count(DISTINCT dept_id ORDER BY age) AS c FROM persons"
+  - id: max_of_a_boolean_is_an_error
+    sql: "SELECT dept_id, max(active) AS m FROM persons GROUP BY dept_id ORDER BY dept_id"

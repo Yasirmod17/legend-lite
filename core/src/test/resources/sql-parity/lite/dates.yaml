@@ -97,3 +97,5 @@ tests:
     sql: "SELECT extract(dow FROM hire_date) AS dow, count(*) AS n FROM persons GROUP BY 1 ORDER BY 1"
   - id: isfinite_of_dates_and_timestamps
     sql: "SELECT id, isfinite(d) AS a, isfinite(ts) AS b FROM dates ORDER BY id"
+  - id: a_date_before_the_year_1000_is_refused
+    sql: "SELECT DATE '0050-03-04' AS a FROM departments WHERE id = 1"

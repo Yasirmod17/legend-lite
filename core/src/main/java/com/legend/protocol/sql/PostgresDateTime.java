@@ -142,7 +142,11 @@ final class PostgresDateTime {
                 throw new Bad(false, "a " + type + " of more than 128 characters");
             }
             Value v = new Decoder(text, type).decode(fields(text, type));
-            if (v.date().getYear() < 1 || v.date().getYear() > 9999) {
+            if (v.date().getYear() < 1000) {
+                // Pure's constant of such a year reaches Postgres without its leading zeros (year 1 as 2001)
+                throw new Bad(false, "a " + type + " before the year 1000");
+            }
+            if (v.date().getYear() > 9999) {
                 throw new Bad(false, "a " + type + " outside the years 1 to 9999");
             }
             return v;
