@@ -189,7 +189,17 @@ with the compiler's plan/execution split**, in this order:
    the Studio line's, reviewed by it); `native/` (`lite_saved_queries` over a folder, as `lite_sdlc_handle` is);
    `python/` (Python serves `/api/pure/v1/query` from `ll.home()/queries` under the folder's lock); `datacube/` and
    `query/demo/main.ts` (the store's factory). Reviews: the Studio line (query-store, query), the Compiler Rewrite line
-   (the BUILD files, the TeaVM target), an audit; the acceptance test is the Studio line's L1 saved-query differential. **Step 2's second landing announced 2026-10-11 (rule 5; branch `datacube-m3`; the design's §15.6a,
+   (the BUILD files, the TeaVM target), an audit; the acceptance test is the Studio line's L1 saved-query differential.
+   B5 built and approved there (Studio, Compiler Rewrite, the audit's fixes). **B6 announced 2026-10-13 (same branch):
+   DataCube's saved pages on one implementation.** Files: new `core/src/main/java/com/legend/queries/`
+   `{SavedCubes,FileCubeRecords,MemoryCubeRecords}.java` (the rules of `datacube/src/cube-store.ts`'s `RuleStore`, moved
+   to Java beside the saved queries' and in the same `//core:saved_queries`), `core/.../server/LegendHttpServer.java`
+   (`/api/pure/v1/query/dataCube` answered from `--query-store DIR/dataCube`); `query-store/java/.../QueriesPage.java`
+   (a `cubes` export on the same module), `query-store/src/wasm-server.ts` (its type), `query-store/test/lite-server.ts`
+   (the server's start and stop out of `lite.test.ts`, for both suites) and `query-store/BUILD.bazel` (visibility to
+   `//datacube`) -- the Studio line's; `native/` (`lite_saved_cubes`), `python/` (Python's dataCube routes over
+   `ll.home()/pages`, `page.save()`), `datacube/` (the one client), `gates/BUILD.bazel` (the new test's lane). Reviews:
+   the Studio line, the Compiler Rewrite line, an audit. **Step 2's second landing announced 2026-10-11 (rule 5; branch `datacube-m3`; the design's §15.6a,
    agreed with the user): a cross-area edit in `core/`** -- the route renamed and two more beside it,
    `/api/lite/v1/model/createClass` (was `/api/lite/v1/relational/promoteRelationToModel`), `createAssociation`,
    `createDataSpace`, one atomic writer under them. Core files: `core/src/main/java/com/legend/server/`
