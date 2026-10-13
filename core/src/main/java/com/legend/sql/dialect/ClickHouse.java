@@ -430,6 +430,22 @@ public final class ClickHouse extends AnsiSqlRenderer {
                 .withProjections(List.of(new SqlSelect.Projection(new SqlExpr.IntLit(1), "__one", null))));
     }
 
+    /** EXISTS. Over a select of constants it answers 0 where its filter keeps a row (ClickHouse 25.8, measured:
+     *  EXISTS (SELECT 1 FROM numbers(5) WHERE number > 3) is 0, with the column selected 1): the rows' own columns are
+     *  selected instead. */
+    private SqlWriter exists(SqlWriter writer, SqlExpr.Exists ex, int parentPrec) {
+        if (ex.subquery() instanceof SqlSelect q && q.groupBy().isEmpty() && q.having() == null && !q.distinct()
+                && !(q.from() instanceof com.legend.sql.SqlSource.Dual) && !q.projections().isEmpty()
+                && q.projections().stream().allMatch(p -> p.expr() instanceof SqlExpr.IntLit
+                        || p.expr() instanceof SqlExpr.BoolLit)) {
+            writer.append("EXISTS (");
+            inline(writer, new SqlSelect(List.of(), false, q.from(), q.where(), q.groupBy(), q.having(), q.qualify(),
+                    q.orderBy(), q.limit(), q.offset(), List.of()));
+            return writer.append(")");
+        }
+        return super.expr(writer, ex, parentPrec);
+    }
+
     /** The aliases {@code src} defines: each side of a join, else its own. */
     private static void aliasesOf(com.legend.sql.SqlSource src, java.util.Set<String> into) {
         if (src instanceof com.legend.sql.SqlSource.Join j) {
@@ -752,23 +768,18 @@ public final class ClickHouse extends AnsiSqlRenderer {
                 super.expr(writer, q, 0);
                 yield writer.append(" END)");
             }
-            // a correlated EXISTS: right only where its filter is null-rejecting ({@link #CORRELATED})
-            case SqlExpr.Exists ex when ex.subquery() instanceof SqlSelect q && correlated(q) && !correlatedRight(q) ->
+            // a correlated EXISTS: right only where its filter is null-rejecting, and then the statement carries the
+            // setting on ({@link #CORRELATED})
+            case SqlExpr.Exists ex when ex.subquery() instanceof SqlSelect q && correlated(q) -> {
+                if (!correlatedRight(q)) {
                     throw new DialectCapability("a correlated EXISTS reached ClickHouse, whose correlated subqueries"
                             + " answer false for an outer row with a NULL (measured 25.8): its filter reads the outer"
                             + " row other than as a comparison's operand");
-            // EXISTS over a select of constants answers 0 where its filter keeps a row (ClickHouse 25.8, measured:
-            // EXISTS (SELECT 1 FROM numbers(5) WHERE number > 3) is 0, with the column selected 1): the rows' own
-            // columns are selected instead
-            case SqlExpr.Exists ex when ex.subquery() instanceof SqlSelect q && q.groupBy().isEmpty()
-                    && q.having() == null && !q.distinct() && !(q.from() instanceof com.legend.sql.SqlSource.Dual)
-                    && !q.projections().isEmpty() && q.projections().stream().allMatch(p -> p.expr() instanceof SqlExpr.IntLit
-                            || p.expr() instanceof SqlExpr.BoolLit) -> {
-                writer.append("EXISTS (");
-                inline(writer, new SqlSelect(List.of(), false, q.from(), q.where(), q.groupBy(), q.having(), q.qualify(),
-                        q.orderBy(), q.limit(), q.offset(), List.of()));
-                yield writer.append(")");
+                }
+                correlatedExists[0] = true;
+                yield exists(writer, ex, parentPrec);
             }
+            case SqlExpr.Exists ex -> exists(writer, ex, parentPrec);
             case SqlExpr.DecimalLit d when !(d.type() instanceof com.legend.sql.TypeFact.Typed t
                     && t.type() == SqlType.Scalar.HUGEINT) -> writer.append(decimal(d.value()));
             case SqlExpr.OrderedListAgg ola -> writer.piece(collected(w -> w.expr(ola.value(), 0),

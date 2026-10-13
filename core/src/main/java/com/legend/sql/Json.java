@@ -267,11 +267,12 @@ public final class Json {
      *  digits -- Postgres's jsonb numeric 1e20 is 100000000000000000000; it was a NumberFormatException: PR #34's
      *  review, 2026-10-13). */
     private static Object integer(String t) {
-        try {
+        // 18 digits always fit a Long; a longer token may not
+        if (t.length() - (t.startsWith("-") || t.startsWith("+") ? 1 : 0) <= 18) {
             return Long.parseLong(t);
-        } catch (NumberFormatException overflow) {
-            return new java.math.BigInteger(t);
         }
+        java.math.BigInteger big = new java.math.BigInteger(t);
+        return big.bitLength() < 64 ? (Object) big.longValue() : big;
     }
 
     private void ws() {

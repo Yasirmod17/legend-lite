@@ -1944,7 +1944,7 @@ public final class Postgres extends AnsiSqlRenderer {
             if (text.startsWith("{")) {
                 return declared(com.legend.sql.Json.parse(text), st);
             }
-            if (text.equals("null")) {
+            if (com.legend.sql.Json.parse(text) == null) {
                 return null;
             }
         }
