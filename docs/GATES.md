@@ -9195,3 +9195,32 @@ The study, `docs/LEGEND_SQL_STUDY_2026_10_11.md` §9.4, says what reads, what is
 6. **Recorded, not fixed (the study):** DuckDB's trims strip every Unicode space separator, Postgres's only U+0020 (it
    predates this step; the user's to decide); `cot(0)`; a numeric `width_bucket` within 1e-15 below an edge; the
    regressions' variance of equal doubles, as corr's.
+
+## 2026-10-13 — The program's B1 to B3: Python's model home, its model actions and its settings, over the host's services (the DataCube + Python line)
+
+The program is `docs/ONE_PLATFORM_PROGRAM_2026_10_12.md` (agreed 2026-10-12). PR #36, merged as 8bd1eaf9e. CI: run
+38342569828 on 9ef79795f, every job green on every platform (51 checks) after one re-run of a macOS job failed by a
+runner's filesystem error. `//gates:local //datacube/... //python/... //sdlc-client/... //sdlc-server/...` green on the
+head rebased on main 6c3a6c976 (360 pass, 2 of main's guards skipped on macOS); the lane query empty.
+
+1. **What it is.**
+   - **B1:** the model actions (Create a Class… and the rest) over the host's services, never the tab's own planner
+     and engine. Each host that writes models gives `ModelWriting` (`datacube/src/app/services.ts`): the place its
+     database has in a class's model (`Browser`, `Python`), legend-lite's model writer, and a project's rows. A grid's
+     sample is read through its PlanAndRun (`rowsOf`).
+   - **B2:** Python keeps the page's settings (`ll.home()/settings/settings.json`), since its page binds a new port each
+     run and the browser's storage is per address.
+   - **B3:** Python's model home. `native/.../ModelHome.java` (`lite_sdlc_handle`, `lite_depot_handle`) runs the SDLC's
+     and the Depot's rules over `GitStorage` in `ll.home()/projects`. Python serves `/sdlc/api` and `/depot/api` under
+     its token, with a lock across Python processes. A model the page sends is planned only when every table its
+     Databases declare is one Python serves (`Frames.model_for`, the user's option (c)).
+   - `bazel run //python:repl` carries everything the wheel does.
+2. **What proves it.**
+   - `//datacube:python_model_home_test` (new, the warehouse lane): the SDLC's conformance suite, 28 of 28, against
+     Python's model home.
+   - `//datacube:python_engine_test` (37 checks): Create a Class… on Python's page end to end, and the settings written
+     by one page and read by the next.
+   - `//python:engine_test` (the routes, the token, option (c)'s refusals), `:frames_test` (`ModelFor`),
+     `//datacube:create_class_test`.
+3. **Known, and where it goes:** the lock lives in Python, not the repository, until G11 (before Studio opens the same
+   repository from Python, E); Python's `create_class` and its twins are B4, as twin TypeScript and Python libraries.
