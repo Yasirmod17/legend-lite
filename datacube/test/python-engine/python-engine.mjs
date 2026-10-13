@@ -301,6 +301,24 @@ try {
     failed = true;
   }
 
+  // AN ICEBERG TABLE (G5), read by Python's DuckDB through the iceberg extension the wheel carries, every file it names
+  // served by the server on this machine: the app's own Remote section, as for a remote file
+  await cube.click('.dc-titlebar-menu');
+  await cube.locator('.dc-menu .dc-menu-item', { has: cube.locator(':scope > .dc-menu-label:text-is("New")') }).hover();
+  await cube.locator('.dc-menu .dc-menu-item', { has: cube.locator(':scope > .dc-menu-label:text-is("Blank Page")') }).click();
+  await cube.locator('.dc-blank .dc-primary').click();
+  await cube.locator('.dc-picker-tab[data-section="remote"]').click();
+  await cube.fill('.dc-picker-url', served.iceberg);
+  await cube.click('.dc-picker-form .dc-primary');
+  const icebergRead = await cube.waitForFunction(() => document.querySelector('.dc-picker') === null
+    && /\b3 rows\b/.test(document.body.innerText) && document.body.innerText.includes('Cygnus'),
+  undefined, { timeout: 60_000 }).then(() => true, () => false);
+  console.log(`${icebergRead ? 'ok  ' : 'FAIL'} an Iceberg table opened on Python's page is read by Python's DuckDB, through the iceberg it carries`);
+  if (!icebergRead) {
+    console.log(`  the page showed: ${(await cube.evaluate(() => document.body.innerText.slice(0, 300)))}`);
+    failed = true;
+  }
+
   // A FRAME CLOSED IN PYTHON: its open tab keeps what it shows, and says it no longer follows the frame -- in its status
   // line and its title (the app's live page, docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md §5)
   engine.stdin.write('show-closing\n');

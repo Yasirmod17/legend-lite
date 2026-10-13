@@ -76,9 +76,15 @@ remote = {"status": said.status, "answer": said.body.decode()[:300],
           "rows": duck.execute("SELECT count(*) FROM wheel_remote").fetchone()[0] if said.status == 200 else None,
           "httpfs": duck.execute("SELECT install_path FROM duckdb_extensions() WHERE extension_name = 'httpfs'").fetchone()[0]}
 files.shutdown()
+# and an Iceberg table (G5), served by the test, read through the iceberg and avro extensions inside the wheel
+said = datacube._session.engine().answer("POST", "/remote.json", "", json.dumps({"url": sys.argv[1], "name": "wheel_iceberg"}))
+iceberg = {"status": said.status, "answer": said.body.decode()[:300],
+           "rows": duck.execute("SELECT count(*) FROM wheel_iceberg").fetchone()[0] if said.status == 200 else None,
+           "extensions": [p for (p,) in duck.execute("SELECT install_path FROM duckdb_extensions() "
+                                                     "WHERE extension_name IN ('iceberg', 'avro') AND loaded").fetchall()]}
 print(json.dumps({"module": ll.__file__, "library": __import__("legend_lite._library", fromlist=["x"]).library().path.as_posix(),
                   "page": page, "cube": sorted(cube_json), "rows": rows, "notebook": notebook, "headless": headless,
-                  "remote": remote}))
+                  "remote": remote, "iceberg": iceberg}))
 '''
 
 
@@ -288,7 +294,23 @@ class Installed(unittest.TestCase):
         checked = subprocess.run([python, '-m', 'pip', 'check', '--disable-pip-version-check'], env=env,
                                  capture_output=True, text=True, timeout=60)
         self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
-        ran = subprocess.run([python, '-I', '-c', SCRIPT], cwd=root, env=env, capture_output=True, text=True, timeout=120)
+        # an Iceberg table the installed engine reads, served from here
+        import functools
+        import http.server
+        import threading
+        import iceberg_table
+
+        class Quiet(http.server.SimpleHTTPRequestHandler):
+            def log_message(self, *_):
+                pass
+        (root / 'served').mkdir()
+        files = http.server.ThreadingHTTPServer(('127.0.0.1', 0), functools.partial(Quiet, directory=str(root / 'served')))
+        threading.Thread(target=files.serve_forever, daemon=True).start()
+        self.addCleanup(files.shutdown)
+        table = iceberg_table.write(root / 'served', 'trades', f'http://127.0.0.1:{files.server_address[1]}',
+                                    [[('FX', 1)], [('EQ', 2)]])
+        ran = subprocess.run([python, '-I', '-c', SCRIPT, f'{table}#iceberg'], cwd=root, env=env, capture_output=True,
+                             text=True, timeout=120)
         self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
         out = json.loads(ran.stdout.strip().splitlines()[-1])
         # as paths, not text: Windows writes its separators both ways
@@ -305,4 +327,7 @@ class Installed(unittest.TestCase):
         # a remote file read through the httpfs extension inside the wheel, none downloaded
         self.assertEqual((out['remote']['status'], out['remote']['rows']), (200, 2), out['remote'])
         self.assertTrue(Path(out['remote']['httpfs']).is_relative_to(venv), out['remote'])
+        self.assertEqual((out['iceberg']['status'], out['iceberg']['rows']), (200, 2), out['iceberg'])
+        self.assertEqual(len(out['iceberg']['extensions']), 2, out['iceberg'])
+        self.assertTrue(all(Path(p).is_relative_to(venv) for p in out['iceberg']['extensions']), out['iceberg'])
         self.assertTrue(Path(out['headless']['bundle']).is_relative_to(venv), out['headless'])

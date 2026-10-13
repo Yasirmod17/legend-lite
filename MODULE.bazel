@@ -491,6 +491,32 @@ http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_
     "windows_amd64": "sha256-u0qfJyHENDkAbm53Y2SnSNJGn5Lf5eXr42XtEOK+Dng=",
 }.items()]
 
+# DuckDB's iceberg extension for Python's DuckDB, and the avro extension it reads an Iceberg table's manifests with, as
+# httpfs above (1.5.5, matching exactly; one per platform, pinned by content; the wheel carries them, nothing is
+# downloaded where it runs). Pinned 2026-10-13 on the user's ruling of 2026-10-12, "ship the iceberg extension"
+# (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md G5): a page on Python reads an Iceberg table only when every file its
+# snapshot names is remote (engine.py), as a remote file is.
+[http_file(
+    name = "duckdb_" + extension + "_extension_" + platform,
+    integrity = sha,
+    urls = ["https://extensions.duckdb.org/v1.5.5/" + platform + "/" + extension + ".duckdb_extension.gz"],
+) for extension, shas in {
+    "iceberg": {
+        "osx_arm64": "sha256-ub3asCJoQ03N70nxa719eNOjW+rnTLecTs27FD4QbIo=",
+        "osx_amd64": "sha256-PGfkenjIfRCAYnw3vHkplga9ed1K2pqTE0XK3Tf9w6o=",
+        "linux_amd64": "sha256-JYjLAEbbDvFfDxjHhDQXkGLDckgyqwDctDVnvigw7dQ=",
+        "linux_arm64": "sha256-l0XQGON2T9nurkwGKXX7X17VhAhdhfKX1Utdc4xa3ks=",
+        "windows_amd64": "sha256-XxSrB2XOqirZAyV/GxpYNYLkRGgz2dPl677ux1MHh/E=",
+    },
+    "avro": {
+        "osx_arm64": "sha256-VTHiQY1VOwab9Mw25t3vrf/QHxeZFbEAfOXXeLu64iA=",
+        "osx_amd64": "sha256-O4zm/TMb/9ZkIEieHc1TK3S6Sl0V09u6hQD0ixvC1Qc=",
+        "linux_amd64": "sha256-tnx7j1Q+G4JBZ/dI5XpistYZoDx0x2gXrnM0DrwukGg=",
+        "linux_arm64": "sha256-72CG6pbmogs5bgrs6I4R/WoKMt7Qp1E02zDM2mtAmD8=",
+        "windows_amd64": "sha256-SYdNsYedcdkvdvaByHZaF/bxl5jYYfA15fLUoU7udTs=",
+    },
+}.items() for platform, sha in shas.items()]
+
 # THE BROWSER the harnesses drive (Bazel workplan P1-14, spike S4): Playwright 1.63.0's
 # chromium-headless-shell, revision 1243 = Chrome for Testing 153.0.8010.12 (the locked playwright-core's
 # browsers.json; //tools/browser:revision_test holds them equal). One archive per platform, fetched by

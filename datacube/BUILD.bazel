@@ -911,6 +911,7 @@ py_binary(
     deps = [
         # DataCube's own code headless (the datacube extra): what reads a page's file into Python's DuckDB (step 2b)
         "//python:headless",
+        "//python:iceberg_table",
         "//python:legend_lite",
         "//python:notebook",
     ],

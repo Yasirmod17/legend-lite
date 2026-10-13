@@ -371,6 +371,17 @@ class Remote(unittest.TestCase):
         cls.server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), handler)
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
         cls.base = f'http://127.0.0.1:{cls.server.server_address[1]}'
+        # Iceberg tables (G5): one whose every file is served, and three naming a file on this machine where its data
+        # file, its manifest and its manifest list would be -- none of which exist, so a read of one would fail (and a
+        # manifest that cannot be read ends the process inside DuckDB 1.5.5's iceberg_scan): each is refused first
+        import iceberg_table
+        served = Path(cls.folder.name)
+        # named as a page names one: its table's URL marked #iceberg (remote.ts inferFormat)
+        cls.iceberg = iceberg_table.write(served, 'trades_iceberg', cls.base, [[('FX', 1), ('EQ', 2)], [('FX', 3)]]) + '#iceberg'
+        here = cls.iceberg_here = served / 'not-served'
+        cls.iceberg_local = {
+            what: iceberg_table.write(served, f'local_{what}', cls.base, [[('FX', 1)]], **{f'{what}_url': str(here / what)})
+            + '#iceberg' for what in ('data', 'manifest', 'list')}
 
     @classmethod
     def tearDownClass(cls):
@@ -404,6 +415,30 @@ class Remote(unittest.TestCase):
         # followed (the runfiles are links on macOS and Linux)
         carried = os.path.normcase(os.path.abspath(os.environ['LEGEND_LITE_DUCKDB_EXTENSIONS']))
         self.assertTrue(os.path.normcase(os.path.abspath(httpfs[1])).startswith(carried + os.sep), httpfs[1])
+
+    def test_a_remote_iceberg_table_is_read_through_a_view_with_the_extensions_carried(self):
+        answer = self.mount(self.iceberg, 'remote_iceberg')
+        self.assertEqual(answer.status, 200, answer.body[-600:])
+        rows = self.frames.connection.execute('SELECT desk, qty FROM remote_iceberg ORDER BY qty').fetchall()
+        self.assertEqual(rows, [('FX', 1), ('EQ', 2), ('FX', 3)])
+        with self.frames.serving() as models:
+            self.assertEqual(models['remote_iceberg'], json.loads(answer.body)['model'])
+        carried = os.path.normcase(os.path.abspath(os.environ['LEGEND_LITE_DUCKDB_EXTENSIONS']))
+        for extension in ('iceberg', 'avro'):
+            with self.subTest(extension=extension):
+                loaded, path = self.frames.connection.execute(
+                    'SELECT loaded, install_path FROM duckdb_extensions() WHERE extension_name = ?', [extension]).fetchone()
+                self.assertTrue(loaded)
+                self.assertTrue(os.path.normcase(os.path.abspath(path)).startswith(carried + os.sep), path)
+
+    def test_an_iceberg_table_naming_a_file_on_this_machine_is_refused_before_any_view_reads_it(self):
+        for what, url in self.iceberg_local.items():
+            with self.subTest(names=what):
+                answer = self.mount(url, f'iceberg_{what}')
+                self.assertEqual(answer.status, 400, answer.body[:300])
+                self.assertIn(b'every file it names is a remote one', answer.body)
+                self.assertIn(repr(str(self.iceberg_here / what)), answer.body.decode('utf-8'))
+                self.assertFalse(self.frames.taken(f'iceberg_{what}'))
 
     def test_a_url_that_is_not_remote_is_refused_before_anything_runs(self):
         local = Path(self.folder.name, 'desks.csv')

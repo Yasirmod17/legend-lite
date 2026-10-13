@@ -79,9 +79,14 @@ export function inferFormat(url: string): RemoteFormat {
   return 'parquet';
 }
 
+/** The URL a source's data is read from: as given, but an Iceberg table's without the mark that names it one. */
+export function scanUrl(url: string): string {
+  return url.replace(/#iceberg$/i, '');
+}
+
 /** The scan expression for one source. */
 export function scanExpression(source: RemoteSource): string {
-  const url = sqlLiteral(source.url.replace(/#iceberg$/i, ''));
+  const url = sqlLiteral(scanUrl(source.url));
   switch (source.format ?? inferFormat(source.url)) {
     case 'csv':
       return `read_csv_auto(${url})`;
@@ -111,7 +116,7 @@ export function viewStatement(source: RemoteSource): string {
  * beside it).
  */
 export function credentialScope(url: string): string {
-  let scope = url.replace(/#iceberg$/i, '');
+  let scope = scanUrl(url);
   const glob = scope.search(/[*?[]/);
   if (glob >= 0) scope = scope.slice(0, glob);
   return scope.replace(/\/metadata\/?$/i, '');
@@ -192,13 +197,20 @@ export function extensionStatements(
   return out;
 }
 
-/** Every statement, in the order it has to run. */
-export function mountStatements(options: RemoteOptions): string[] {
+/**
+ * The extensions and credentials the sources are read with, before any view of them: what a host that checks what a
+ * source names runs first (Python's, for an Iceberg table, whose metadata names its files by path: R4).
+ */
+export function accessStatements(options: RemoteOptions): string[] {
   return [
     ...extensionStatements(options.sources),
     ...options.sources.flatMap((source) => credentialStatements(options.s3, source)),
-    ...options.sources.map(viewStatement),
   ];
+}
+
+/** Every statement, in the order it has to run. */
+export function mountStatements(options: RemoteOptions): string[] {
+  return [...accessStatements(options), ...options.sources.map(viewStatement)];
 }
 
 /**
@@ -213,13 +225,22 @@ export async function mountRemote(
   engine: QueryEngine,
   options: RemoteOptions,
 ): Promise<void> {
-  for (const statement of mountStatements(options)) {
+  await runRedacted(engine, mountStatements(options), options.s3);
+}
+
+/** The engine's connection given the sources' extensions and credentials, no view yet (`accessStatements`). */
+export async function accessRemote(engine: QueryEngine, options: RemoteOptions): Promise<void> {
+  await runRedacted(engine, accessStatements(options), options.s3);
+}
+
+async function runRedacted(engine: QueryEngine, statements: readonly string[], s3: S3Credentials | undefined): Promise<void> {
+  for (const statement of statements) {
     try {
       await engine.run(statement, 0);
     } catch (cause) {
       const message = redactSecrets(
         cause instanceof Error ? cause.message : String(cause),
-        options.s3,
+        s3,
       );
       throw new Error(`could not mount remote data: ${message}`);
     }

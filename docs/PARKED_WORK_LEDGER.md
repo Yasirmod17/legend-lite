@@ -764,3 +764,41 @@ here and fails in the engine, with no word.
 **When.** Not scheduled; a small landing of its own, the user's call.
 
 **Anchor.** `sig < 0 ? funcRef : funcRef.substring(0, sig)` in `MappingFromProtocol.java`: the signature cut away.
+
+## PARK-29 — an Iceberg table on Python is checked once, before its view, not on every read
+
+**Recorded** 2026-10-13 by the DataCube + Python line, with G5 (`docs/ONE_PLATFORM_PROGRAM_2026_10_12.md`: Iceberg files
+on Python, every file remote). An Iceberg table's metadata names its files by path, so a remote table could make
+Python's DuckDB read this machine's files (R4).
+
+**What happens today.** Before a page's Iceberg table is mounted, `Engine._iceberg_refusal` (`python/legend_lite/
+engine.py`) reads the manifest lists its snapshots name, the manifests those name, and the files its current snapshot
+reads, each level only once the level naming it is checked, and refuses the table unless every one is a remote URL
+(`remote_url`). Two things remain:
+1. **The check holds when it runs, not afterwards.** A server that answers differently later, or a table written again
+   after the page opened it, can name a file on this machine at the view's next read. Pinning the snapshot would not
+   close it: the snapshot's metadata is read again on every scan, and DuckDB finds the current metadata file by its
+   own rule (`version-hint.text`, `version_name_format`), which Python would have to copy.
+2. **DuckDB 1.5.5's `iceberg_scan` ends the process when a manifest cannot be read** (an uncaught exception: measured
+   2026-10-13 with a manifest answering 404, and with a missing local one), where `iceberg_metadata` and `read_avro`
+   report the same failure. The check reads every manifest through those first, so a table that fails them is
+   refused; one whose manifest stops answering between the check and the view still ends the process. The tab's
+   DuckDB (WebAssembly) is likely the same; not measured.
+
+**The fix.** DuckDB itself refusing this machine's paths on the connection legend-lite owns, for every read
+(`enable_external_access = false` with `allowed_directories` naming the remote schemes and the headless engine's own
+folder, once DuckDB's rules for remote prefixes there are measured), so no check is needed; and the abort reported to
+DuckDB's iceberg extension, the pin moved when it is fixed.
+
+**Acceptance.** `python/tests/test_headless.py`'s `Remote` cases, with a table that names a file on this machine only
+in a snapshot written after the mount, refused at the read; a manifest answering 404 at the view's read is an error,
+not the process's end.
+
+**Why parked.** Turning external access off changes what every query on Python's shared connection may read (a
+person's own use of it included) and cannot be turned back on for that connection; it takes a design of its own. The
+cost while parked: a table that changes between the check and a read, or a server that answers so on purpose.
+
+**When.** With G6 (a connection per page on Python), which gives the place to turn it off for a page's reads alone.
+
+**Anchor.** `def _iceberg_refusal(` in `python/legend_lite/engine.py` (ParkedWorkLedgerTest reads core only; this row's
+anchor is checked by hand).

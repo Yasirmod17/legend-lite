@@ -81,9 +81,8 @@ _PLAN_AND_RUN, _PLANNER = '/plan-and-run.json', '/planner.json'
 _PLAN_KEY = b'legend.plan'
 # the only places a page's remote file may be read from (remote.json), each as DuckDB's httpfs names it: never this
 # machine's own files, which Python's DuckDB can read and a page must not make it (R4's reason). Azure's schemes are not
-# here: the wheel carries no azure extension. Nor does it carry iceberg: an Iceberg table's metadata names its data
-# files by path, so carrying it must come with a rule that those paths are remote too, or a remote file could make
-# DuckDB read this machine's (R4)
+# here: the wheel carries no azure extension. An Iceberg table's metadata names its files by path, so each of those
+# must be one of these too (Engine._iceberg_refusal), or a remote table could make DuckDB read this machine's
 _REMOTE_SCHEMES = ('http', 'https', 's3', 's3a', 's3n', 'gs', 'gcs', 'r2', 'hf')
 # a connection that sends nothing, or stops sending, is closed after this long (seconds)
 _IDLE = 30
@@ -527,6 +526,12 @@ class Engine:
             with self.frames.reading_file(asked['name'], view=True) as name:
                 self._extensions_here(extensions)
                 mount = {'url': url, 'name': name, **({'s3': asked['s3']} if asked.get('s3') else {})}
+                # the source's extensions and keys first, then what it names checked, before any view of it reads it
+                scan = json.loads(headless.call('remoteAccess', json.dumps(mount)))
+                if scan['format'] == 'iceberg':
+                    refused = self._iceberg_refusal(scan['url'])
+                    if refused is not None:
+                        raise ValueError(refused)
                 said = headless.call('mount', json.dumps(mount))
                 self.frames.keep_file(name, json.loads(said)['model'], view=True)
         except ValueError as refused:
@@ -535,6 +540,28 @@ class Engine:
             # the file not read (not there, its keys refused, a format DuckDB cannot read): said, as the tab says it
             return _said(422, f'{type(failure).__name__}: {failure}')
         return Answer(200, 'application/json', said.encode('utf-8'))
+
+    def _iceberg_refusal(self, url: str) -> str | None:
+        """Why a page's Iceberg table is not read here, or None: its metadata names its files by path, so every manifest
+        list its snapshots name, every manifest those name, and every data and delete file its current snapshot reads
+        must be a remote URL (``remote_url``), or a remote table could make this DuckDB read this machine's files (R4).
+        Each level is read only once the level that names it is checked, and only through the functions that report a
+        file they cannot read: DuckDB 1.5.5's ``iceberg_scan`` ends the process instead, so no view of a table is made
+        before every manifest it reads has been read here."""
+        connection = self.frames.connection
+        lists = [row[0] for row in connection.execute('SELECT manifest_list FROM iceberg_snapshots(?)', [url]).fetchall()]
+        named = lists
+        if all(remote_url(path) for path in named) and lists:
+            named = [row[0] for row in connection.execute(
+                'SELECT DISTINCT manifest_path FROM read_avro(?)', [lists]).fetchall()]
+            if all(remote_url(path) for path in named):
+                named = [row[0] for row in connection.execute(
+                    'SELECT file_path FROM iceberg_metadata(?)', [url]).fetchall()]
+        local = next((path for path in named if not remote_url(path)), None)
+        if local is None:
+            return None
+        return (f'an Iceberg table is read only when every file it names is a remote one, never this machine\'s, and '
+                f'this one names {local!r}')
 
     def _extensions_here(self, folder: Path) -> None:
         """The frames' DuckDB pointed at the extensions the package carries, once (the frames held): DataCube's INSTALL

@@ -236,7 +236,8 @@ py_test(
         "//datacube:headless_bundle",
         "//native:compiler",
     ],
-    # and DuckDB's extensions as the wheel carries them: a page's remote file is read through httpfs (step 2b)
+    # and DuckDB's extensions as the wheel carries them: a page's remote file is read through httpfs (step 2b), an
+    # Iceberg table through iceberg and avro (G5)
     env = select({
         "//tools/platforms:windows_x86_64": _ENV | _HEADLESS_ENV | {"PROCESSOR_ARCHITECTURE": "AMD64"},
         "//conditions:default": _ENV | _HEADLESS_ENV,
@@ -245,10 +246,21 @@ py_test(
     target_compatible_with = _PLATFORMS,
     deps = [
         ":headless",
+        ":iceberg_table",
         ":legend_lite",
         "@pypi//pandas",
         "@rules_python//python/runfiles",
     ],
+)
+
+# a small Iceberg table written for the tests (G5), its files named by the URLs a test serves them at
+py_library(
+    name = "iceberg_table",
+    testonly = True,
+    srcs = ["tests/iceberg_table.py"],
+    imports = ["tests"],
+    visibility = ["//datacube:__pkg__"],
+    deps = ["@pypi//pyarrow"],
 )
 
 # The engine: legend-engine's pure/v1 API over frames, as DataCube's remote client calls it -- the compiler's answers
@@ -385,40 +397,43 @@ copy_to_directory(
     root_paths = ["datacube/dist"],
 )
 
-# DUCKDB'S HTTPFS EXTENSION for Python's DuckDB (docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md, step 2b): a page on Python
-# reads a remote file through it, and nothing downloads it where the wheel runs -- MODULE.bazel pins it per platform.
-# The only extension carried: iceberg would need a rule first that an Iceberg table's data files are remote too (its
-# metadata names them by path; R4, engine.py _REMOTE_SCHEMES).
+# DUCKDB'S EXTENSIONS for Python's DuckDB, carried by the wheel and never downloaded where it runs (MODULE.bazel pins
+# each per platform): httpfs, through which a page on Python reads a remote file
+# (docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md, step 2b), and iceberg with the avro it reads manifests with, through which
+# it reads an Iceberg table (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md G5) -- only when every file the table's snapshot
+# names is remote too, since its metadata names them by path (R4, engine.py).
 # Gunzipped by the Java action the warehouse's postgres extension uses (//warehouse:postgres_extension: Bazel 9.2's own
 # .gz unpacking fails on Windows), each into DuckDB's own extension folder layout (v1.5.5/<DuckDB's platform>/, the
 # names DUCKDB_PLATFORMS gives: //tools/platforms), which Python points its DuckDB at (engine.py): DataCube's INSTALL
-# httpfs then finds it installed, and LOAD loads it.
+# then finds each installed, and LOAD loads it.
+_DUCKDB_EXTENSIONS = ["httpfs", "iceberg", "avro"]
+
 [java_run(
-    name = "duckdb_httpfs_" + duckdb,
-    srcs = ["@duckdb_httpfs_extension_" + duckdb + "//file"],
-    outs = ["duckdb_extensions/v1.5.5/" + duckdb + "/httpfs.duckdb_extension"],
+    name = "duckdb_" + extension + "_" + duckdb,
+    srcs = ["@duckdb_" + extension + "_extension_" + duckdb + "//file"],
+    outs = ["duckdb_extensions/v1.5.5/" + duckdb + "/" + extension + ".duckdb_extension"],
     arguments = [
-        "$(execpath @duckdb_httpfs_extension_" + duckdb + "//file)",
+        "$(execpath @duckdb_" + extension + "_extension_" + duckdb + "//file)",
         "{OUT}",
     ],
     main_class = "com.legend.tools.gunzip.Gunzip",
     mnemonic = "GunzipDuckdbExtension",
     target_compatible_with = compatible_with([bazel]),
     deps = ["//tools/gunzip"],
-) for bazel, duckdb in DUCKDB_PLATFORMS.items()]
+) for bazel, duckdb in DUCKDB_PLATFORMS.items() for extension in _DUCKDB_EXTENSIONS]
 
-_DUCKDB_HTTPFS, _DUCKDB_HTTPFS_COMPATIBLE = platform_select(
-    {bazel: [":duckdb_httpfs_" + duckdb] for bazel, duckdb in DUCKDB_PLATFORMS.items()},
-    "DuckDB httpfs extension (MODULE.bazel, duckdb_httpfs_extension_*)",
+_DUCKDB_CARRIED, _DUCKDB_CARRIED_COMPATIBLE = platform_select(
+    {bazel: [":duckdb_" + extension + "_" + duckdb for extension in _DUCKDB_EXTENSIONS] for bazel, duckdb in DUCKDB_PLATFORMS.items()},
+    "DuckDB's httpfs, iceberg and avro extensions (MODULE.bazel, duckdb_*_extension_*)",
 )
 
 # the folder, as the package carries it (legend_lite/_duckdb) and as the tests are given it (LEGEND_LITE_DUCKDB_EXTENSIONS)
 copy_to_directory(
     name = "wheel_duckdb",
-    srcs = _DUCKDB_HTTPFS,
+    srcs = _DUCKDB_CARRIED,
     out = "legend_lite/_duckdb",
     root_paths = ["python/duckdb_extensions"],
-    target_compatible_with = _DUCKDB_HTTPFS_COMPATIBLE,
+    target_compatible_with = _DUCKDB_CARRIED_COMPATIBLE,
     visibility = ["//datacube:__pkg__"],
 )
 
@@ -542,7 +557,10 @@ py_test(
     }),
     main = "tests/main.py",
     target_compatible_with = _PLATFORMS,
-    deps = ["@rules_python//python/runfiles"],
+    deps = [
+        ":iceberg_table",
+        "@rules_python//python/runfiles",
+    ],
 )
 
 # the REPL built in a lane, so it does not rot unseen (as //tools/metrics:tools_build_test keeps its tool): everything

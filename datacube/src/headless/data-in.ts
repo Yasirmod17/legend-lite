@@ -7,7 +7,7 @@
 
 import { DuckDbEngine } from '../../../engine-client/src/duckdb.ts';
 import { LitePlanner } from '../lite-planner.ts';
-import type { S3Credentials } from '../remote.ts';
+import { accessRemote, inferFormat, scanUrl, type S3Credentials } from '../remote.ts';
 import { dropFileTable, mountRemoteView, readFileInto } from '../upload.ts';
 import { hostCalls, hostDatabase, hostWorker } from './host.ts';
 
@@ -43,6 +43,17 @@ export async function mount(spec: string): Promise<string> {
   const s = JSON.parse(spec) as { readonly url: string; readonly name: string; readonly s3?: S3Credentials };
   return using(async ({ engine, writer }) =>
     JSON.stringify(await mountRemoteView(engine, writer, { url: s.url, name: s.name, ...(s.s3 ? { s3: s.s3 } : {}) })));
+}
+
+/** A remote file's extensions and keys put in place, no view yet (remote.ts `accessStatements`), and what it is read as
+ *  and from where, JSON (`{"format", "url"}`): an Iceberg table's URL is its table's, whose metadata names every file
+ *  it reads by path, which Python checks are remote too before it mounts the table (R4). */
+export async function remoteAccess(spec: string): Promise<string> {
+  const s = JSON.parse(spec) as { readonly url: string; readonly name: string; readonly s3?: S3Credentials };
+  return using(async ({ engine }) => {
+    await accessRemote(engine, { sources: [{ name: s.name, url: s.url }], ...(s.s3 ? { s3: s.s3 } : {}) });
+    return JSON.stringify({ format: inferFormat(s.url), url: scanUrl(s.url) });
+  });
 }
 
 /** A file's table dropped (its last grid gone, or an open overtaken): the name is free again. */
