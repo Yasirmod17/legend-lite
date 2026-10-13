@@ -1109,6 +1109,23 @@ pause for the user's review after Phase 1.
      It would touch `sql/dialect/DuckDb.java`, `exec/Sessions.java` and `server/ConnectionResolver.java`. Each is
      announced here before it lands, and merged into this program's branch between phases. The question for this
      line: build C5 now in that shape, or after Phase 5?
+  3. *Claimed, 2026-10-13 (the user's go): D5's TypeScript part, with Python's twins, built with C5 by the DataCube +
+     Python line.* Every statement the tab, and Python's host, still spells becomes a named operation, answered in
+     Java for the host's database type, which every database without it refuses by name:
+     - a project's database (C5);
+     - reading a file (`upload.ts`, `model-data.ts`);
+     - an extension and a secret (`remote.ts`);
+     - the extension folder (`duckdb-tab.ts`);
+     - a copy's local tables and its count (`snap.ts`, `duckdb.ts`, `tab-data.ts`; the count on a warehouse catalog
+       that may be Postgres);
+     - Python's same operations (`engine.py`, `frames.py`).
+
+     Then a guard: the tab's engine runs only statements the planner produced (a type), and no SQL text is left in
+     TypeScript or Python's host. To stay clear of Phase 1's restructuring, the operations go in **new files in
+     `sql/dialect/`** (`HostOperations.java`, the operations and their refusal, with DuckDB's beside it), not in
+     `DuckDb.java`; this program folds them in when it consolidates. Each file is announced here before it lands on
+     main. This program keeps D4 (the warehouse) and D6 (the dead code). If this line objects, the DataCube + Python
+     line stops at C5.
 
 ## Rules between sessions
 
