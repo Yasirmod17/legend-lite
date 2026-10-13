@@ -20,10 +20,9 @@ AN ANSWER IS TYPED BY ITS PLAN (docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md §15.
 own (engine-client's ``typedByPlan``): each column carries the compiler's type (its field's ``legend.type``), a column
 the plan does not type is refused, and each value is exact, as the database stored it -- an Integer an int64 (a sum
 DuckDB answers as an exact decimal included), keeping that exact decimal only past 64 bits, never wrong; a Decimal
-exact; a DateTime as stored, in UTC (the session's zone), to the microsecond; a Variant as the planner's SQL answers it
--- its JSON text, or, a STRUCT or a LIST under ``SELECT *``, as stored, until the planner answers every Variant as JSON
-(§15.3a: the Compiler Rewrite line's egress fix). ``to_pandas`` keeps them so: an Integer or a Boolean with nulls stays
-an integer or a boolean (pandas' nullable types), never a float or an object.
+exact; a DateTime as stored, in UTC (the session's zone), to the microsecond; a Variant its JSON text, whatever the
+shape of the query (the planner answers a stored STRUCT or LIST as JSON, §15.3a). ``to_pandas`` keeps them so: an
+Integer or a Boolean with nulls stays an integer or a boolean (pandas' nullable types), never a float or an object.
 """
 
 from __future__ import annotations

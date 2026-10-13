@@ -220,6 +220,18 @@ class TypedByPlan(unittest.TestCase):
             'at': datetime.datetime(2024, 1, 2, 3, 4, 5, 123456), 'v': '{"a": [1, 2.50]}'})
         self.assertEqual(set(rows.to_pylist()[1].values()), {None})
 
+    def test_a_variant_stored_as_a_struct_is_its_json_whatever_the_shape_of_the_query(self):
+        # a nested value (a STRUCT in DuckDB) is a Variant: its JSON text under a bare limit, a filter and a sort as
+        # under a projection -- the planner's (47349d82a), never a dict one shape and text the other
+        frame = pa.table({'id': [1, 2], 'customer': pa.array([{'name': 'A', 'tier': 2}, None])})
+        table = ll.Frames().register('t', frame)
+        for steps in ('->limit(5)', '->filter(x|$x.id > 0)', '->sort(~id->ascending())', '->select()'):
+            with self.subTest(steps=steps):
+                rows = table.execute(steps)
+                self.assertEqual(rows.schema.field('customer').metadata[b'legend.type'],
+                                 b'meta::pure::metamodel::variant::Variant')
+                self.assertEqual(rows.to_pylist()[0]['customer'], '{"name":"A","tier":2}')
+
     def test_a_sum_of_integers_is_an_integer_and_past_64_bits_exact(self):
         # DuckDB answers a SUM of integers as an exact decimal(38, 0): an Integer, so an int64; past 64 bits, the
         # database's exact decimal, never wrapped
