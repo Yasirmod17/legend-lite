@@ -17,12 +17,15 @@ import { CubeController, type CubeView } from '../cube.ts';
 import { fold, type CubeState } from '../cube-state.ts';
 import { openCube, readCube, type OpenedCube } from '../cube-document.ts';
 import { STALE } from '../epoch.ts';
+import { columnFormats, heatmapColour, heatmapSetting, measureHeatmaps, renderExport, type ExportKind } from '../export-render.ts';
+import { FormatterCache } from '../format.ts';
 import { LitePlanner } from '../lite-planner.ts';
 import { suggestedClassName, suggestedDataSpaceName, suggestedPackage } from '../model-names.ts';
 import { classLambda, duplicateLambda, sampleLambda, storeTableOf } from '../query.ts';
 import { shownColumns } from '../shown-columns.ts';
 import { sourceColumns } from '../source-columns.ts';
 import { hostCalls, hostDatabase, hostWorker } from './host.ts';
+import { base64 } from './web.ts';
 
 /** A grid as Python hands it in: its cube document (page-document's, as JSON text), and its source's model. */
 export interface GridSpec {
@@ -141,4 +144,28 @@ export async function gridClass(spec: GridSpec, named: { readonly source: string
  */
 export async function gridDuplicate(spec: GridSpec, column: string): Promise<string> {
   return using(spec, async ({ state }) => toJson(duplicateLambda(classLambda(state.snapshot).body[0]!, column)));
+}
+
+/**
+ * The grid exported, as its Export menu makes the file (export-render.ts, the screen's own core): what it shows, its
+ * formats, appearance and heatmaps, as `kind` -- CSV, Excel, HTML, plain text or PDF. JSON: its name and type, and
+ * its content (text, or base64 for a workbook or a PDF). No chart rides along: a page's board with its charts' pictures
+ * is the screen's (a chart drawn headless is not yet: PARK-32).
+ */
+export async function gridExport(spec: GridSpec, kind: ExportKind): Promise<string> {
+  return using(spec, async ({ planner, state }) => {
+    const controller = new CubeController(new DuckDbEngine(hostDatabase(hostCalls()).connection), planner);
+    const view = await controller.run({ snapshot: state.snapshot, tree: state.tree });
+    if (view === STALE) throw new Error('the grid was asked again before its view was ready');
+    const config = state.configuration;
+    const heatmaps = measureHeatmaps(view, view.treeRows, (name) => heatmapSetting(config, view, name));
+    const file = renderExport(kind, {
+      view, model: shownColumns(view, config), config,
+      formats: columnFormats(config, state.snapshot, state.snapshot, view), formatters: new FormatterCache(),
+      cellBackground: (leaf, row, value) => heatmapColour(heatmaps, view.treeRows, leaf, row, value), at: new Date(),
+    });
+    const text = typeof file.content === 'string';
+    return JSON.stringify({ name: file.name, mime: file.mime, text,
+      content: typeof file.content === 'string' ? file.content : base64(file.content) });
+  });
 }

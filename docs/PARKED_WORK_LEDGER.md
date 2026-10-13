@@ -864,3 +864,26 @@ lands the plane, its one-query guard and its lock fix.
 **When.** 1 with G6 and G10; 2 with G2 (streaming results back, which changes how plan-and-run answers); 3 with G9.
 
 **Anchor.** `def runnable(` in `python/legend_lite/upstream.py` (ParkedWorkLedgerTest reads core only; checked by hand).
+
+## PARK-32 — a page's charts are not drawn headless, so Python exports a grid, not a board
+
+**Recorded** 2026-10-13 by the DataCube + Python line, with D (`docs/ONE_PLATFORM_PROGRAM_2026_10_12.md`: headless
+pages). A grid's Export is one core (`datacube/src/export-render.ts`), the screen's menu and Python's `grid.export()`
+alike; on the screen, a page with charts exports its whole board, each chart as its picture where the board puts it.
+
+**What happens today.** `grid.export(kind)` (headless `gridExport`) writes the grid as its Export menu does --
+formats, appearance, heatmaps -- but carries no chart: DataCube draws a chart's picture through the page's own canvas
+(echarts on the board), which V8 inside Python has none of. Python has no `page.export()`.
+
+**The fix.** A chart drawn headless (echarts' server-side SVG rendering, which needs no canvas), the board laid out as
+the screen lays it out (`page.exportPage()`'s tiles), and `page.export(kind)` over it.
+
+**Acceptance.** `python/tests/test_headless.py`: a page of a grid and a chart exported as HTML carries the chart as an
+SVG where the board puts it, and as PDF and Excel as the screen's export does.
+
+**Why parked.** Drawing charts headless is a dependency and a design of its own (fonts, sizes); the grid's export is
+what stands alone.
+
+**When.** With F1 (dashboards on classes), which reworks the board.
+
+**Anchor.** `PARK-32` in `datacube/src/headless/grid.ts` (`gridExport`).

@@ -413,8 +413,16 @@ describe('nothing is built and left unreachable', () => {
   // noticed, because every one of them had good unit tests.
   //
   // So: a module that exists to be used by the product must be
-  // imported by the product, and called. app.ts is the product.
+  // imported by the product, and called. app.ts is the product -- and
+  // the export's core it calls (export-render.ts, 2026-10-13: one core
+  // for the screen's Export menu and Python's grid.export()), which
+  // reaches every export format and the heatmap's scale.
   const APP = SOURCES.read('src/app.ts');
+  const EXPORT = SOURCES.read('src/export-render.ts');
+  const IN_EXPORT = new Set(['./export-rich.ts', 'heatColour(', 'columnRange(', 'exportTable(', 'toXlsx(', 'toHtml(',
+    'toPlainText(', 'toPdf(', 'exportCsv(']);
+  const product = (part: string): boolean => APP.includes(part) || (IN_EXPORT.has(part.replace(/^from '|'$/g, ''))
+    && EXPORT.includes(part));
 
   const REACHABLE: readonly [string, string][] = [
     ['the context menu', './ui/menu.ts'],
@@ -436,7 +444,7 @@ describe('nothing is built and left unreachable', () => {
   for (const [what, module] of REACHABLE) {
     it(`reaches ${what}`, () => {
       assert.ok(
-        APP.includes(`from '${module}'`),
+        product(`from '${module}'`),
         `src/app.ts does not import ${module}; ${what} is unreachable`,
       );
     });
@@ -467,8 +475,11 @@ describe('nothing is built and left unreachable', () => {
       'new FilterEditor(',
       'new PivotPanel(',
       'new MenuView(',
+      // the export's core itself, which the screen's Export menu calls
+      'renderExport(',
+      'measureHeatmaps(',
     ]) {
-      assert.ok(APP.includes(call), `src/app.ts never calls ${call}`);
+      assert.ok(product(call), `src/app.ts never calls ${call}`);
     }
   });
 

@@ -84,8 +84,11 @@ function startup(bundle = join(DEMO, 'bundle.js')): string[] {
  *  392,000 -> 393,000 (2026-10-12, the program's B1, docs/ONE_PLATFORM_PROGRAM_2026_10_12.md): the model actions over
  *  the host's services, never the page's own planner and engine -- the tab's model writing (services/browser.ts
  *  tabModelWriting) and a grid's rows where they are planned and run (src/app/datacube-app.ts rowsOf). Measured 392,082,
- *  main before it 391,846 (+236: the session setup's 708 since 391,138 came with PR #31, under the budget). */
-const BUDGET = 393_000;
+ *  main before it 391,846 (+236: the session setup's 708 since 391,138 came with PR #31, under the budget).
+ *  393,000 -> 394,000 (2026-10-13, the program's D): a grid's export is one core for the screen's Export menu and
+ *  Python's grid.export() (src/export-render.ts: the renderer, the formats and the heatmaps moved out of app.ts into a
+ *  module of their own, which the headless bundle calls too). Measured 393,014, B4 before it 392,804 (+210). */
+const BUDGET = 394_000;
 
 /** The engine page's (demo/engine.html: DataCube on Python's engine, which runs its queries) startup download,
  *  gzipped: no DuckDB-WASM and no compiler. Set 2026-10-08 at its first measure (288,876 bytes) and the app's headroom

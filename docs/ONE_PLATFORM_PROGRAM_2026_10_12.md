@@ -402,6 +402,16 @@ and Python call the cores.
 
 **Proof.** `headless_test`, and a `python_engine_test` check that a page saved from Python opens in the tab.
 
+**Built 2026-10-13 (branch `datacube/python-parity`), and what moved:**
+- The export's core is `datacube/src/export-render.ts` (`renderExport`, `columnFormats`, `measureHeatmaps`,
+  `heatmapColour`, `heatmapSetting`), moved out of `CubeApp` unchanged; the screen's menu calls it, and so does the
+  headless `gridExport`. Python: `grid.export(kind, to=None)`, kind `csv`, `excel`, `html`, `text` or `pdf`.
+- A page's board with its charts is not exported headless: PARK-32 (charts drawn headless).
+- **`page.save(name)` moves after B6.** The saved-page rules are TypeScript's today (`cube-store.ts` `RuleStore`) and
+  B6 puts them in Java beside saved queries; built now, a headless save would be replaced in the same push. It lands
+  with B6, calling the Java rules in the native library.
+- The model actions' cores are B4's libraries (done).
+
 ### E. Studio and Query from Python
 
 **Goal.** `ll.studio()` and `ll.query()` open those apps served by Python, on Python's SDLC, Depot, saved queries and

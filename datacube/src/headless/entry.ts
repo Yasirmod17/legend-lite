@@ -7,14 +7,15 @@ import './install-url.ts';
 
 import { REQUEST_KINDS, type PlannerWorker } from '../planner-protocol.ts';
 import { hostCalls, hostDatabase, hostWorker, type HostDatabase } from './host.ts';
-import { gridClass, gridDuplicate, gridRelation, gridView } from './grid.ts';
+import { gridClass, gridDuplicate, gridExport, gridRelation, gridView } from './grid.ts';
 import { forget, ingest, mount, remoteAccess } from './data-in.ts';
 
 /** The request kinds this bundle's planner sends: the host checks, before anything runs, that it answers each (§7). */
 export { REQUEST_KINDS };
 
-/** A grid, headless (§4): its view, its rows as a relation, and its rows as a class's with the facts of its keys (B4). */
-export { gridClass, gridDuplicate, gridRelation, gridView };
+/** A grid, headless (§4): its view, its rows as a relation, its rows as a class's with the facts of its keys (B4), and
+ *  its export (D). */
+export { gridClass, gridDuplicate, gridExport, gridRelation, gridView };
 
 /** Data in (docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md §4.3): a file read into the host's database by upload.ts, its
  *  table dropped again, and a remote file mounted as a view (its extensions and keys put in place first, where the host

@@ -33,7 +33,6 @@ import {
   labelFor,
   toColumnAppearance,
   renderFormats,
-  leafFormats,
   DEFAULT_CONFIGURATION,
   DEFAULT_MAX_ROWS,
   renameColumnConfig,
@@ -54,7 +53,7 @@ import type { Lambda } from '../../pure-protocol/src/index.ts';
 import type { QueryEngine } from '../../engine-client/src/engine.ts';
 import { describePlane, type RemoteSource } from '../../engine-client/src/snap.ts';
 import type { SnapTarget } from './cube.ts';
-import { exportCsv, exportFileName, toCsv, toEml } from './export.ts';
+import { exportFileName, toCsv, toEml } from './export.ts';
 import {
   ALERT_WINDOW,
   CODE_CHECK_WINDOW,
@@ -66,10 +65,8 @@ import {
   type AlertOptions,
 } from './ui/alert.ts';
 import { pivotLabel, type PivotColumn } from './query.ts';
-import { toHtml } from './export-rich.ts';
-import { toPdf, toPlainText } from './export-doc.ts';
-import { exportTable, type ExportPage } from './export-model.ts';
-import { toXlsx, XLSX_MIME } from './export-xlsx.ts';
+import type { ExportPage } from './export-model.ts';
+import { columnFormats, heatmapColour, heatmapSetting, measureHeatmaps, renderExport, type Heatmap } from './export-render.ts';
 import { cubeScopeOf, newCubeScope } from './ui/scope.ts';
 import type { CubePage, ChartSource, SpawnedGrid, SpawnOptions } from './page/cube-page.ts';
 import { PAGE_CUBE, oneSheet, pageToJson, writePage, type ChartView, type PageDocument, type PageViews } from './page-document.ts';
@@ -93,8 +90,7 @@ import {
   type FilterNode,
   type FilterValue,
 } from './snapshot.ts';
-import { columnRange, heatColour } from './style.ts';
-import type { HeatmapRange, HeatmapSpec } from './style.ts';
+import type { HeatmapSpec } from './style.ts';
 import { TreeState, parsePathKey, pathKey, type TreeRow } from './tree.ts';
 import { CubeStateOwner, type ChangeOptions, type CubeState, type OwnerEvent, type Outcome } from './cube-state.ts';
 import { ColumnEditor, type ColumnEditorStart, type ColumnPreview } from './ui/column-editor.ts';
@@ -443,7 +439,7 @@ export class CubeApp {
   /** Measured heatmap scales, by leaf index. See `#refreshHeatmaps`. */
   readonly #heatmaps = new Map<
     number,
-    { spec: HeatmapSpec; byDepth: Map<number, HeatmapRange>; type: string | undefined }
+    Heatmap
   >();
   readonly #columnsPanel: ColumnsToolPanel;
   readonly #els: {
@@ -1022,20 +1018,7 @@ export class CubeApp {
   /** Re-fill the format map in place. See `#formats`. */
   #refreshFormats(): void {
     for (const key of Object.keys(this.#formats)) delete this.#formats[key];
-    Object.assign(this.#formats, renderFormats(this.#config, this.#snapshot));
-    // What is ON SCREEN renders by its own leaf's type: a measure's result type, which
-    // aggregation changes (the average of an Integer is a Float), never its source's.
-    const view = this.#view;
-    if (!view) return;
-    // and by its KIND: a numeric dimension reads as written (no thousands separators)
-    const kinds = new Map(rowColumns(this.#shown).map((c) => [c.name, c.kind]));
-    const byLeaf = leafFormats(this.#config, view.columns.leaves.map((leaf) => ({
-      ...leaf, type: view.rows.columns[leaf.index]?.type, kind: kinds.get(leaf.name),
-    })));
-    for (const [name, format] of Object.entries(byLeaf)) {
-      if (format) this.#formats[name] = format;
-      else delete this.#formats[name];
-    }
+    Object.assign(this.#formats, columnFormats(this.#config, this.#snapshot, this.#shown, this.#view ?? undefined));
   }
 
   /**
@@ -1677,48 +1660,9 @@ export class CubeApp {
    */
   #refreshHeatmaps(view: CubeView): void {
     this.#heatmaps.clear();
-    for (const leaf of view.columns.leaves) {
-      const spec = this.#heatmapFor(leaf.name);
-      if (!spec) continue;
-      const values = view.rows.columns[leaf.index]?.values ?? [];
-      // placed on the scale by the leaf's COMPILER type: a date or a text column has none
-      const type = view.rows.columns[leaf.index]?.type;
-
-      if (spec.range) {
-        // An explicitly fixed scale is the user's decision and is
-        // applied whole, at every depth.
-        this.#heatmaps.set(leaf.index, {
-          spec,
-          byDepth: new Map([[-1, spec.range]]),
-          type,
-        });
-        continue;
-      }
-
-      const atDepth = new Map<number, Scalar[]>();
-      values.forEach((value, row) => {
-        const depth = this.#treeRows[row]?.depth ?? 0;
-        const bucket = atDepth.get(depth);
-        if (bucket) bucket.push(value);
-        else atDepth.set(depth, [value]);
-      });
-
-      const byDepth = new Map<number, HeatmapRange>();
-      for (const [depth, bucket] of atDepth) {
-        const range = columnRange(bucket, type);
-        if (range) byDepth.set(depth, range);
-      }
-      if (byDepth.size > 0) this.#heatmaps.set(leaf.index, { spec, byDepth, type });
+    for (const [leaf, heat] of measureHeatmaps(view, this.#treeRows, (name) => this.#heatmapFor(name))) {
+      this.#heatmaps.set(leaf, heat);
     }
-  }
-
-  /** The scale a cell is measured against: its own depth's. */
-  #heatRange(leafIndex: number, row: number): HeatmapRange | undefined {
-    const heat = this.#heatmaps.get(leafIndex);
-    if (!heat) return undefined;
-    return (
-      heat.byDepth.get(-1) ?? heat.byDepth.get(this.#treeRows[row]?.depth ?? 0)
-    );
   }
 
   /**
@@ -1731,12 +1675,7 @@ export class CubeApp {
    * replaced.
    */
   #heatmapFor(leafName: string): HeatmapSpec | undefined {
-    const own = columnConfig(this.#config, leafName).heatmap;
-    if (own) return own;
-    const measure = this.#pivotMeasureOf(leafName);
-    return measure !== undefined
-      ? columnConfig(this.#config, measure).heatmap
-      : undefined;
+    return heatmapSetting(this.#config, this.#view ?? undefined, leafName);
   }
 
   /**
@@ -2691,44 +2630,13 @@ export class CubeApp {
     const view = this.#view;
     const model = this.#grid.columns;
     if (!view || !model) return null;
-    const title = this.#config.reportTitle ?? 'cube';
-    const at = new Date();
-    const base = exportFileName(title, at);
-    // WHAT THE GRID SHOWS, once, for every format (export-model.ts): its leaves in its order
-    // under its headers, the tree's depth, blurred columns REDACTED, the notes a reader needs.
-    const table = exportTable({
-      title,
-      rows: view.rows,
-      model,
-      treeRows: view.treeRows,
-      groupLabels: view.snapshot.rows.map((name) => labelFor(this.#config, name)),
-      truncated: view.truncated.length > 0,
-      ...(this.#config.maxRows !== undefined ? { maxRows: this.#config.maxRows } : {}),
-      // and how the grid DRAWS it: the same appearance and heatmaps, so the file looks like it
-      appearance: this.#config.appearance,
-      columnAppearance: toColumnAppearance(this.#config),
-      cellBackground: (leaf, row, value) => this.#heatFor(leaf, row, value),
-    });
     // THE WHOLE PAGE: with charts on the board, each format carries them where the board puts
     // them, and the whole grid (the user: "it just always exports whole page by default")
     const page = this.#exportPage();
-    const doc = { formatters: this.#formatters, formats: this.#formats, ...(page ? { page } : {}) };
-    switch (kind) {
-      case 'csv':
-        // raw values: CSV is the one that is computed on again
-        return { name: `${base}.csv`, mime: 'text/csv', content: exportCsv(table) };
-      case 'excel':
-        // a real workbook: numbers as numbers in the column's own format, the tree as outlines
-        return { name: `${base}.xlsx`, mime: XLSX_MIME, content: toXlsx(table, { formats: this.#formats, at, ...(page ? { page } : {}) }) };
-      case 'html':
-        // Formatted: a page exists to be read, so it says what the screen says.
-        return { name: `${base}.html`, mime: 'text/html', content: toHtml(table, doc) };
-      case 'text':
-        // Formatted, not raw: plain text exists to be READ -- pasted into a message or a ticket.
-        return { name: `${base}.txt`, mime: 'text/plain', content: toPlainText(table, doc) };
-      case 'pdf':
-        return { name: `${base}.pdf`, mime: 'application/pdf', content: toPdf(table, doc) };
-    }
+    return renderExport(kind, {
+      view, model, config: this.#config, formats: this.#formats, formatters: this.#formatters,
+      cellBackground: (leaf, row, value) => this.#heatFor(leaf, row, value), ...(page ? { page } : {}), at: new Date(),
+    });
   }
 
   /**
@@ -2806,9 +2714,7 @@ export class CubeApp {
 
   /** A cell's heatmap colour, for the grid and for an export alike; null when it has none. */
   #heatFor(leaf: LeafColumn, row: number, value: Scalar): string | null {
-    const heat = this.#heatmaps.get(leaf.index);
-    if (!heat) return null;
-    return heatColour(value, heat.spec, this.#heatRange(leaf.index, row) ?? null, heat.type);
+    return heatmapColour(this.#heatmaps, this.#treeRows, leaf, row, value);
   }
 
   /** What an email's body says about its attachment: the title, the rows, when, and any note. */

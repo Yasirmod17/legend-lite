@@ -58,6 +58,27 @@ class Grids(unittest.TestCase):
         self.assertIn('groupBy', view.query)
         self.assertIn('GROUP BY', view.sql.upper())
 
+    def test_a_grid_exports_as_its_export_menu_makes_the_file(self):
+        # the screen's own core (export-render.ts), run headless: each format DataCube's Export menu offers
+        grid = self.page.grid(TRADES, name='trades_exported', rows=['region'], measures={'qty': 'sum'})
+        csv = grid.export('csv')
+        self.assertIsInstance(csv, str)
+        header = csv.splitlines()[0]
+        self.assertIn('qty', header)
+        for region, qty in TRADES.groupby('region').qty.sum().items():
+            self.assertIn(f'{region}', csv)
+            self.assertIn(str(qty), csv)
+        self.assertTrue(grid.export('excel').startswith(b'PK'), 'a workbook is a zip')
+        self.assertTrue(grid.export('pdf').startswith(b'%PDF'))
+        self.assertIn('<table', grid.export('html'))
+        self.assertIn('qty', grid.export('text'))
+        with self.assertRaisesRegex(ValueError, "'csv', 'excel', 'html', 'text' or 'pdf'"):
+            grid.export('docx')
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            written = grid.export('excel', to=Path(folder) / 'trades.xlsx')
+            self.assertEqual(written.read_bytes()[:2], b'PK')
+
     def test_a_filter_and_a_calculated_column_reach_the_relation_and_its_rows(self):
         grid = self.page.grid(TRADES, name='trades_shaped')
         grid.filter(('region', 'equal', 'EMEA'))

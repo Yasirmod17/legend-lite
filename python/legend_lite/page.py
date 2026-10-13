@@ -435,6 +435,27 @@ class Grid(Tile):
                          'samples': {asked['table']['table']: _sample_rows(sample)}}}
         return cls, asked
 
+    def export(self, kind: str = 'csv', to: str | Path | None = None) -> str | bytes | Path:
+        """The grid as its Export menu exports it, by DataCube's own code (the screen's core, run headless): what it
+        shows, with its formats, appearance and heatmaps -- ``'csv'`` (raw values), ``'excel'`` (a workbook, the tree
+        as outlines), ``'html'``, ``'text'`` (formatted, to paste) or ``'pdf'``. Answers the file's content (text, or
+        bytes for a workbook or a PDF), or, given ``to``, writes it there and answers the path."""
+        import base64
+        if kind not in ('csv', 'excel', 'html', 'text', 'pdf'):
+            raise ValueError(f"a grid exports as 'csv', 'excel', 'html', 'text' or 'pdf', not {kind!r}")
+        engine, frames = self._headless()
+        with frames.serving():
+            said = _json.loads(engine.call('gridExport', self._spec(frames), kind))
+        content: str | bytes = said['content'] if said['text'] else base64.b64decode(said['content'])
+        if to is None:
+            return content
+        path = Path(to)
+        if isinstance(content, str):
+            path.write_text(content, encoding='utf-8')
+        else:
+            path.write_bytes(content)
+        return path
+
     def _unique(self, column: str) -> bool:
         """Whether ``column`` is unique over its rows at their finest level: DataCube's query (headless
         ``gridDuplicate``) answers no row, run on Python's database by the session's planner."""
