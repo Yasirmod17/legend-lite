@@ -765,7 +765,10 @@ From `docs/DATACUBE_MODEL_DESIGN_2026_10_10.md` §13. Each lands once, in the on
       (`ModelHome`, its SDLC and its Depot). Python keeps its own lock across its processes, taken first on the
       caller's thread, so a call waiting on another Python process still holds no compiler thread; the repository's
       lock is the one every kind takes. Proof: `python/tests/test_model.py` TheRepositorysLock -- another process holds
-      the repository's lock, and the library's call waits for it.
+      the repository's lock, and the library's call waits for it -- and `sdlc-server` `GitRepositoryTest` (a call inside
+      a call, a second thread's wait, and a second `GitStorage` over the same folder sharing the lock). The
+      cross-process proof is POSIX's (Linux and macOS: the other process holds the lock with `fcntl`, and the test skips
+      on Windows); on Windows the JVM's lock is `LockFileEx` on the same file, the same mechanism, not measured.
 
 ### H. Publishing
 
