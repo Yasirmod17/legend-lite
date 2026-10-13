@@ -9339,3 +9339,41 @@ rerun of those 19 passed; the lane query empty; CI: run 38406686025 on the lanes
 `parser_equivalence`, `warehouse`, `datacube`, `ui`, `sdlc`: the lanes holding a test in the library's reverse
 dependencies, by `bazel query`), every platform, green first time on all 26 jobs (the summary job a dispatched run
 skips); main's own push run on the landing, 38409010126, green on all 51.
+
+## 2026-10-13 — G4 and G12: a picked file read by its encoding; the tab's DuckDB extensions from the site, and one start of it (the DataCube + Python line)
+
+The runbook is `docs/ONE_PLATFORM_PROGRAM_2026_10_12.md` (§5 G, items 4 and 12). It was built on branch
+`datacube/python-parity-2` and pushed to main as one fast-forward, at the user's go ("yes push").
+- **CI:** run 38416200845 (a dispatch, every lane, every platform: MODULE.bazel changed) on 97618be92. All 50 jobs
+  green; the summary job skips on a dispatch. Main's commits since are docs only.
+- **Local:** `//gates:datacube`, `//gates:ui` and `//gates:sdlc`, plus the warehouse lane's browser tests: 186 tests,
+  19 of them in a browser, all passing under the guard. After the reviews' fixes, `//datacube:browser_guard_test`,
+  `//site:verify_test`, `//query:verify_test`, `//studio:verify_test`, `//datacube:verify_page_test`,
+  `//datacube:verify_upload_test`, `//datacube:typecheck_test` and `//engine-client:tests`. The lane query is empty.
+
+1. **What it is:**
+   - **G4:** a file picked from disk is read by its encoding: gzip (`.csv.gz` and the rest, through
+     `DecompressionStream`), UTF-16 by its byte-order mark, and windows-1252 when its first 64 KB hold no valid UTF-8
+     beside a stray byte. A UTF-8 file with one stray byte stays UTF-8 (the audit's fix). Every file chooser takes
+     `.gz`.
+   - **G12:** the tab's DuckDB-WASM had been downloading ICU (the session's time zone, since C1), JSON, Parquet and
+     httpfs from extensions.duckdb.org. They are pinned in MODULE.bazel by content for both browser builds, laid out by
+     `//engine-client:duckdb_extensions`, and served by DataCube's, Query's and Studio's sites and DataCube's built
+     folder. engine-client's `startDuckDbInTab` points the tab's DuckDB at them, and is now the one start of a tab's
+     DuckDB: DataCube's boot and three test pages called copies of their own.
+   - **The guard:** every browser test makes extensions.duckdb.org unresolvable (a Chromium flag added to every
+     Playwright launch by `tools/browser/pinned-chromium.mjs`).
+2. **What proves it:**
+   - With the tab's `ownExtensions` taken out, `//studio:verify_test` failed on "Failed to load
+     'https://extensions.duckdb.org/v1.5.4/wasm_eh/icu.duckdb_extension.wasm'", and `//query:verify_test` failed every
+     step.
+   - `//datacube:browser_guard_test` fails when a launch stops being guarded. Proven red with the guard's wrap taken
+     out ("Download is starting").
+   - `datacube/test/upload.test.ts`: the encodings, `.gz` names, a stray byte.
+3. **Reviews:**
+   - The Compiler Rewrite line: MODULE.bazel (each of the eight integrity values checked against a download), the BUILD
+     files and the guard.
+   - The Studio line: Query's and Studio's BUILD, `duckdb-tab.ts`, `site/verify.mjs`.
+   - An audit: its S1, `//site:verify_test` unguarded, was fixed by `hermetic`.
+4. **For the dialect program:** `duckdb-tab.ts`'s two `SET ..._extension_repository` statements are TypeScript SQL
+   for its Phase 7 (D5) list, as its IN_FLIGHT section is told.

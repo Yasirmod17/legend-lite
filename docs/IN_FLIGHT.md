@@ -231,8 +231,14 @@ with the compiler's plan/execution split**, in this order:
    native library's BUILD), the Studio line (Query, engine-client), an audit. **Pull requests 1 to 6 landed 2026-10-13**
    (one fast-forward of the stacked branch; its run 38398000209 green on all 50 jobs; GATES "The program's pull
    requests 1 to 6"). Files beyond the announcements: `datacube/demo/make-dist.mjs` (the page modules in DataCube's
-   built folder), `engine-client/src/warehouse-session.ts`. Next on the stack: G2 and G4 on branch
-   `datacube/python-parity-2`; C5 (PARK-35, PARK-33) and F after the user's design answers. **Step 2's second landing announced 2026-10-11 (rule 5; branch `datacube-m3`; the design's §15.6a,
+   built folder), `engine-client/src/warehouse-session.ts`. **G4 and G12 landed 2026-10-13** (branch
+   `datacube/python-parity-2`; its run 38416200845 green on all 50 jobs, every lane and platform; GATES "G4 and G12"):
+   a picked file read by its encoding, and the tab's DuckDB extensions from the site with one start of it. G2 was
+   dropped by the user (PARK-36). Files beyond the runbook's lists: `tools/browser/pinned-chromium.mjs` (the guard),
+   `site/verify.mjs` (guarded by hand), `datacube/test/browser-guard.mjs` (its test). Reviews: the Compiler Rewrite
+   line (MODULE.bazel, the BUILD files, the guard), the Studio line (Query's and Studio's BUILD, `duckdb-tab.ts`,
+   `site/verify.mjs`), an audit. Next: C5 in the dialect program's shape, after that line's answer (its section);
+   then F. **Step 2's second landing announced 2026-10-11 (rule 5; branch `datacube-m3`; the design's §15.6a,
    agreed with the user): a cross-area edit in `core/`** -- the route renamed and two more beside it,
    `/api/lite/v1/model/createClass` (was `/api/lite/v1/relational/promoteRelationToModel`), `createAssociation`,
    `createDataSpace`, one atomic writer under them. Core files: `core/src/main/java/com/legend/server/`
