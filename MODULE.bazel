@@ -495,10 +495,10 @@ http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_
 # for exactly this version), one per browser build, pinned by content and served from each site's vendor/
 # (//engine-client:duckdb_extensions). Unpinned, DuckDB-WASM fetched each from extensions.duckdb.org as a page first
 # needed it: ICU for the session's time zone (engine-client's setUpSession: SET TimeZone='UTC'), JSON for a JSON file,
-# Parquet for a Parquet file, httpfs for a remote one (the Compiler Rewrite line's finding, 2026-10-13: a desk's gate and the apps needed that site
-# up). Pinned 2026-10-13,
-# as the user's rule for Python's extensions (hermetic in the build, nothing downloaded where legend-lite runs); every
-# browser test makes that site unresolvable (tools/browser/pinned-chromium.mjs), so a page needing another fails.
+# Parquet for a Parquet file, httpfs for a remote one (the Compiler Rewrite line's finding, 2026-10-13: a desk's gate
+# and the apps needed that site up). Pinned 2026-10-13, as the user's rule for Python's extensions (hermetic in the
+# build, nothing downloaded where legend-lite runs); every browser test makes that site unresolvable
+# (tools/browser/pinned-chromium.mjs), so a page needing another fails.
 [http_file(
     name = "duckdb_wasm_" + extension + "_extension_" + build,
     downloaded_file_path = extension + ".duckdb_extension.wasm",

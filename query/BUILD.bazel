@@ -83,7 +83,8 @@ copy_to_directory(
     name = "vendor",
     srcs = [
         "//engine-client:node_modules/@duckdb/duckdb-wasm",
-        # its extensions, pinned (MODULE.bazel): ICU, which the session's time zone loads
+        # its extensions, pinned (MODULE.bazel): ICU for the session's time zone; JSON, Parquet and httpfs when a
+        # page reads such a file
         "//engine-client:duckdb_extensions",
         # upstream Legend Query's type (legend-art _fonts.scss): Roboto, Roboto Mono, Raleway 900
         # for the type letters -- from legend-art (the pinned @fontsource), served with the site, no font CDN (OFL-1.1)
