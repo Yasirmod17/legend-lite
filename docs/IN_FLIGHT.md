@@ -228,7 +228,11 @@ with the compiler's plan/execution split**, in this order:
    `query/demo/main.ts` and `query/BUILD.bazel` (the module at `vendor/warehouse/`); `python/` (`legend_lite/warehouse.py`,
    the twin driver; Python signs in, writes and holds a table's model, runs its plans Live and snaps it into its
    DuckDB); `datacube/` (a table opened through its host). Reviews: the Compiler Rewrite line (the warehouse's and the
-   native library's BUILD), the Studio line (Query, engine-client), an audit. **Step 2's second landing announced 2026-10-11 (rule 5; branch `datacube-m3`; the design's §15.6a,
+   native library's BUILD), the Studio line (Query, engine-client), an audit. **Pull requests 1 to 6 landed 2026-10-13**
+   (one fast-forward of the stacked branch; its run 38398000209 green on all 50 jobs; GATES "The program's pull
+   requests 1 to 6"). Files beyond the announcements: `datacube/demo/make-dist.mjs` (the page modules in DataCube's
+   built folder), `engine-client/src/warehouse-session.ts`. Next on the stack: G2 and G4 on branch
+   `datacube/python-parity-2`; C5 (PARK-35, PARK-33) and F after the user's design answers. **Step 2's second landing announced 2026-10-11 (rule 5; branch `datacube-m3`; the design's §15.6a,
    agreed with the user): a cross-area edit in `core/`** -- the route renamed and two more beside it,
    `/api/lite/v1/model/createClass` (was `/api/lite/v1/relational/promoteRelationToModel`), `createAssociation`,
    `createDataSpace`, one atomic writer under them. Core files: `core/src/main/java/com/legend/server/`
