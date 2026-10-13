@@ -657,6 +657,9 @@ changes are reviewed by the Compiler Rewrite line, and planner-boundary changes 
 - **Q2. The order of steps 2 and 3.** The user, 2026-10-11: "i think it should become the app before yes". Step 2
   lands before Python has a model home; the model actions appear on Python's pages when step 3's service answers.
 
+> **The rest of the program** (steps 3 to 5 widened: one implementation per store, one engine path, legend-lite as a
+> drop-in legend-engine, the model plan's remaining steps) is `docs/ONE_PLATFORM_PROGRAM_2026_10_12.md`.
+
 ## 15. PlanAndRun: two twin hosts, one path (agreed 2026-10-12)
 
 The user, 2026-10-12: "we have to think of Python and Browser as two compute 'hosts/platforms' with same capabilities
