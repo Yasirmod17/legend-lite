@@ -11,6 +11,7 @@ in DataCube, said in code (docs/DATACUBE_PYTHON_PAGES_DESIGN_2026_10_09.md).
     summary.add(by_desk)
     ll.show(page)                       # under the cell in a notebook, else a browser tab; live from then on
     page.read()                         # the page as it is open now, its changes made in DataCube taken in
+    page.save()                         # into this user's saved pages, as DataCube's Save keeps it (Open… lists it)
     page.save('q3.page.json')           # DataCube's own page document (Export > Page File writes the same)
     again = ll.Page.load('q3.page.json', frames={'trades': trades_df})
 
@@ -28,9 +29,11 @@ grid (four to a band at most), a tile taken off leaving its neighbours closing o
 from __future__ import annotations
 
 import datetime
+import json
 import math
 import numbers
 import re
+import uuid
 from collections.abc import Mapping, Sequence
 from decimal import Decimal
 from pathlib import Path
@@ -853,6 +856,8 @@ class Page:
         # where it is shown (datacube.show_page): told each time it changes
         self._shown: list[Any] = []
         self._quiet = 0
+        # the saved page it was last saved as (``save()``): its id, or None
+        self._saved: str | None = None
 
     # -- the page's model (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B4): its classes, into a project ----------------------
 
@@ -1139,9 +1144,36 @@ class Page:
         """The page document as JSON text, its numbers exact (what ``save`` writes)."""
         return _json.dumps(self._doc, indent=indent)
 
-    def save(self, path: str | Path) -> None:
-        """The page document, as a file (as DataCube's Export > Page File writes it)."""
-        Path(path).write_text(self.to_json() + '\n', 'utf-8', newline='')
+    def save(self, path: str | Path | None = None, *, name: str | None = None) -> str | None:
+        """Saved. With no ``path``, as DataCube's Save keeps a page: into this user's saved pages (``ll.home()/pages``,
+        what Open… lists in DataCube shown from Python), by legend-lite's own saved-page rules (the native library's,
+        the page's and the server's: docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B6) -- over the copy this page was last
+        saved as, else as a new one -- named ``name`` (the page's own when not given); its id is returned. With a
+        ``path``, the page document as a file instead (as DataCube's Export > Page File writes it)."""
+        if path is not None:
+            if name is not None:
+                raise ValueError("a page saved as a file takes no name: its document carries the page's own")
+            Path(path).write_text(self.to_json() + '\n', 'utf-8', newline='')
+            return None
+        from ._home import THIS_USER, pages_folder, store_call
+        named = _named(name if name is not None else self.name, "a saved page's name")
+        if named is None:
+            raise ValueError('a saved page has a name')
+        id = self._saved if self._saved is not None else str(uuid.uuid4())
+        record = _json.dumps({'id': id, 'name': named, 'content': self._doc}, indent=None)
+        status, said = (store_call('lite_saved_cubes', pages_folder(), 'PUT', f'/{id}', record, THIS_USER)
+                        if self._saved is not None else (404, ''))
+        if status == 404:
+            # never saved, or its saved copy deleted since (in DataCube's Open…): saved as a new one under its id
+            status, said = store_call('lite_saved_cubes', pages_folder(), 'POST', '', record, THIS_USER)
+        if status != 200:
+            try:
+                said = json.loads(said).get('message', said)
+            except (ValueError, AttributeError):
+                pass  # not the store's {"message"}: said as it came
+            raise ValueError(f'the page was not saved: {said}')
+        self._saved = id
+        return id
 
     @classmethod
     def load(cls, document: str | Path | Mapping[str, Any], frames: Mapping[str, Any], *, mode: str = LIVE) -> Page:

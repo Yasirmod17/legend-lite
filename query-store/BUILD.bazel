@@ -54,11 +54,12 @@ js_library(
 )
 
 # The page's module as ONE directory (classes.wasm beside its runtime), so a test names it with one $(rlocationpath)
-# (as //sdlc-server:page_dir)
+# (as //sdlc-server:page_dir): this package's and DataCube's saved pages' (the same module, B6)
 copy_to_directory(
     name = "page_dir",
     srcs = [":page"],
     root_paths = ["query-store/page"],
+    visibility = ["//datacube:__pkg__"],
 )
 
 # The one suite against the page's own store: legend-lite's rules in WebAssembly over the page's records.
@@ -98,6 +99,7 @@ node_test(
     data = [
         ":query_store",
         "test/conformance.ts",
+        "test/lite-server.ts",
         "test/lite.test.ts",
         ":legend_server",
         "//core:server",
@@ -116,6 +118,20 @@ js_library(
     deps = [":query_store"],
 )
 
+# legend-lite's server started for a test file (test/lite-server.ts): lite_test's, and DataCube's saved pages' suite on
+# the server (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B6). It brings the server with it (its launcher and the server's
+# runfiles); a test names the launcher, LEGEND_SERVER, by :legend_server.
+js_library(
+    name = "lite_server",
+    testonly = True,
+    srcs = ["test/lite-server.ts"],
+    data = [
+        ":legend_server",
+        "//core:server",
+    ],
+    visibility = ["//datacube:__pkg__"],
+)
+
 # Every TypeScript file here, for the apps' typechecks (strict tsc: no npm dependency of its own).
 js_library(
     name = "typescript_sources",
@@ -131,6 +147,7 @@ executable_of(
     name = "legend_server",
     testonly = True,
     binary = "//core:server",
+    visibility = ["//datacube:__pkg__"],
 )
 
 guards_package()

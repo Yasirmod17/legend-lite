@@ -10,9 +10,11 @@ import type { AsyncDuckDB } from '../../../engine-client/src/duckdb-wasm.ts';
 import type { DuckDbEngine } from '../../../engine-client/src/duckdb.ts';
 import type { SeedSource } from '../../../engine-client/src/model-data.ts';
 import { connect, listObjects, signInWithKey, WarehouseEngine } from '../../../engine-client/src/warehouse.ts';
-import type { QueryReader } from '../../../query-store/src/index.ts';
+import type { QueriesModule, QueryReader } from '../../../query-store/src/index.ts';
 import type { Planner } from '../cube.ts';
-import { BrowserRecords, MemoryRecords, RuleStore, openCubeDatabase, persistStorage, type CubeStore } from '../cube-store.ts';
+import {
+  BrowserRecords, CubeStoreClient, LOCAL_CUBES_API, MemoryRecords, openCubeDatabase, persistStorage, wasmCubeServer, type CubeRecords,
+} from '../cube-store.ts';
 import { FileHandles } from '../file-handles.ts';
 import type { TableModels } from '../infer.ts';
 import { writesModels, type ModelWriter } from '../model-writer.ts';
@@ -82,6 +84,15 @@ export async function browserServices(o: BrowserServicesOptions): Promise<Servic
   const { config } = o;
   await setUpSession(o.duckdb.engine, o.planner.tables);
   const modelHome = o.config.depot ? depotHome(o.config.depot, o.location) : undefined;
+  // THE STORES' RULES: the saved queries' and the saved pages', one WebAssembly module (`vendor/queries/`), fetched
+  // once, at the first call of either store (a load that failed is tried again at the next)
+  let stores: Promise<QueriesModule> | undefined;
+  const storeRules = (): Promise<QueriesModule> => (stores ??= queryStores()
+    .then((m) => m.loadQueriesModule(new URL('./vendor/queries/', o.location.href).href))
+    .catch((e: unknown) => {
+      stores = undefined;
+      throw e;
+    }));
   return {
     engine: {
       plane: o.plane,
@@ -101,8 +112,8 @@ export async function browserServices(o: BrowserServicesOptions): Promise<Servic
       },
     },
     // opened now and waited for where a page is saved or opened: the start's first grid does not wait on IndexedDB
-    pages: browserPages(),
-    queries: queryService(config, o.location),
+    pages: browserPages(storeRules),
+    queries: queryService(config, storeRules),
     ...(modelHome ? { modelHome } : {}),
     warehouse: warehouseService(config),
     browser: {
@@ -128,23 +139,25 @@ function tabDatabase(duck: { readonly engine: DuckDbEngine; readonly db: AsyncDu
   };
 }
 
-/** SAVED PAGES, in this browser: IndexedDB when the browser gives it, else memory (this visit only, and said so). One
- *  database holds the pages and their files' handles. */
-async function browserPages(): Promise<PageService> {
-  let store: CubeStore;
+/** SAVED PAGES, in this browser: IndexedDB when the browser gives it, else memory (this visit only, and said so), by
+ *  legend-lite's own rules (core's SavedCubes, compiled to WebAssembly; the program's B6). One database holds the pages
+ *  and their files' handles. */
+async function browserPages(load: () => Promise<QueriesModule>): Promise<PageService> {
+  let records: CubeRecords;
   let handles: FileHandles | undefined;
   let memoryOnly = false;
   try {
     const database = openCubeDatabase();
     await database;
-    store = new RuleStore(new BrowserRecords(database), 'this browser');
+    records = new BrowserRecords(database);
     handles = new FileHandles(database);
   } catch {
-    store = new RuleStore(new MemoryRecords(), 'this browser');
+    records = new MemoryRecords();
     memoryOnly = true;
   }
+  const user = 'this browser';
   return {
-    store,
+    store: new CubeStoreClient(LOCAL_CUBES_API, wasmCubeServer({ load, records, user }).fetch, user),
     where: memoryOnly ? 'for this visit only (this browser refused storage)' : 'in this browser',
     memoryOnly,
     ...(handles ? { handles } : {}),
@@ -155,19 +168,16 @@ async function browserPages(): Promise<PageService> {
 /**
  * THE QUERY STORE, through the one client (query-store/README.md): the server the deployment names, or -- none named --
  * the same API answered in this page from this origin's browser store, the one Legend Query keeps its saved queries in
- * when it runs without a server, by legend-lite's own rules (the server's, compiled to WebAssembly: the module at
- * `vendor/queries/`, fetched the first time the store is asked; docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B5).
+ * when it runs without a server, by legend-lite's own rules (the server's, compiled to WebAssembly: the stores' module,
+ * fetched the first time a store is asked; docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B5).
  */
-function queryService(config: TabConfig, location: { readonly href: string }): QueryService {
+function queryService(config: TabConfig, load: () => Promise<QueriesModule>): QueryService {
   const url = config.queryStore;
   let store: Promise<QueryReader> | undefined;
   return {
     store: () => (store ??= queryStores().then(async (m) => (url
       ? new m.QueryStoreClient(url)
-      : new m.QueryStoreClient(m.LOCAL_API, m.wasmQueryServer({
-        load: () => m.loadQueriesModule(new URL('./vendor/queries/', location.href).href),
-        records: new m.BrowserRecords(), user: config.user,
-      }).fetch)))),
+      : new m.QueryStoreClient(m.LOCAL_API, m.wasmQueryServer({ load, records: new m.BrowserRecords(), user: config.user }).fetch)))),
     where: url ? `on ${hostOf(url)}` : 'in this browser',
     // the browser's store: a query saved in another tab (Legend Query) appears without reopening
     ...(url ? {} : {

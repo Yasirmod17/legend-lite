@@ -8,10 +8,10 @@ every process started with it: a test's own), else the operating system's per-us
 Windows ``%LOCALAPPDATA%\\legend-lite``). Its folders are made private to this user (on POSIX: only its owner reads
 them), as the browser's storage is the person's own.
 
-The saved pages are the browser's records, kept as files: the page's rules (who owns a page, its times, search) are
-DataCube's own, run in the page, as they are over the browser's IndexedDB (cube-store.ts's RuleStore). Python keeps
-the records -- all, one, put, remove -- one file each, written whole or not at all, under a lock several Python
-processes share (two notebooks at once).
+The saved pages are kept as files, one each (``home()/pages``, the layout the page's own records were kept in before
+B6), and the saved queries one file each (``home()/queries``): both stores answered by legend-lite's own rules in the
+native library -- the server's, and the page's compiled to WebAssembly (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B5,
+B6) -- each call under a lock several Python processes share (two notebooks at once).
 
 The page's own settings (the grids' defaults, kept between visits: the browser keeps them per site) are kept here too,
 one file (``home()/settings/datacube.json``): every notebook and run of this user's shows them, where the browser's
@@ -25,7 +25,6 @@ from __future__ import annotations
 import contextlib
 import json
 import os
-import re
 import sys
 import tempfile
 from collections.abc import Iterator
@@ -33,6 +32,9 @@ from pathlib import Path
 from typing import Any
 
 _chosen: Path | None = None
+# who this user is to the stores kept here (the saved pages, the saved queries): the folder's one owner -- there is no
+# sign-in -- as the browser's store is 'this browser''s
+THIS_USER = 'this user'
 
 
 def home(path: str | Path | None = None) -> Path:
@@ -57,72 +59,6 @@ def _system_home() -> Path:
         return (Path(local) if local else Path.home() / 'AppData' / 'Local') / 'legend-lite'
     data = os.environ.get('XDG_DATA_HOME')
     return (Path(data) if data else Path.home() / '.local' / 'share') / 'legend-lite'
-
-
-# a record's id names its file: what a page makes (crypto.randomUUID) and nothing that could name another place -- nor
-# a device Windows keeps whatever folder it is in (CON, NUL, COM1, ...)
-_ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z')
-_DEVICE = re.compile(r'(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])\Z', re.IGNORECASE)
-
-
-class SavedPages:
-    """DataCube's saved pages in a folder (``home()/pages``): the browser's records, one ``<id>.json`` file each, each as
-    the page wrote it (its content the protocol's exact JSON text, never read here)."""
-
-    def __init__(self, folder: Path | None = None) -> None:
-        self.folder = folder if folder is not None else home() / 'pages'
-
-    def all(self) -> list[dict[str, Any]]:
-        """Every record; one that is not a record (a file written by something else, cut short) is left out, and said
-        on standard error, so the others still open."""
-        found = []
-        with self._locked():
-            for f in sorted(self.folder.glob('*.json')):
-                try:
-                    found.append(self._read(f))
-                except (ValueError, OSError) as unread:
-                    print(f'legend-lite: {f} is not a saved page ({unread}); it is left out', file=sys.stderr)
-        return found
-
-    def find(self, id: str) -> dict[str, Any] | None:
-        path = self._path(id)
-        with self._locked():
-            return self._read(path) if path.is_file() else None
-
-    def put(self, record: dict[str, Any]) -> None:
-        """A record written whole: to a file beside it, then moved over it, so a reader never finds half of one."""
-        if not isinstance(record.get('content'), str) or not isinstance(record.get('name'), str):
-            raise ValueError('a saved page is a record with its name and its content (the page as JSON text)')
-        path = self._path(record.get('id'))
-        with self._locked():
-            written = tempfile.NamedTemporaryFile('w', encoding='utf-8', dir=self.folder, suffix='.part', delete=False)
-            try:
-                with written:
-                    json.dump(record, written, ensure_ascii=False)
-                os.replace(written.name, path)
-            except BaseException:
-                Path(written.name).unlink(missing_ok=True)
-                raise
-
-    def remove(self, id: str) -> None:
-        path = self._path(id)
-        with self._locked():
-            path.unlink(missing_ok=True)
-
-    def _path(self, id: Any) -> Path:
-        if not isinstance(id, str) or not _ID.match(id) or _DEVICE.match(id):
-            raise ValueError(f'a saved page\'s id is letters, digits, "-" and "_" (as a page makes one), not {id!r}')
-        return self.folder / f'{id}.json'
-
-    @staticmethod
-    def _read(path: Path) -> dict[str, Any]:
-        record = json.loads(path.read_text(encoding='utf-8'))
-        if not isinstance(record, dict):
-            raise ValueError('not a record')
-        return record
-
-    def _locked(self) -> contextlib.AbstractContextManager[None]:
-        return locked(self.folder)
 
 
 class Settings:
@@ -196,3 +132,25 @@ def queries_folder() -> Path:
     """Where this user's saved queries are kept: one JSON file per query, every version of it, as legend-lite's server
     keeps them (the program's B5; Python's engine serves them at /api/pure/v1/query)."""
     return home() / 'queries'
+
+
+def pages_folder() -> Path:
+    """Where this user's saved pages are kept: one ``<id>.json`` file each, the page's row (its content the page
+    document's exact JSON text), as they always were (the program's B6; Python's engine serves them at
+    /api/pure/v1/query/dataCube, ``page.save()`` writes into them)."""
+    return home() / 'pages'
+
+
+def store_call(entry: str, folder: Path, *asked: str) -> tuple[int, str]:
+    """One call of a store the native library answers over ``folder`` (``entry``: ``lite_saved_queries`` or
+    ``lite_saved_cubes``, legend-lite's own rules), under the lock every Python process takes on it, the library's call
+    on one of the compiler's threads: its status and its body. A failure of the library's raised (``OSError``)."""
+    from ._library import library
+    from .engine import _workers
+    with locked(folder):
+        said = _workers().submit(library().call, entry, str(folder), *asked).result()
+    tag, _, rest = said.partition('\n')
+    if tag != 'OK':
+        raise OSError(rest.partition('\n')[2] or rest)
+    status, _, answered = rest.partition('\n')
+    return int(status), answered

@@ -985,9 +985,6 @@ TEST_IMPORTS = {
         "src/tree.ts",
         "src/treeview.ts",
     ],
-    "cube-store": [
-        "src/cube-store.ts",
-    ],
     "cube-transactions": [
         "src/adhoc/member-selection.ts",
         "src/adhoc/mode.ts",

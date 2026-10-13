@@ -1,6 +1,8 @@
 package com.legend.nativelib;
 
+import com.legend.queries.FileCubeRecords;
 import com.legend.queries.FileRecords;
+import com.legend.queries.SavedCubes;
 import com.legend.queries.SavedQueries;
 
 import org.graalvm.nativeimage.IsolateThread;
@@ -17,7 +19,8 @@ import java.nio.file.Path;
  * server's layout). Each call is one request -- {@code rest} the path after {@code /api/pure/v1/query}, {@code query}
  * its raw query string (empty for none) -- as {@code user}, answered {@code "OK\n<status>\n<body>"} as
  * {@link ModelHome}'s are. The caller serializes the calls on a folder, across processes too (Python holds a lock around
- * each); nothing is kept in memory between calls.
+ * each); nothing is kept in memory between calls. DataCube's saved pages are answered the same way ({@link SavedCubes},
+ * B6), over Python's {@code ll.home()/pages}.
  */
 final class SavedQueriesHome {
     private SavedQueriesHome() {
@@ -33,6 +36,26 @@ final class SavedQueriesHome {
             a = Folded.of(() -> {
                 SavedQueries.Answer answer = SavedQueries.answer(new SavedQueries(new FileRecords(Path.of(f)),
                         System::currentTimeMillis), m, r, q.isEmpty() ? null : q, b, u);
+                return answer.status() + "\n" + answer.json();
+            });
+        } catch (Throwable failure) {
+            a = Folded.failure(failure);
+        }
+        return Compiler.answer(a);
+    }
+
+    /** One {@code /api/pure/v1/query/dataCube...} request over DataCube's saved pages in {@code folder} (B6: Python's
+     *  {@code ll.home()/pages}, the layout its pages were kept in), answered as {@link #savedQueries}'. */
+    @CEntryPoint(name = "lite_saved_cubes")
+    static CCharPointer savedCubes(IsolateThread thread, CCharPointer folder, CCharPointer method, CCharPointer rest,
+            CCharPointer body, CCharPointer user) {
+        String a;
+        try {
+            String f = Compiler.text(folder), m = Compiler.text(method), r = Compiler.text(rest), b = Compiler.text(body),
+                    u = Compiler.text(user);
+            a = Folded.of(() -> {
+                SavedQueries.Answer answer = SavedCubes.answer(new SavedCubes(new FileCubeRecords(Path.of(f)),
+                        System::currentTimeMillis), m, r, b, u);
                 return answer.status() + "\n" + answer.json();
             });
         } catch (Throwable failure) {

@@ -199,6 +199,9 @@ def main() -> None:
                 command = f'py-documents {json.dumps(python_documents(frame, served_page, desks))}'
             elif command == 'py-page-read':
                 command = f'py-page-read {json.dumps([s.name for s in pypage.read().sheets])}'
+            elif command == 'py-page-save':
+                # saved into this user's saved pages, as DataCube's Save keeps a page (B6): Open… lists it
+                command = f'py-page-save {json.dumps(pypage.save())}'
             elif command == 'desks-update':
                 desks['now'] = pa.table({'desk': ['Rates', 'FX', 'Credit', 'Equity'], 'head': ['Ana', 'Ben', 'Cy', 'Di']})
                 web.engine.changed('desks')

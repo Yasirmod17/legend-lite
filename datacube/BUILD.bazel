@@ -337,7 +337,6 @@ _HEADLESS_TESTS = [
     "create-class",
     "cube-document",
     "cube-state",
-    "cube-store",
     "dimensions",
     "drill",
     "duckdb",
@@ -492,6 +491,10 @@ test_suite(
         ":typed_values_tokyo_test",
         ":typed_values_new_york_test",
         ":wasm_differential_test",
+        # the saved pages' one suite on the page's store and on legend-lite's server (B6; Python's is in the warehouse
+        # lane, beside its saved queries')
+        ":saved_pages_page_test",
+        ":saved_pages_server_test",
         # live against the Bazel-built native warehouse (it builds the native image; not on Windows ARM64)
         ":live_snap_test",
     ],
@@ -992,6 +995,62 @@ node_test(
         "//sdlc-client:conformance",
     ],
     entry_point = "test/python-engine/model-home.test.ts",
+    env = {
+        "DATACUBE_SITE": "$(rlocationpath :dist)",
+        "ENGINE_FIXTURE": "$(rlocationpath :engine_fixture)",
+        "LEGEND_LITE_DATACUBE": "$(rlocationpath :headless_bundle)",
+        "LEGEND_LITE_LIBRARY": "$(rlocationpath //native:compiler)",
+    },
+    platform_env = select({
+        "//tools/platforms:windows_x86_64": {"PROCESSOR_ARCHITECTURE": "AMD64"},
+        "//conditions:default": {},
+    }),
+)
+
+# DATACUBE'S SAVED PAGES, ONE IMPLEMENTATION (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B6): legend-lite's saved-page
+# rules (core's SavedCubes) held to one suite (test/saved-pages/conformance.ts) on every store -- the page's (the rules
+# compiled to WebAssembly on the saved queries' module), legend-lite's server's, and Python's (the native library's)
+node_test(
+    name = "saved_pages_page_test",
+    data = [
+        "test/saved-pages/conformance.ts",
+        "test/saved-pages/page.test.ts",
+        ":src",
+        "//query-store:page_dir",
+    ],
+    entry_point = "test/saved-pages/page.test.ts",
+    env = {"QUERIES_PAGE": "$(rlocationpath //query-store:page_dir)"},
+    node_options = ["--experimental-wasm-exnref"],  # the flag only: this test loads the stores' module, not the planner
+)
+
+node_test(
+    name = "saved_pages_server_test",
+    # starts a JVM server: past `small`'s 60 s on a loaded runner, as //query-store:lite_test
+    size = "medium",
+    data = [
+        "test/saved-pages/conformance.ts",
+        "test/saved-pages/server.test.ts",
+        ":src",
+        "//query-store:legend_server",
+        "//query-store:lite_server",
+    ],
+    entry_point = "test/saved-pages/server.test.ts",
+    env = {"LEGEND_SERVER": "$(rlocationpath //query-store:legend_server)"},
+)
+
+node_test(
+    name = "python_saved_pages_test",
+    size = "medium",
+    data = [
+        "test/python-engine/saved-pages.test.ts",
+        "test/saved-pages/conformance.ts",
+        ":dist",
+        ":engine_fixture",
+        ":headless_bundle",
+        ":src",
+        "//native:compiler",
+    ],
+    entry_point = "test/python-engine/saved-pages.test.ts",
     env = {
         "DATACUBE_SITE": "$(rlocationpath :dist)",
         "ENGINE_FIXTURE": "$(rlocationpath :engine_fixture)",

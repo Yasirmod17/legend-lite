@@ -376,6 +376,28 @@ the Studio line and Compiler Rewrite, and an audit.
 - **Measure first:** the rules trust a configured user name, so a shared server needs sign-in first (G10). Build the
   rules to take the user from the host.
 
+**Built 2026-10-13 (branch `datacube/python-parity`; announced in IN_FLIGHT on main, 5aa3dd817):**
+- The rules are `core/src/main/java/com/legend/queries/SavedCubes.java`, in `//core:saved_queries` beside the saved
+  queries' (RuleStore's, word for word: the client's id, the owner forced, `lastOpenAt` stamped, a search's light
+  records -- the caller's first, then the sort, then the limit). The user is the host's to say: the page's "this
+  browser", Python's "this user", the server's anonymous caller. Two things the TypeScript rules left to the host are
+  the rules' now: a page's id is one a page makes (letters, digits, "-", "_"; no Windows device name), refused alike
+  on every host where only Python's folder refused it; and a body or rows of the wrong shape are the engine's 500,
+  checked, not cast (B5's lesson: the page's WebAssembly has no ClassCastException).
+- Kept as rows, the content its exact JSON text, as before: `FileCubeRecords` (one `<id>.json` each: Python's
+  `ll.home()/pages`, the layout its pages were already in, so they open as they were; the server's
+  `--query-store DIR/dataCube`) and `MemoryCubeRecords` (the page's IndexedDB rows, handed in).
+- The page: `QueriesPage.cubes`, an export of the saved queries' module (one module for both stores, fetched once, at
+  the first call of either); `datacube/src/cube-store.ts` is now the one client (`CubeStoreClient`, the content read
+  exactly, the times plain numbers), the page's adapter (`wasmCubeServer`) and its rows, each call one IndexedDB
+  transaction (as B5's). `RuleStore` and `HostRecords` are gone; the IndexedDB layout is unchanged.
+- Python: `/api/pure/v1/query/dataCube` answered by the native library's `lite_saved_cubes` under the folder's lock
+  (`/saved-pages.json`, the records' four calls, gone); `page.save()` (D) keeps a page there.
+- Proof: one suite (`datacube/test/saved-pages/conformance.ts`) on the page (`//datacube:saved_pages_page_test`), the
+  server (`:saved_pages_server_test`) and Python (`:python_saved_pages_test`, the warehouse lane); Python's folder's
+  own cases (`python/tests/test_engine.py` SavedPagesKept: a page kept before opens as it was); `python_engine_test`
+  saves on Python's page and opens it again, and opens a page saved from Python.
+
 #### B7. A remote git
 
 A project's git store pushed to and pulled from a remote (GitHub, a team's), as git does: the local store stays the
@@ -459,9 +481,11 @@ and Python call the cores.
   `heatmapColour`, `heatmapSetting`), moved out of `CubeApp` unchanged; the screen's menu calls it, and so does the
   headless `gridExport`. Python: `grid.export(kind, to=None)`, kind `csv`, `excel`, `html`, `text` or `pdf`.
 - A page's board with its charts is not exported headless: PARK-32 (charts drawn headless).
-- **`page.save(name)` moves after B6.** The saved-page rules are TypeScript's today (`cube-store.ts` `RuleStore`) and
-  B6 puts them in Java beside saved queries; built now, a headless save would be replaced in the same push. It lands
-  with B6, calling the Java rules in the native library.
+- **`page.save()` landed with B6**, calling the Java rules in the native library: with no path it keeps the page in
+  this user's saved pages (`ll.home()/pages`) as DataCube's Save does -- over the copy it was last saved as, else as a
+  new one, named `name=` or the page's own name -- and answers its id; `python_engine_test` opens it from Open…. Changed
+  from this plan: `page.save(path)` still writes the page file (the one-app design keeps it, §8), so the store is the
+  call without a path, not `page.save(name)`.
 - The model actions' cores are B4's libraries (done).
 
 ### E. Studio and Query from Python

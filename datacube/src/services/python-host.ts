@@ -38,7 +38,7 @@ import { readServerPlan, UpstreamPlanner, type ModelOptions } from '../planner.t
 import type { PlannerWorker, Request, Response } from '../planner-protocol.ts';
 import { ExactNumber, fromJson, type ValueSpecification } from '../../../pure-protocol/src/index.ts';
 import { base64 } from '../headless/web.ts';
-import { HostRecords, RuleStore, type HostRecordsCall } from '../cube-store.ts';
+import { CubeStoreClient } from '../cube-store.ts';
 import { pageToJson, readPage, type PageDocument } from '../page-document.ts';
 import { PlanAndRun, QueryFailure } from '../runner.ts';
 import type { InferredModel } from '../infer.ts';
@@ -355,8 +355,7 @@ export async function askedOffers(link: PythonLink): Promise<PythonOffers> {
  * (the program's E).
  */
 function pythonModelHome(link: PythonLink, where: string): ModelHomeService {
-  const withToken: typeof fetch = (input, init) =>
-    link.fetch(input, { ...init, headers: { ...(init?.headers as Record<string, string> | undefined), ...headers(link) } });
+  const withToken = tokened(link);
   let home: ReturnType<ModelHomeService['connect']> | undefined;
   return {
     // the clients fetched the first time a model action asks, as the tab's model home's are: the page's startup carries
@@ -419,27 +418,21 @@ export function pythonDatabase(link: PythonLink, offers: PythonOffers): Database
   };
 }
 
+/** A fetch of Python's that carries the engine's token, for the clients of what it serves. */
+function tokened(link: PythonLink): typeof fetch {
+  return (input, init) =>
+    link.fetch(input, { ...init, headers: { ...(init?.headers as Record<string, string> | undefined), ...headers(link) } });
+}
+
 /**
- * THE SAVED PAGES, in this user's folder (step 2d): the store's rules the page's own (RuleStore), over the records
- * Python keeps -- the browser's IndexedDB, in Python's terms (§6, Q1). Kept on disk, so nothing more to ask for to keep
- * them.
+ * THE SAVED PAGES, in this user's folder (step 2d, B6): upstream's routes Python serves
+ * (`/api/pure/v1/query/dataCube`), answered by legend-lite's own rules in its native library -- the ones the browser's
+ * page runs compiled to WebAssembly -- over `ll.home()/pages`, through the one client. Kept on disk, so nothing more to
+ * ask for to keep them.
  */
 function pythonPages(link: PythonLink, offers: PythonOffers): PageService {
-  const carry = async (call: HostRecordsCall): Promise<unknown> => {
-    const answer = await link.fetch(`${link.baseUrl}/saved-pages.json`, {
-      method: 'POST',
-      headers: { ...headers(link), 'Content-Type': 'application/json' },
-      body: JSON.stringify(call),
-    }).catch((e: unknown) => { throw new Error(`the engine did not answer: ${String(e)}`); });
-    // every answer read whole, an empty one too: a response left unread is cancelled by the browser (it reported the
-    // put as aborted, though Python had kept the record)
-    const text = await answer.text();
-    if (!answer.ok) throw new Error(`the engine refused the saved pages' ${call.call}: ${answer.status} ${text}`);
-    // a record, the records, or -- none found, or put and removed -- nothing
-    return text === '' ? undefined : (JSON.parse(text) as unknown) ?? undefined;
-  };
   return {
-    store: new RuleStore(new HostRecords(carry), offers.pages.user),
+    store: new CubeStoreClient(`${link.baseUrl}/api`, tokened(link), offers.pages.user),
     where: `in ${offers.pages.where}`,
     memoryOnly: false,
     persist: async () => true,

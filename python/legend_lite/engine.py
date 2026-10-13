@@ -55,7 +55,7 @@ from . import _json, _planner, compiler
 from .compiler import LegendError
 from ._library import library
 from .frames import Frames, UntypedColumn
-from ._home import SavedPages, Settings, home, locked, model_home_folder, queries_folder
+from ._home import THIS_USER, Settings, home, model_home_folder, pages_folder, queries_folder, store_call
 
 _API = '/api/pure/v1/'
 _EXECUTE = _API + 'execution/execute'
@@ -67,8 +67,6 @@ _MAX_BODY = 16 * 1024 * 1024
 _FILE_IN, _FILE_OUT, _REMOTE, _SERVICES = '/file.json', '/forget.json', '/remote.json', '/services.json'
 # a page's file's bytes, a part at a time, before file.json reads them
 _FILE_PART = '/file-part.json'
-# the page's saved pages, as the browser keeps its records (step 2d): all, one, put, remove
-_SAVED = '/saved-pages.json'
 # the page's own settings, kept between visits as the browser keeps them (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B2):
 # GET what was kept, POST them whole
 _SETTINGS = '/settings.json'
@@ -77,7 +75,10 @@ _SETTINGS = '/settings.json'
 _SDLC_API, _DEPOT_API = '/sdlc/api/', '/depot/api/'
 # legend-engine's query store (/api/pure/v1/query): the saved queries' rules, the server's and the page's, over this
 # user's folder (docs/ONE_PLATFORM_PROGRAM_2026_10_12.md B5); and who a caller is there, as Python's saved pages name it
-_QUERIES, _QUERY_USER = '/api/pure/v1/query', 'this user'
+_QUERIES, _QUERY_USER = '/api/pure/v1/query', THIS_USER
+# DataCube's saved pages, at upstream's routes beside the queries (/api/pure/v1/query/dataCube): the saved pages' rules,
+# the server's and the page's, over this user's folder (B6); their caller the same user
+_CUBES = _QUERIES + '/dataCube'
 # PLANANDRUN (docs/DATACUBE_ONE_APP_DESIGN_2026_10_11.md §15): a page's grid planned against the model Python holds and
 # run on its DuckDB, in one call; and the planner protocol's other requests, answered as the tab's worker answers them
 _PLAN_AND_RUN, _PLANNER = '/plan-and-run.json', '/planner.json'
@@ -214,13 +215,32 @@ def private(path: str) -> bool:
     """Whether a call reads the engine's data -- the API, a frame's cube, its version -- and so, over HTTP, carries the
     token. The site's files are the page's own and carry no secret."""
     return path.startswith(_API) or _model_home(path) or path in (
-        '/cube.json', '/version.json', '/page.json', _FILE_IN, _FILE_PART, _FILE_OUT, _REMOTE, _SAVED, _SETTINGS, _SERVICES,
+        '/cube.json', '/version.json', '/page.json', _FILE_IN, _FILE_PART, _FILE_OUT, _REMOTE, _SETTINGS, _SERVICES,
         _PLAN_AND_RUN, _PLANNER)
 
 
 def _saved_query(path: str) -> bool:
-    """A call of the query store's (``/api/pure/v1/query``, ``.../{id}``, ``.../search``, ...)."""
+    """A call of the query store's (``/api/pure/v1/query``, ``.../{id}``, ``.../search``, ...), DataCube's saved pages'
+    (``.../dataCube...``) among them."""
     return path == _QUERIES or path.startswith(_QUERIES + '/')
+
+
+def _stored(entry: str, folder: Path, *asked: str) -> Answer:
+    """One call of a store the native library answers (the saved queries, the saved pages), as this user: its answer as
+    the store gave it, a failure of the library's said (500)."""
+    try:
+        status, answered = store_call(entry, folder, *asked, _QUERY_USER)
+    except Exception as failure:
+        traceback.print_exc()
+        return _said(500, f'{type(failure).__name__}: {failure}')
+    if status == 204:
+        return Answer(204, 'text/plain; charset=utf-8', b'')
+    return Answer(status, 'application/json', answered.encode('utf-8'))
+
+
+def _saved_cube(path: str) -> bool:
+    """A call of DataCube's saved pages' (``/api/pure/v1/query/dataCube``, ``.../{id}``, ``.../search``)."""
+    return path == _CUBES or path.startswith(_CUBES + '/')
 
 
 def _model_home(path: str) -> bool:
@@ -321,11 +341,12 @@ class Engine:
 
     def __init__(self, frames: Frames, site: str | Path | None = None,
                  headless: Callable[[], Any] | None = None, planner: Planner | None = None,
-                 pages: SavedPages | None = None) -> None:
+                 pages: str | Path | None = None) -> None:
         """``headless``: DataCube's own non-screen code over the frames' database (legend_lite._headless), made when
         first asked for -- what reads a page's file into it (file.json). Absent, the engine takes no file, and says so
         (services.json). ``planner``: where every query is planned, chosen once (R3): Python's own when not given.
-        ``pages``: where the page's Save and Open… keep pages (step 2d): this user's folder (``home()``) when not given."""
+        ``pages``: the folder the page's Save and Open… keep pages in (step 2d, B6): this user's (``home()/pages``) when
+        not given."""
         self.frames = frames
         self._headless = headless
         # where the frames' DuckDB was pointed for its extensions (a remote file's httpfs), once it was
@@ -335,7 +356,7 @@ class Engine:
         self._uploads: dict[str, Path] = {}
         self._uploads_lock = threading.Lock()
         self.planner = planner if planner is not None else NativePlanner()
-        self._saved_pages = pages
+        self._pages_folder = Path(pages) if pages is not None else None
         self.site = Path(site).resolve() if site is not None else None
         if self.site is not None and not self.site.is_dir():
             raise ValueError(f'the site {site} is not a directory')
@@ -359,6 +380,9 @@ class Engine:
         """One call: ``POST`` to the API, or ``GET`` of a frame's cube (``cube.json``), its version (``version.json``) or
         a file of the site. It waits for its answer, which the compiler's threads compute when it needs the compiler,
         so it is called from a thread of the caller's own (a connection's, a message's), never a compiler thread."""
+        if _saved_cube(path):
+            # on the caller's thread, as the saved queries': it waits for the folder's lock holding no compiler thread
+            return self._saved_cubes(method, path, body or '')
         if _saved_query(path):
             # on the caller's thread, as the model home's: it waits for the folder's lock holding no compiler thread
             return self._saved_queries(method, path, query, body or '')
@@ -377,8 +401,6 @@ class Engine:
                 return self._file_out(body or '')
             if path == _REMOTE:
                 return self._remote(body or '')
-            if path == _SAVED:
-                return self._saved(body or '')
             if path == _SETTINGS:
                 return self._settings_kept(body or '')
             if path == _PLAN_AND_RUN:
@@ -414,7 +436,7 @@ class Engine:
         plane = {'word': self.planner.plane, 'label': self.planner.label}
         # where the page's saved pages are, and whose: the folder's one owner, this user (as the browser's store is
         # 'this browser''s)
-        pages = {'where': str(self.saved_pages().folder), 'user': 'this user'}
+        pages = {'where': str(self.pages_folder()), 'user': _QUERY_USER}
         # where the model home keeps the projects (B3): Create a Class… and the rest are offered over it
         model_home = {'where': str(self.model_home_folder())}
         # where the query store keeps the saved queries (B5), and whose they are
@@ -422,9 +444,9 @@ class Engine:
         return {'files': self.takes_files(), 'remote': self.takes_remote(), 'pages': pages, 'modelHome': model_home,
                 'queries': queries, 'plane': plane, 'planes': [plane]}
 
-    def saved_pages(self) -> SavedPages:
-        """Where the page's saved pages are kept: the folder given, else this user's (``home()``), as it is now."""
-        return self._saved_pages if self._saved_pages is not None else SavedPages()
+    def pages_folder(self) -> Path:
+        """Where the page's saved pages are kept: the folder given, else this user's (``home()/pages``), as it is now."""
+        return self._pages_folder if self._pages_folder is not None else pages_folder()
 
     def model_home_folder(self) -> Path:
         """Where the model home's projects are: a git repository in this user's folder, as it is now."""
@@ -459,21 +481,15 @@ class Engine:
         is this user: there is no sign-in."""
         if method not in ('GET', 'POST', 'PUT', 'DELETE'):
             return _said(405, 'the query store answers GET, POST, PUT and DELETE')
-        folder = queries_folder()
-        try:
-            with locked(folder):
-                said = _workers().submit(library().call, 'lite_saved_queries', str(folder), method,
-                                         path[len(_QUERIES):], query, body, _QUERY_USER).result()
-        except Exception as failure:
-            traceback.print_exc()
-            return _said(500, f'{type(failure).__name__}: {failure}')
-        tag, _, rest = said.partition('\n')
-        if tag != 'OK':
-            return _said(500, rest.partition('\n')[2] or rest)
-        status, _, answered = rest.partition('\n')
-        if int(status) == 204:
-            return Answer(204, 'text/plain; charset=utf-8', b'')
-        return Answer(int(status), 'application/json', answered.encode('utf-8'))
+        return _stored('lite_saved_queries', queries_folder(), method, path[len(_QUERIES):], query, body)
+
+    def _saved_cubes(self, method: str, path: str, body: str) -> Answer:
+        """One call of DataCube's saved pages (B6): answered by legend-lite's saved-page rules in the native library --
+        the ones its server runs and the page runs compiled to WebAssembly -- over this user's folder (``home()/pages``,
+        one file each, as the page's records were kept), under its lock. Its caller is this user: there is no sign-in."""
+        if method not in ('GET', 'POST', 'PUT', 'DELETE'):
+            return _said(405, "DataCube's saved pages answer GET, POST, PUT and DELETE")
+        return _stored('lite_saved_cubes', self.pages_folder(), method, path[len(_CUBES):], body)
 
     def _settings_kept(self, body: str) -> Answer:
         """The page's settings kept whole (one JSON object, the page's own: never read here), in this user's folder, so
@@ -490,38 +506,6 @@ class Engine:
         except OSError as failure:
             return _said(500, f'the settings could not be kept: {type(failure).__name__}: {failure}')
         return Answer(204, 'text/plain; charset=utf-8', b'')
-
-    def _saved(self, body: str) -> Answer:
-        """The page's saved pages, as the browser keeps its records (``{"call": "all" | "find" | "put" | "remove", "id"?,
-        "record"?}``; step 2d): the records, kept whole, one file each in this user's folder. The store's rules are the
-        page's own (cube-store.ts's RuleStore), as they are over the browser's IndexedDB."""
-        try:
-            asked = json.loads(body)
-        except ValueError:
-            return _said(400, 'a call on the saved pages is {"call", "id"?, "record"?}, as JSON')
-        if not isinstance(asked, dict):
-            return _said(400, 'a call on the saved pages is {"call", "id"?, "record"?}')
-        store, call = self.saved_pages(), asked.get('call')
-        try:
-            if call == 'all':
-                return Answer(200, 'application/json', json.dumps(store.all(), ensure_ascii=False).encode('utf-8'))
-            if call == 'find':
-                # none found is an answer, not a refusal: the store asks before it saves a new page that its id is free
-                return Answer(200, 'application/json', json.dumps(store.find(asked.get('id')), ensure_ascii=False).encode('utf-8'))
-            if call == 'put':
-                record = asked.get('record')
-                if not isinstance(record, dict):
-                    return _said(400, 'a saved page is put as its record')
-                store.put(record)
-                return Answer(204, 'text/plain; charset=utf-8', b'')
-            if call == 'remove':
-                store.remove(asked.get('id'))
-                return Answer(204, 'text/plain; charset=utf-8', b'')
-        except ValueError as refused:
-            return _said(400, str(refused))
-        except OSError as failure:
-            return _said(500, f'the saved pages could not be read or written in {store.folder}: {failure}')
-        return _said(400, f'a call on the saved pages is all, find, put or remove, not {call!r}')
 
     def takes_files(self) -> bool:
         """Whether a page's file can be read into the frames' database here: DataCube's own code runs headless (its
@@ -1150,7 +1134,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         # the API, an open page saying what it is now (page.json: Python's page.read()), a page's file in or out, the
         # saved pages, the page's settings, and PlanAndRun's calls
         if not (url.path.startswith(_API) or _model_home(url.path) or url.path in (
-                '/page.json', _FILE_IN, _FILE_PART, _FILE_OUT, _REMOTE, _SAVED, _SETTINGS, _PLAN_AND_RUN, _PLANNER)):
+                '/page.json', _FILE_IN, _FILE_PART, _FILE_OUT, _REMOTE, _SETTINGS, _PLAN_AND_RUN, _PLANNER)):
             self._refuse_unread(404, f'no such path: {url.path}')
             return
         if not self._admitted(url.path):

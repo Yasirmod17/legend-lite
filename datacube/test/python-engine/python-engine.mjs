@@ -414,6 +414,27 @@ try {
   console.log(`${read ? 'ok  ' : 'FAIL'} a sheet renamed in DataCube is in page.read() in Python${read ? ` (${read.join(', ')})` : ''}`);
   if (!read) failed = true;
 
+  // SAVED FROM PYTHON (D, B6): page.save() keeps the page in this user's saved pages by the rules the tab's own Save
+  // keeps it by; DataCube's Open… lists it, and it opens -- its sheets as Python saved them, its grid over its frame
+  engine.stdin.write('py-page-save\n');
+  const savedLine = await nextLine();
+  if (!savedLine.startsWith('done py-page-save ')) throw new Error(`the engine did not save the page: ${savedLine}`);
+  // opened in the first tab, which shows another page (the one saved there, "Books from Python")
+  await cube.click('.dc-titlebar-menu');
+  await cube.locator('.dc-menu-item:has(> .dc-menu-label:text-is("Open\u2026"))').first().click();
+  const pyRow = cube.locator('#cubelib .dc-lib-row', { hasText: 'Built in Python' });
+  const pyListed = await pyRow.waitFor({ timeout: 10_000 }).then(() => true, () => false);
+  if (pyListed) await pyRow.locator('.dc-lib-button', { hasText: 'Open' }).click();
+  const pyOpened = pyListed && await cube.waitForFunction(`(${String(sheetNames)})() === 'pytrades|Renamed in DataCube|Added in Python'
+    && document.querySelector('.dc-page-name')?.textContent?.includes('Built in Python')`, undefined, { timeout: 60_000 })
+    .then(() => true, () => false);
+  console.log(`${pyOpened ? 'ok  ' : 'FAIL'} a page saved from Python (page.save()) is in Open… and opens, its sheets as Python saved them`);
+  if (!pyOpened) {
+    console.log(`  listed: ${pyListed}; sheets: ${await cube.evaluate(`(${String(sheetNames)})()`)}; the page showed: ${
+      (await cube.evaluate(() => document.body.innerText.slice(0, 400)))}`);
+    failed = true;
+  }
+
   // EVERY PAGE PYTHON WRITES IS ONE DATACUBE READS: pages built with each kind of edit Python makes, one with a frozen
   // chart kept without its grid, and DataCube's own page loaded and changed in Python, read by DataCube's reader
   engine.stdin.write('py-documents\n');

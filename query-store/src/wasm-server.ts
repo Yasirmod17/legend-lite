@@ -16,10 +16,14 @@ import type { Records } from './records.ts';
 /** The API root the page's store answers at: never on the network (`fetch` below answers it). */
 export const LOCAL_API = 'http://this-browser.invalid/api';
 
-/** What the module exports (`com.legend.queries.page.QueriesPage`). */
+/**
+ * What the module exports (`com.legend.queries.page.QueriesPage`): the saved queries' calls, and DataCube's saved
+ * pages' (`cubes`, the same module: datacube/src/cube-store.ts `wasmCubeServer`; the program's B6).
+ */
 export interface QueriesModule {
   readonly exports: {
     answer(method: string, rest: string, rawQuery: string, body: string, user: string, records: string): string;
+    cubes(method: string, rest: string, body: string, user: string, rows: string): string;
   };
 }
 

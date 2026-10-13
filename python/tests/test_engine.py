@@ -23,7 +23,7 @@ import pyarrow.ipc
 
 import legend_lite as ll
 from legend_lite.engine import Engine, NativePlanner, WebServer
-from legend_lite._home import SavedPages
+from legend_lite._home import locked
 
 GROUP = "->filter(x|$x.qty > 5)->groupBy(~[desk], ~[q: x|$x.qty : y|$y->sum()])->sort(~desk->ascending())"
 
@@ -396,62 +396,78 @@ class ModelHomeServed(Served):
 
 
 class SavedPagesKept(unittest.TestCase):
-    """The page's saved pages (step 2d): the browser's records, kept whole, one file each in this user's folder, the
-    store's rules the page's own -- the engine answers only all, find, put and remove."""
+    """The page's saved pages (step 2d, B6): upstream's /api/pure/v1/query/dataCube, answered by legend-lite's own rules
+    in the native library over this user's folder, one file each -- the folder's layout the one its pages were kept in
+    before, so they open as they were. The rules themselves are held to DataCube's one suite on every store
+    (datacube/test/saved-pages/conformance.ts); these are what only Python's folder can be asked."""
 
     def setUp(self):
         self.place = tempfile.TemporaryDirectory()
         self.addCleanup(self.place.cleanup)
         self.folder = Path(self.place.name) / 'pages'
-        self.engine = Engine(ll.Frames(), pages=SavedPages(self.folder))
+        self.engine = Engine(ll.Frames(), pages=self.folder)
 
-    def call(self, **asked):
-        return self.engine.answer('POST', '/saved-pages.json', '', json.dumps(asked))
+    def call(self, method, path='', body=None):
+        return self.engine.answer(method, '/api/pure/v1/query/dataCube' + path, '', body)
 
-    def test_all_find_put_remove_as_the_browser_keeps_them(self):
+    def test_a_page_kept_before_the_rules_were_java_opens_as_it_was(self):
+        # as the page's own store wrote it through Python (json.dump of its row): its content the page's JSON text
+        self.folder.mkdir(parents=True)
         record = {'id': 'p-1', 'name': 'Q3', 'content': '{"kind":"datacube.page","dec":12.30}', 'owner': 'this user',
                   'createdAt': 1, 'lastUpdatedAt': 2, 'lastOpenAt': 2}
-        self.assertEqual(self.call(call='put', record=record).status, 204)
-        self.assertEqual(json.loads(self.call(call='all').body), [record])
-        # kept exactly as sent: its content the page's JSON text, never read here
-        self.assertEqual(json.loads(self.call(call='find', id='p-1').body)['content'], record['content'])
-        none = self.call(call='find', id='p-2')
-        self.assertEqual((none.status, json.loads(none.body)), (200, None))
-        self.assertEqual(self.call(call='remove', id='p-1').status, 204)
-        self.assertEqual(json.loads(self.call(call='all').body), [])
-        # every write whole: nothing half-written left beside the records
+        (self.folder / 'p-1.json').write_text(json.dumps(record, ensure_ascii=False), encoding='utf-8')
+        found = json.loads(self.call('POST', '/search', '{}').body)
+        self.assertEqual([(q['id'], q['name'], 'content' in q) for q in found], [('p-1', 'Q3', False)])
+        opened = self.call('GET', '/p-1')
+        self.assertEqual(opened.status, 200)
+        # its content as written: the decimal's spelling kept
+        self.assertIn(b'"content":{"kind":"datacube.page","dec":12.30}', opened.body)
+        self.assertEqual(self.call('DELETE', '/p-1').status, 204)
+        self.assertEqual(list(self.folder.glob('*.json')), [])
+
+    def test_a_page_saved_is_kept_whole_one_file_each(self):
+        made = self.call('POST', '', json.dumps({'id': 'p-2', 'name': 'Kept', 'content': {'kind': 'datacube.page'}}))
+        self.assertEqual(made.status, 200, made.body)
+        kept = json.loads((self.folder / 'p-2.json').read_text(encoding='utf-8'))
+        self.assertEqual((kept['owner'], kept['content']), ('this user', '{"kind":"datacube.page"}'))
+        # every write whole: nothing half-written left beside the pages
         self.assertEqual([p.name for p in self.folder.iterdir() if p.suffix == '.part'], [])
 
-    def test_an_id_that_could_name_another_place_is_refused(self):
-        for bad in ('../escape', '.lock', '', 'a/b', 'a\\b', 'C:x', 7, 'CON', 'nul', 'COM1', 'lpt9'):
-            with self.subTest(id=bad):
-                self.assertEqual(self.call(call='find', id=bad).status, 400)
-                self.assertEqual(self.call(call='put', record={'id': bad, 'name': 'x', 'content': '{}'}).status, 400)
-        self.assertEqual(self.call(call='put', record={'id': 'ok', 'name': 'x', 'content': {'not': 'text'}}).status, 400)
-        self.assertEqual(self.call(call='rename').status, 400)
-
-    def test_a_file_that_is_not_a_record_is_left_out_and_the_others_open(self):
-        self.assertEqual(self.call(call='put', record={'id': 'good', 'name': 'G', 'content': '{}'}).status, 204)
+    def test_a_file_that_is_not_a_page_is_left_out_and_the_others_open(self):
+        self.assertEqual(self.call('POST', '', json.dumps({'id': 'good', 'name': 'G', 'content': {}})).status, 200)
         (self.folder / 'cut-short.json').write_text('{"id": "cut-sho', encoding='utf-8')
         (self.folder / 'a-list.json').write_text('[1, 2]', encoding='utf-8')
-        self.assertEqual([r['id'] for r in json.loads(self.call(call='all').body)], ['good'])
+        self.assertEqual([q['id'] for q in json.loads(self.call('POST', '/search', '{}').body)], ['good'])
+        # asked for by its id, a file that is not a page is said
+        self.assertEqual(self.call('GET', '/cut-short').status, 500)
+
+    def test_an_id_that_could_name_another_place_is_refused(self):
+        for bad in ('..%2Fescape', '.lock', 'a.b', 'CON', 'nul', 'COM1', 'lpt9'):
+            with self.subTest(id=bad):
+                self.assertEqual(self.call('GET', '/' + bad).status, 400)
+        self.assertEqual(self.call('POST', '', json.dumps({'id': '../x', 'name': 'x', 'content': {}})).status, 400)
+        self.assertFalse((Path(self.place.name) / 'x.json').exists())
 
     @unittest.skipIf(sys.platform == 'win32', 'a folder private to its owner is a POSIX mode')
     def test_the_folder_is_private_to_this_user(self):
-        self.assertEqual(self.call(call='put', record={'id': 'p', 'name': 'P', 'content': '{}'}).status, 204)
+        self.assertEqual(self.call('POST', '', json.dumps({'id': 'p', 'name': 'P', 'content': {}})).status, 200)
         self.assertEqual(self.folder.stat().st_mode & 0o777, 0o700)
 
-    def test_one_writer_at_a_time_across_its_holders(self):
-        # another holder of the folder's lock (another notebook's process takes the same file lock) holds it: a put waits
-        store = SavedPages(self.folder)
+    def test_one_call_at_a_time_across_its_holders(self):
+        # another holder of the folder's lock (another notebook's process takes the same file lock) holds it: a save waits
         order = []
-        with store._locked():
-            writer = threading.Thread(target=lambda: (store.put({'id': 'w', 'name': 'W', 'content': '{}'}), order.append('put')))
+        with locked(self.folder):
+            writer = threading.Thread(target=lambda: (
+                self.call('POST', '', json.dumps({'id': 'w', 'name': 'W', 'content': {}})), order.append('saved')))
             writer.start()
             time.sleep(0.3)
             order.append('released')
-        writer.join(timeout=10)
-        self.assertEqual(order, ['released', 'put'])
+        writer.join(timeout=30)
+        self.assertEqual(order, ['released', 'saved'])
+
+    def test_the_old_calls_are_gone(self):
+        # the page's rules were its own then (cube-store.ts's RuleStore), Python keeping its records: no longer
+        self.assertEqual(self.engine.answer('POST', '/saved-pages.json', '', '{"call":"all"}').status, 404)
 
     def test_the_folder_is_this_users_unless_pointed_elsewhere(self):
         from unittest import mock
