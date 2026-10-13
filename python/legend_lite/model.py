@@ -321,7 +321,8 @@ def ensure_workspace(sdlc: Sdlc, project: str, workspace: str) -> None:
             raise ProjectGone(project) from None
         try:
             sdlc.workspace(project, workspace)
-        except SdlcError:
+        except Exception:
+            # not there, however the read failed: the making's own refusal is said (ensureWorkspace's rule)
             raise e from None
 
 
