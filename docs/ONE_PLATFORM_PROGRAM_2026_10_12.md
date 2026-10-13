@@ -1018,6 +1018,29 @@ From `docs/DATACUBE_MODEL_DESIGN_2026_10_10.md` §13. Each lands once, in the on
       cross-process proof is POSIX's (Linux and macOS: the other process holds the lock with `fcntl`, and the test skips
       on Windows); on Windows the JVM's lock is `LockFileEx` on the same file, the same mechanism, not measured.
 
+12. **The tab's DuckDB extensions from the site, and one start of it** (added 2026-10-13, the Compiler Rewrite line's
+    finding).
+    - **The problem.** As each page opened, DuckDB-WASM downloaded extensions from extensions.duckdb.org:
+      - ICU, when the session's time zone was set (`setUpSession`, every tab's DuckDB since C1);
+      - JSON for a JSON file;
+      - Parquet for a remote Parquet file;
+      - httpfs for a remote file.
+
+      The apps, and a desk's browser tests, needed that site up; behind a firewall, a page could not open. CI passed
+      only because its runners reach it.
+    - **Built (branch `datacube/python-parity-2`):** the four extensions are pinned for both browser builds in
+      `MODULE.bazel`, by content, as Python's are, and served by each site at `vendor/duckdb-extensions/`
+      (`//engine-client:duckdb_extensions`; Studio's beside its DuckDB at `vendor/duckdb/duckdb-extensions/`; DataCube's
+      built folder too; not in the wheel, whose apps run no DuckDB-WASM). The tab's DuckDB is pointed at them
+      (`custom_extension_repository`) before anything loads one.
+    - **One start of a tab's DuckDB:** engine-client's `startDuckDbInTab`, which now returns the database too. DataCube's
+      boot, and the stress, remote and Python-engine test pages, started theirs with copies of their own; each now calls
+      it. Its session is set up there, and `browserServices` no longer sets it up again.
+    - **The guard:** every browser test makes extensions.duckdb.org unresolvable (`tools/browser/pinned-chromium.mjs`
+      wraps the test's own Playwright's `launch`). A page that needs another extension fails there, as it would behind
+      a firewall. Measured: every browser lane (`//gates:datacube`, `//gates:ui`, `//gates:sdlc`) and the warehouse lane's
+      browser tests, 186 tests, pass with it.
+
 ### H. Publishing
 
 PyPI; the npm packages' third-party notices; the FINOS name; the copyright-holder sweep. Each is the user's to decide.

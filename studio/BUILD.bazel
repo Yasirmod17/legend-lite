@@ -85,6 +85,8 @@ copy_to_directory(
     name = "vendor",
     srcs = [
         "//engine-client:node_modules/@duckdb/duckdb-wasm",
+        # its extensions, pinned (MODULE.bazel): ICU, which the session's time zone loads
+        "//engine-client:duckdb_extensions",
         "//legend-art:fonts",
         "//legend-art:styles",
         "//query:cube_styles",
@@ -98,6 +100,7 @@ copy_to_directory(
         "wasm/planner/wasm-gc-module-runtime.js",
         "sdlc-server/page/classes.wasm",
         "sdlc-server/page/wasm-gc-module-runtime.js",
+        "engine-client/duckdb-extensions/**",
         "**/dist/duckdb-mvp.wasm",
         "**/dist/duckdb-eh.wasm",
         "**/dist/duckdb-browser-mvp.worker.js",
@@ -114,6 +117,7 @@ copy_to_directory(
         "query/demo/cube/**",
     ],
     replace_prefixes = {
+        "engine-client/duckdb-extensions/": "duckdb/duckdb-extensions/",
         "wasm/planner/": "planner/",
         "sdlc-server/page/": "sdlc/",
         "**/dist/": "duckdb/",

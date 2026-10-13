@@ -48,3 +48,28 @@ if (pinned) {
 } else if (process.env.TEST_SRCDIR) {
   throw new Error('a browser test without PINNED_CHROMIUM: use browser_test (//tools/browser:defs.bzl)');
 }
+
+// NO EXTENSION FROM DUCKDB'S SITE: every page's DuckDB-WASM loads its extensions from the site's own vendor/
+// (engine-client's ownExtensions; MODULE.bazel pins them), so a test whose page still fetched one from
+// extensions.duckdb.org would pass only while that site is up (the Compiler Rewrite line's finding, 2026-10-13). Every
+// launch of the test's own Playwright -- the one its entry script resolves, the instance it imports -- makes that host
+// unresolvable, so such a fetch fails here as it would behind a firewall.
+const HERMETIC_ARGS = ['--host-resolver-rules=MAP extensions.duckdb.org ~NOTFOUND'];
+if (process.env.TEST_SRCDIR && process.argv[1]) {
+  const { createRequire } = await import('node:module');
+  let playwright;
+  try {
+    playwright = createRequire(process.argv[1])('playwright');
+  } catch {
+    // a harness without Playwright (a CDP client of its own) launches its browser itself
+  }
+  const chromium = playwright?.chromium;
+  if (chromium && !chromium.__hermetic) {
+    const launch = chromium.launch.bind(chromium);
+    chromium.launch = (options = {}) => launch({ ...options, args: [...(options.args ?? []), ...HERMETIC_ARGS] });
+    const persistent = chromium.launchPersistentContext.bind(chromium);
+    chromium.launchPersistentContext = (dir, options = {}) =>
+      persistent(dir, { ...options, args: [...(options.args ?? []), ...HERMETIC_ARGS] });
+    chromium.__hermetic = true;
+  }
+}

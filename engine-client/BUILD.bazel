@@ -7,6 +7,7 @@
 load("//tools/guards:defs.bzl", "guards_package")
 load("@aspect_rules_js//js:defs.bzl", "js_library")
 load("//tools/js:defs.bzl", "node_test")
+load("@bazel_lib//lib:copy_file.bzl", "copy_file")
 load("@bazel_lib//lib:write_source_files.bzl", "write_source_files")
 load("@npm_engine_client//:defs.bzl", "npm_link_all_packages")
 load("//tools/js:esbuild.bzl", "esbuild_bundle")
@@ -158,6 +159,34 @@ node_test(
     },
     # the flag only: this test loads the binding's module, not the planner
     node_options = ["--experimental-wasm-exnref"],
+)
+
+# THE TAB'S DUCKDB EXTENSIONS, served by each site at vendor/duckdb-extensions/ (MODULE.bazel pins them): the layout
+# DuckDB-WASM asks a custom extension repository for, <its version>/<its build>/<name>.duckdb_extension.wasm, so the
+# tab never fetches one from extensions.duckdb.org (startDuckDbInTab, DataCube's boot.ts: custom_extension_repository).
+# ICU, which the session's time zone loads (setUpSession); JSON and Parquet, which a file of either reads with; httpfs,
+# a remote file's.
+_DUCKDB_EXTENSIONS = [
+    "httpfs",
+    "icu",
+    "json",
+    "parquet",
+]
+
+[copy_file(
+    name = "duckdb_extension_" + extension + "_" + build,
+    src = "@duckdb_wasm_" + extension + "_extension_" + build + "//file",
+    out = "duckdb-extensions/v1.5.4/" + build + "/" + extension + ".duckdb_extension.wasm",
+) for extension in _DUCKDB_EXTENSIONS for build in ("wasm_eh", "wasm_mvp")]
+
+filegroup(
+    name = "duckdb_extensions",
+    srcs = [":duckdb_extension_" + extension + "_" + build for extension in _DUCKDB_EXTENSIONS for build in ("wasm_eh", "wasm_mvp")],
+    visibility = [
+        "//datacube:__pkg__",
+        "//query:__pkg__",
+        "//studio:__pkg__",
+    ],
 )
 
 # every test here: the local gate and CI's `ui` lane run it

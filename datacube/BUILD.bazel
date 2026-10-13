@@ -1326,6 +1326,8 @@ copy_to_directory(
     name = "vendor",
     srcs = [
         "//engine-client:node_modules/@duckdb/duckdb-wasm",
+        # its extensions, pinned (MODULE.bazel): ICU, which the session's time zone loads
+        "//engine-client:duckdb_extensions",
         "//legend-art:fonts",
         "//query-store:page",
         "//sdlc-server:page",
@@ -1341,6 +1343,7 @@ copy_to_directory(
         "legend-art/fonts/roboto-latin-700-normal.woff2",
         "legend-art/fonts/roboto-latin-ext-700-normal.woff2",
         "legend-art/fonts/LICENSE-roboto.txt",
+        "engine-client/duckdb-extensions/**",
         "**/dist/duckdb-mvp.wasm",
         "**/dist/duckdb-eh.wasm",
         "**/dist/duckdb-browser-mvp.worker.js",
@@ -1357,6 +1360,7 @@ copy_to_directory(
         "warehouse/sqlapi_page/wasm-gc-module-runtime.js",
     ],
     replace_prefixes = {
+        "engine-client/duckdb-extensions/": "duckdb-extensions/",
         "legend-art/fonts/": "fonts/",
         "**/dist/": "",
         "wasm/planner/": "",

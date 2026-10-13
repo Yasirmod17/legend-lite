@@ -20,8 +20,7 @@
 // writes a page of two frames on two sheets with DataCube's own writers, for the harness to have Python serve it and a
 // tab open it (demo/engine.html?page=); `__readPythonPage` reads a page Python wrote with DataCube's own reader.
 
-import { DuckDbEngine, type ArrowishConnection } from '../../../engine-client/src/duckdb.ts';
-import * as duckdb from '../../../engine-client/src/duckdb-wasm.ts';
+import { startDuckDbInTab } from '../../../engine-client/src/duckdb-tab.ts';
 import { arrowResultTable, LegendEngineExecutor } from '../../../engine-client/src/engine-remote.ts';
 import { arrowIpcStream } from '../../../engine-client/src/pure-v1.ts';
 import type { ResultTable } from '../../../engine-client/src/result.ts';
@@ -40,7 +39,6 @@ import { askedOffers, askedSettings, pythonDatabase, pythonRunner, pythonService
 import { browserBasics } from '../../src/services/browser-basics.ts';
 import type { Services } from '../../src/app/services.ts';
 import { ingestFile } from '../../src/upload.ts';
-import { setUpSession } from '../../../engine-client/src/engine.ts';
 
 /** What the harness hands the page: the engine, and the frame it serves. */
 interface Served {
@@ -165,18 +163,11 @@ async function run(): Promise<void> {
 
   // the tab: the same compiler in its worker, DuckDB-WASM over the same rows, in a table the frame's model reads
   window.__pythonEngineStage = 'starting the tab\'s DuckDB and the compiler';
-  // as startDuckDbInTab starts it, the database kept too: the tab reads a person's file into it (upload.ts)
-  const asset = (f: string): string => new URL(f, new URL('vendor/', location.href)).href;
-  const bundle = await duckdb.selectBundle({
-    mvp: { mainModule: asset('duckdb-mvp.wasm'), mainWorker: asset('duckdb-browser-mvp.worker.js') },
-    eh: { mainModule: asset('duckdb-eh.wasm'), mainWorker: asset('duckdb-browser-eh.worker.js') },
-  });
-  const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING), new Worker(bundle.mainWorker!));
-  await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
-  const local = new DuckDbEngine((await db.connect()) as unknown as ArrowishConnection);
   const planner = new LitePlanner({ ...engine, workerUrl: new URL('planner-worker.js', location.href).href });
-  // set up as every tab's DuckDB is, before anything is written to it: this browser is in New York (python-engine.mjs)
-  await setUpSession(local, (databaseType) => planner.sessionSetup(databaseType));
+  // the one start of a tab's DuckDB (engine-client's startDuckDbInTab), set up by the planner's rules before anything is
+  // written to it (this browser is in New York: python-engine.mjs); the database kept too, which a person's file is
+  // read into (upload.ts)
+  const { db, engine: local } = await startDuckDbInTab('./vendor/', (databaseType) => planner.sessionSetup(databaseType));
   await local.run(`CREATE TABLE trades (region VARCHAR, desk VARCHAR, book VARCHAR, year INTEGER, qtr VARCHAR,
     notional DOUBLE, pnl DOUBLE, qty INTEGER)`, 0);
   await local.run(`INSERT INTO trades VALUES ${served.rows.map((r) => `(${r.map(sqlValue).join(', ')})`).join(', ')}`, 0);

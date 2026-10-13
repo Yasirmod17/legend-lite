@@ -10,9 +10,9 @@
 // a synthetic 404 for any http:// URL rather than making a request,
 // so a node test here would be green and meaningless.
 
-import * as duckdb from '../../engine-client/src/duckdb-wasm.ts';
 
-import { DuckDbEngine, type ArrowishConnection } from '../../engine-client/src/duckdb.ts';
+import type { DuckDbEngine } from '../../engine-client/src/duckdb.ts';
+import { startDuckDbInTab } from '../../engine-client/src/duckdb-tab.ts';
 import { mountRemote, type RemoteSource } from '../src/remote.ts';
 
 declare global {
@@ -22,22 +22,8 @@ declare global {
 }
 
 async function boot(): Promise<DuckDbEngine> {
-  const asset = (f: string) => new URL(`./vendor/${f}`, location.href).href;
-  const bundle = await duckdb.selectBundle({
-    mvp: {
-      mainModule: asset('duckdb-mvp.wasm'),
-      mainWorker: asset('duckdb-browser-mvp.worker.js'),
-    },
-    eh: {
-      mainModule: asset('duckdb-eh.wasm'),
-      mainWorker: asset('duckdb-browser-eh.worker.js'),
-    },
-  });
-  const worker = new Worker(bundle.mainWorker!);
-  const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), worker);
-  await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
-  const conn = await db.connect();
-  return new DuckDbEngine(conn as unknown as ArrowishConnection);
+  // the one start of a tab's DuckDB (engine-client's startDuckDbInTab); no planner here, so no session to set up
+  return (await startDuckDbInTab('./vendor/', async () => [])).engine;
 }
 
 const ready = boot();

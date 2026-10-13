@@ -6,13 +6,13 @@
 // said (`refusePlanner`) and the page stops.
 
 import { UI_LOCALE } from '../../engine-client/src/locale.ts';
-import * as duckdb from '../../engine-client/src/duckdb-wasm.ts';
 
 import type { HeldCopy } from '../src/app.ts';
 import { DEFAULT_CONFIGURATION, type CubeConfiguration } from '../src/config.ts';
 import type { Planner, SnapTarget } from '../src/cube.ts';
 import type { ModelOptions } from '../src/planner.ts';
-import { DuckDbEngine, type ArrowishConnection } from '../../engine-client/src/duckdb.ts';
+import type { DuckDbEngine } from '../../engine-client/src/duckdb.ts';
+import { startDuckDbInTab } from '../../engine-client/src/duckdb-tab.ts';
 import type { SeedSource } from '../../engine-client/src/model-data.ts';
 import { mountRemote } from '../src/remote.ts';
 import { isPageFragment } from '../src/share/link.ts';
@@ -250,40 +250,6 @@ export async function loadModel(): Promise<string> {
 const REGIONS = ['EMEA', 'AMER', 'APAC'];
 const DESKS = ['Rates', 'Credit', 'FX', 'Equity', 'Commodities'];
 
-/**
- * DuckDB in this tab: its bundle from our own origin, its worker, one connection -- the engine,
- * and the database itself (files are registered on it): the tab's database service (src/services/browser.ts).
- */
-export async function startDuckDb(): Promise<{ readonly engine: DuckDbEngine; readonly db: duckdb.AsyncDuckDB }> {
-  // Bundles are served from OUR origin, copied out of node_modules by
-  // `bazel build //datacube:vendor`. Loading them from a CDN instead forces a
-  // cross-origin Worker, which the platform forbids outright and which
-  // is then usually worked around with a blob that importScripts the
-  // CDN url. That workaround exists to solve a problem worth not
-  // having: a deployment behind a firewall is not fetching its query
-  // engine from a CDN anyway.
-  // Absolute URLs, not relative ones. The WORKER resolves mainModule
-  // against its own location, so './vendor/x.wasm' becomes
-  // '/demo/vendor/vendor/x.wasm' and fails as an opaque
-  // "WebAssembly.compile: HTTP status code is not ok".
-  const asset = (f: string) => new URL(`./vendor/${f}`, location.href).href;
-  const bundle = await duckdb.selectBundle({
-    mvp: {
-      mainModule: asset('duckdb-mvp.wasm'),
-      mainWorker: asset('duckdb-browser-mvp.worker.js'),
-    },
-    eh: {
-      mainModule: asset('duckdb-eh.wasm'),
-      mainWorker: asset('duckdb-browser-eh.worker.js'),
-    },
-  });
-  const worker = new Worker(bundle.mainWorker!);
-  const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), worker);
-  await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
-  const conn = await db.connect();
-  return { engine: new DuckDbEngine(conn as unknown as ArrowishConnection), db };
-}
-
 /** The demo's trades, generated in this tab's DuckDB as the table the model reads. */
 export async function generateTrades(engine: DuckDbEngine): Promise<void> {
   await engine.run(
@@ -342,7 +308,9 @@ async function startPage(makePlanner: MakePlanner, settled: { show: (reason: str
   configured.catch(() => {});
   status.textContent = 'starting DuckDB…';
 
-  const duck = await startDuckDb();
+  // the one start of a tab's DuckDB (engine-client's startDuckDbInTab): its files and extensions from ./vendor/, its
+  // session set up by the planner's rules before anything uses it
+  const duck = await startDuckDbInTab('./vendor/', (databaseType) => engineReady.then((p) => p.tables.sessionSetup(databaseType)));
   performance.mark('dc:duckdb-ready');
 
   // A REMOTE SOURCE, when one is named.

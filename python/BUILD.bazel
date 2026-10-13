@@ -487,6 +487,7 @@ _APP_SITE_LEFT_OUT = [
     "**/duckdb-*.wasm",
     "**/duckdb-browser-*.worker.js",
     "**/duckdb/**",
+    "**/duckdb-extensions/**",
     "demo/config*.json",
     "demo/models/**",
 ]

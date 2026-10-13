@@ -83,6 +83,8 @@ copy_to_directory(
     name = "vendor",
     srcs = [
         "//engine-client:node_modules/@duckdb/duckdb-wasm",
+        # its extensions, pinned (MODULE.bazel): ICU, which the session's time zone loads
+        "//engine-client:duckdb_extensions",
         # upstream Legend Query's type (legend-art _fonts.scss): Roboto, Roboto Mono, Raleway 900
         # for the type letters -- from legend-art (the pinned @fontsource), served with the site, no font CDN (OFL-1.1)
         "//legend-art:fonts",
@@ -108,6 +110,7 @@ copy_to_directory(
         # the warehouse's API as the one binding speaks it (the program's C3)
         "warehouse/sqlapi_page/classes.wasm",
         "warehouse/sqlapi_page/wasm-gc-module-runtime.js",
+        "engine-client/duckdb-extensions/**",
         "**/dist/duckdb-mvp.wasm",
         "**/dist/duckdb-eh.wasm",
         "**/dist/duckdb-browser-mvp.worker.js",
@@ -124,6 +127,7 @@ copy_to_directory(
         "legend-art/src/*.css",
     ],
     replace_prefixes = {
+        "engine-client/duckdb-extensions/": "duckdb-extensions/",
         "wasm/planner/": "",
         "sdlc-server/page/": "sdlc/",
         "query-store/page/": "queries/",

@@ -8,7 +8,6 @@
 
 import type { AsyncDuckDB } from '../../../engine-client/src/duckdb-wasm.ts';
 import type { DuckDbEngine } from '../../../engine-client/src/duckdb.ts';
-import { setUpSession } from '../../../engine-client/src/engine.ts';
 import type { SeedSource } from '../../../engine-client/src/model-data.ts';
 import type { WarehouseBinding } from '../../../engine-client/src/warehouse.ts';
 import type { QueriesModule, QueryReader } from '../../../query-store/src/index.ts';
@@ -70,10 +69,10 @@ export interface BrowserServicesOptions {
   readonly location: { readonly href: string };
 }
 
-/** The tab's services, built once as the page starts: its DuckDB set up first (engine-client's `setUpSession`). */
+/** The tab's services, built once as the page starts, over the tab's DuckDB as engine-client's `startDuckDbInTab`
+ *  started it (its session set up, its extensions the site's). */
 export async function browserServices(o: BrowserServicesOptions): Promise<Services> {
   const { config } = o;
-  await setUpSession(o.duckdb.engine, (databaseType) => o.planner.tables.sessionSetup(databaseType));
   const modelHome = o.config.depot ? depotHome(o.config.depot, o.location) : undefined;
   // THE STORES' RULES: the saved queries' and the saved pages', one WebAssembly module (`vendor/queries/`), fetched
   // once, at the first call of either store (a load that failed is tried again at the next)
