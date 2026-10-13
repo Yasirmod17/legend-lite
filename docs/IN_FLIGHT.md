@@ -858,6 +858,21 @@ Branch `claude/loving-euler-gjta59`, three commits over main acd7a1d (733fa90, d
   `lite/math.yaml` and `lite/aggregates.yaml` (new), `lite/dates.yaml`, `lite/windows.yaml`.
 - **Docs:** the study's §9.4, `docs/GATES.md`.
 
+**Landed 2026-10-13 (77d32ac, the merge of PR neema2/legend-lite#35 at df7cd2a over main afb8c00; gates run
+38338369857 green on every job -- Linux, macOS, Windows, linux-arm, "gates green"; GATES "the long tail").**
+- **Files beyond the announced list:** none. Nothing in `sql/dialect/` or `lowering/`; the one guard-file edit is the
+  announced `CodeShapeGuardrailTest` entry.
+- **The independent review** found four wrong answers in the step and two older ones it reaches, each fixed and pinned
+  before the merge (5ac5ddd; the study's §9.4), and four recorded.
+- **The first CI run** (eca523c) failed every lane that compiles core to WebAssembly: `translate()` called
+  `Character.toString(int)`, which TeaVM's class library lacks; fixed in e14af16 (`new String(Character.toChars(cp))`).
+  The local suite builds no TeaVM target, so a JDK method TeaVM lacks reaches CI first: a change to `core/` that calls
+  a JDK method new to core should build `//sdlc-server:page` and `//wasm:planner` locally.
+- **Next on the line:** the remaining refusals the study lists (`mode()`, `string_agg` DISTINCT and over a window,
+  GROUPS frames, ROLLUP/CUBE/GROUPING SETS, intervals and `timestamptz`, `to_char`/`to_date`, `date_bin`, the rarer
+  text and number functions); regular expressions last, if ever. Two decisions wait on the user: DuckDB's trims of
+  Unicode spaces and DuckDB's JSON numbers as doubles.
+
 Not touched: `sql/dialect/`, `lowering/`, the Pure parser.
 
 ## An eighth line, 2026-10-11: Databricks, Snowflake and BigQuery (the user's ask, rule 5)

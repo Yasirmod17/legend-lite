@@ -9182,7 +9182,16 @@ The study, `docs/LEGEND_SQL_STUDY_2026_10_11.md` §9.4, says what reads, what is
    - **The six corpus passes**, against a baseline built from main 3839307: 22 of 22 result files identical.
    - **The independent review** (an agent that wrote none of it): four wrong answers in the step and two older ones it
      reaches, each fixed and pinned (the study's §9.4 lists them).
-   - **The local suite and the full CI run:** recorded at the pull request.
+   - **The local suite:** `//core:core_tests //gates:checks //pct:pct_duckdb //pct:pct_channel_b
+     //core:sql_parity_test`: 169 pass, 1 skipped (`//tools/guards:classpath_test`, x86 host); the Postgres targets
+     through the unprivileged wrapper: 8 of 8. After the TeaVM fix below: `//core:core_tests //gates:checks
+     //core:sql_parity_test` 159 pass, 1 skipped, and the four TeaVM targets build.
+   - **The full CI run:** the pull request's, neema2/legend-lite#35: run 38338369857 on df7cd2a (main afb8c00 merged
+     in) green on every job (Linux, macOS, Windows, linux-arm; "gates green"); merged as 77d32ac. The first run, on
+     eca523c, failed every lane that compiles core to WebAssembly (`//sdlc-server:page`, `//wasm:planner`):
+     `translate()` called `Character.toString(int)`, which TeaVM's class library lacks. e14af16 spells it
+     `new String(Character.toChars(cp))`; reproduced locally on eca523c first. The local suite builds no TeaVM
+     target, which is how it reached CI.
 6. **Recorded, not fixed (the study):** DuckDB's trims strip every Unicode space separator, Postgres's only U+0020 (it
    predates this step; the user's to decide); `cot(0)`; a numeric `width_bucket` within 1e-15 below an edge; the
    regressions' variance of equal doubles, as corr's.
