@@ -983,8 +983,8 @@ gave Postgres's answer; what does not finish is scale. The fixes, measured by th
   every reference; sharing one needs a relation-valued `let` to lower to a `WITH`, a lowering and typer change, to be
   proposed separately), and `greatest`/`least` nested deep (each level writes its operands three or four times).
 
-**The Compiler Rewrite line, 2026-10-14 -- two notes for this line.**
-- **Landed 2026-10-14 (4a8ff29ad on main, branch `core/parity-today`, one commit over fc4609eeb; run 38492848369 on the
+**The Compiler Rewrite line, 2026-10-13 -- two notes for this line.**
+- **Landed 2026-10-13 (4a8ff29ad on main, branch `core/parity-today`, one commit over fc4609eeb; run 38492848369 on the
   core lane, every platform, green on the core lane's three platform jobs and the linux-arm warehouse job; main's own
   run 38493945113 green on every job; GATES "The spelling of now compared with `CURRENT_DATE`"): a roll-forward in this
   line's corpus, its owner without a live session.** `lite/dates/date_spelling_of_now_is_refused` snapped Postgres's

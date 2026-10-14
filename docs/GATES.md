@@ -9410,7 +9410,7 @@ fast-forward to fbd216a3f, the code commit at its head, at the user's go ("well 
 4. **Next:** D5b (the user's ruling: Snap's queries are Pure) -- the three operation fields that still carried the
    planner's SQL back from a host go; see IN_FLIGHT.
 
-## 2026-10-14 — The spelling of now compared with `CURRENT_DATE`: a snapped Postgres answer that changed at midnight (the Compiler Rewrite line, in the `#SQL{...}#` island's corpus)
+## 2026-10-13 — The spelling of now compared with `CURRENT_DATE`: a snapped Postgres answer that changed at midnight (the Compiler Rewrite line, in the `#SQL{...}#` island's corpus)
 
 `//core:sql_parity_postgres_test` (the core lane) went red on every tree at midnight UTC:
 `lite/dates/date_spelling_of_now_is_refused` had snapped Postgres's answer to `SELECT DATE 'today' AS a` as the day of

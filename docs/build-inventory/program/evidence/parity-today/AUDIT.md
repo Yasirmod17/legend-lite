@@ -1,4 +1,4 @@
-# Audit: the spelling of now compared with `CURRENT_DATE` (branch `core/parity-today`, 2026-10-14)
+# Audit: the spelling of now compared with `CURRENT_DATE` (branch `core/parity-today`, 2026-10-13)
 
 The independent audit agent's report on commit a69c3dc96 over main fc4609eeb (the commit was then amended to 4a8ff29ad
 with the two should-fixes taken: the snap commit cited is d19b6067c, and the IN_FLIGHT note is in the same commit).
