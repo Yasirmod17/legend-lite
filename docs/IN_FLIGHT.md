@@ -967,6 +967,22 @@ Branch `claude/loving-euler-gjta59`, three commits over main acd7a1d (733fa90, d
 
 Not touched: `sql/dialect/`, `lowering/`, the Pure parser.
 
+**Announced 2026-10-14 -- the stress corpus and its fixes** (the user: "an insane sql corpus that stress tests our
+parser and sqlgen"; branch `claude/loving-euler-gjta59`, its first commit 5c7719f: the corpus, the runner
+`testcases/SqlStress.java`, `core/src/test/resources/sql-stress/` with the baseline). Every query that finished
+gave Postgres's answer; what does not finish is scale. The fixes, measured by the corpus before they land:
+- **In `protocol/sql/`:** `SqlToPure.java` -- a strict operation's NULL guard merged, not re-tested (a 10-term `+`
+  chain was 96 KB of SQL); the translator's recursion over long operator chains (500 deep overflows a default stack).
+- **One cross-area edit, the compiler's:** `core/src/main/java/com/legend/compiler/spec/JoinChecker.java` --
+  `sideAgnosticTdsCond` types both inputs of every join to read their columns, then `checkGeneric` types them again,
+  so a chain of N joins types its innermost input 2^N times (20 tables: 36 s to plan; 30: past 60 s). The change:
+  it types them only when the condition reads a column by name (a legacy TDS `get*('col')`, the only reads it
+  re-points), so no behaviour changes; a test pins a long join chain's planning. The compiler line may prefer its
+  own fix; say so here and this edit waits.
+- **Not in this step:** CTE chains that reuse earlier CTEs grow their SQL as the copies multiply (a CTE is copied into
+  every reference; sharing one needs a relation-valued `let` to lower to a `WITH`, a lowering and typer change, to be
+  proposed separately), and `greatest`/`least` nested deep (each level writes its operands three or four times).
+
 ## An eighth line, 2026-10-11: Databricks, Snowflake and BigQuery (the user's ask, rule 5)
 
 The user: add Snowflake, Databricks and BigQuery as backends "very similar to how we just added Postgres", the PCT
