@@ -330,6 +330,11 @@ the browser with `bazel run //wasm:startup`).
 - **A tree swap for an A/B run keeps the branch's new files** (2026-10-10, L7 steps 3-4): `git checkout <ref> -- <dir>`
   never deletes, so main's side fails to build on a file only the branch has; delete the branch-only files after the
   main-side checkout and restore with `git checkout HEAD -- <dir>` (`evidence/l7/eager_ab.sh`).
+- **A cloud session's Bazel fails on `Error downloading [https://github.com/...] ... 403 Forbidden`** (2026-10-14):
+  the session's proxy refuses GitHub's archive downloads (legend-engine, legend-pure, the bats helpers) for any
+  repository not attached to it. Run `tools/cloud-distdir.sh` from the repository root once per container: it seeds a
+  `--distdir` from Bazel's mirror or a git clone packed as GitHub packs it, and Bazel still checks every pinned
+  checksum (`docs/CLOUD_SESSIONS.md`, with the cloud container's other traps).
 
 ## 7. Reading order
 

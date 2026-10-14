@@ -368,6 +368,7 @@ otherwise, which is how it drifted:
 | `docs/EXECUTION_PLAN_2026_09_26.md` | The compiler rebuild's plan (rev H4): **parked since 2026-10-04**, reference until the user resumes it |
 | `docs/SEMANTICS_REGISTER.md` | Every deliberate difference from the reference, with evidence |
 | `docs/GATES.md` | The gate chain. **Read before claiming anything is green.** |
+| `docs/CLOUD_SESSIONS.md` | Bazel in a Claude Code cloud session: GitHub archives refused (`tools/cloud-distdir.sh`), the disk allowance, root |
 | `docs/ENGINEERING_LOG.md` | Standing tenets (its active queue is history; the plan above replaced it) |
 | `docs/TENETS.md` | Eager-Knowledge / lazy-Work, the north star |
 | `docs/WORLD_MAP.md` | Java vs Pure vs input: the three kinds of Pure code, the prelude, compare-not-compute, the decision procedure |

@@ -982,6 +982,11 @@ gave Postgres's answer; what does not finish is scale. The fixes, measured by th
 - **Not in this step:** CTE chains that reuse earlier CTEs grow their SQL as the copies multiply (a CTE is copied into
   every reference; sharing one needs a relation-valued `let` to lower to a `WITH`, a lowering and typer change, to be
   proposed separately), and `greatest`/`least` nested deep (each level writes its operands three or four times).
+- **Landed 2026-10-14, a doc and a script, no build or source edit:** `docs/CLOUD_SESSIONS.md` and
+  `tools/cloud-distdir.sh` (the user: "write this up and check it in somewhere that another session can do the same"):
+  how a cloud session runs Bazel when its proxy refuses GitHub's archive downloads (a `--distdir` seeded from Bazel's
+  mirror or a git clone, every pinned checksum still checked), and the container's other traps. Pointed to from
+  AGENTS.md's standing documents and START_HERE.md §6. The Bazel line owns `tools/`: move or fold it as it likes.
 
 **The Compiler Rewrite line, 2026-10-13 -- two notes for this line.**
 - **Landed 2026-10-13 (4a8ff29ad on main, branch `core/parity-today`, one commit over fc4609eeb; run 38492848369 on the
