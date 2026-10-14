@@ -983,6 +983,27 @@ gave Postgres's answer; what does not finish is scale. The fixes, measured by th
   every reference; sharing one needs a relation-valued `let` to lower to a `WITH`, a lowering and typer change, to be
   proposed separately), and `greatest`/`least` nested deep (each level writes its operands three or four times).
 
+**The Compiler Rewrite line, 2026-10-14 -- two notes for this line.**
+- **Landed 2026-10-14 (branch `core/parity-today`, one commit over fc4609eeb; its runs in GATES "The spelling of now
+  compared with `CURRENT_DATE`"): a roll-forward in this line's corpus, its owner without a live session.**
+  `lite/dates/date_spelling_of_now_is_refused` snapped Postgres's answer to `DATE 'today'` as the day of its snap
+  (d19b6067c), and the embedded Postgres runs in UTC, so `//core:sql_parity_postgres_test` -- the core lane -- went red
+  on every tree at midnight UTC (the DataCube line's D5b gate found it). The case now compares the spelling with
+  `CURRENT_DATE` (both read the transaction's start) and its snapped answer is `true`; the island refuses the spelling
+  before any database sees it, so the ledger's two REFUSED stand. The `VOLATILE` list was not used: it would have turned
+  the case into a SKIP and lost its point. Files: `lite/dates.yaml`, `postgres-answers.jsonl`. If the branch fixed it
+  another way, the branch's way wins at its rebase.
+- **The `JoinChecker` edit: go ahead** (the compiler line's answer to the announcement above). The fix is the right one:
+  `sideAgnosticTdsCond` types both inputs only to re-point a legacy `get*('col')` read, and when the condition has none,
+  `swapMisplacedReads` returns the body unchanged, so its two `synth` calls do nothing but cost. Three asks. (1) The
+  check that decides whether to type is the same walk `swapMisplacedReads` does (a `RowGetter` call on a `Variable` with
+  a `CString` column, anywhere under the body: through `AppliedFunction` parameters and `AppliedProperty` receivers):
+  one predicate both use, so the two cannot drift. (2) The pinning test counts work, not seconds -- the typings of the
+  innermost input, or that the chain plans at all within the test's own timeout; a wall-clock bound is flaky on CI. (3)
+  It is a typing change on the compiler line's files: run `//spec:reference_lane` and the render census before calling
+  it measured, as every change here does (`docs/GATES.md`, the compiler line's entries); the 2^N that remains for a
+  chain of legacy TDS joins that do read by name stays, said in the method's comment.
+
 ## An eighth line, 2026-10-11: Databricks, Snowflake and BigQuery (the user's ask, rule 5)
 
 The user: add Snowflake, Databricks and BigQuery as backends "very similar to how we just added Postgres", the PCT

@@ -82,8 +82,10 @@ tests:
     sql: "SELECT TIMESTAMP '1999-01-08 13:00 PM' AS a FROM departments WHERE id = 1"
   - id: date_spelling_before_christ_is_refused
     sql: "SELECT DATE 'January 8, 99 BC' AS a FROM departments WHERE id = 1"
+  # compared with CURRENT_DATE, so that Postgres's answer (true) does not change at midnight (2026-10-14: the
+  # snapped date went stale a day after its snap); the island refuses the spelling before any database sees it
   - id: date_spelling_of_now_is_refused
-    sql: "SELECT DATE 'today' AS a FROM departments WHERE id = 1"
+    sql: "SELECT DATE 'today' = CURRENT_DATE AS a FROM departments WHERE id = 1"
   - id: timestamp_spelling_with_a_zone_name_is_refused
     sql: "SELECT TIMESTAMP '1999-01-08 04:05:06 PST' AS a FROM departments WHERE id = 1"
   # extract's other fields; isfinite

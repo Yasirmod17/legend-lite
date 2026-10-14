@@ -1679,7 +1679,7 @@
 {"id":"lite/dates/date_spelling_of_two_months_is_an_error","error":{"state":"22007","message":"ERROR: invalid input syntax for type date: \"Jan Feb 8 1999\""}}
 {"id":"lite/dates/timestamp_spelling_of_13_pm_is_an_error","error":{"state":"22008","message":"ERROR: date/time field value out of range: \"1999-01-08 13:00 PM\""}}
 {"id":"lite/dates/date_spelling_before_christ_is_refused","columns":["a"],"rows":[["s0099-01-08"]]}
-{"id":"lite/dates/date_spelling_of_now_is_refused","columns":["a"],"rows":[["s2026-10-13"]]}
+{"id":"lite/dates/date_spelling_of_now_is_refused","columns":["a"],"rows":[["btrue"]]}
 {"id":"lite/dates/timestamp_spelling_with_a_zone_name_is_refused","columns":["a"],"rows":[["s1999-01-08 04:05:06"]]}
 {"id":"lite/dates/extract_dow_week_decade_century_millennium","columns":["id","a","b","c","e","g","h","i"],"rows":[["i1","d0","d2","d202","d21","d3","f0.0","f2.0"],["i2","d6","d9","d202","d21","d3","f6.0","f9.0"],["i3","d6","d52","d200","d20","d2","f6.0","f52.0"],["i4","d5","d52","d199","d20","d2","f5.0","f52.0"],["i5",null,null,null,null,null,null,null],["i6","d6","d24","d202","d21","d3","f6.0","f24.0"],["i7","d4","d52","d202","d21","d3","f4.0","f52.0"],["i8","d4","d1","d197","d20","d2","f4.0","f1.0"],["i9","d2","d27","d202","d21","d3","f2.0","f27.0"],["i10","d4","d1","d202","d21","d3","f4.0","f1.0"]]}
 {"id":"lite/dates/extract_epoch_of_a_date","columns":["id","a","b"],"rows":[["i1","d1673740800","f1.6737408E9"],["i2","d1582934400","f1.5829344E9"],["i3","d946684800","f9.466848E8"],["i4","d946598400","f9.465984E8"],["i5",null,null],["i6","d1718409600","f1.7184096E9"],["i7","d1766620800","f1.7666208E9"],["i8","d0","f0.0"],["i9","d1688428800","f1.6884288E9"],["i10","d1767225600","f1.7672256E9"]]}
