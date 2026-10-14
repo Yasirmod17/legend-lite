@@ -9409,3 +9409,18 @@ fast-forward to fbd216a3f, the code commit at its head, at the user's go ("well 
    finding taken.
 4. **Next:** D5b (the user's ruling: Snap's queries are Pure) -- the three operation fields that still carried the
    planner's SQL back from a host go; see IN_FLIGHT.
+
+## 2026-10-14 — The spelling of now compared with `CURRENT_DATE`: a snapped Postgres answer that changed at midnight (the Compiler Rewrite line, in the `#SQL{...}#` island's corpus)
+
+`//core:sql_parity_postgres_test` (the core lane) went red on every tree at midnight UTC:
+`lite/dates/date_spelling_of_now_is_refused` had snapped Postgres's answer to `SELECT DATE 'today' AS a` as the day of
+the snap (5ac5dddcc, `s2026-10-13`), and the embedded Postgres runs in UTC. The DataCube line's D5b gate found it; the
+corpus's owner, the island line, had no live session, so this line landed the roll-forward: the case compares the
+spelling with `CURRENT_DATE` -- both read the transaction's start, so Postgres answers `true` on any day -- and the
+island refuses the spelling before any database sees it, so the ledger's two REFUSED stand. Not the harness's `VOLATILE`
+list: it turns a case into a SKIP, and this case's point is the refusal. Branch `core/parity-today`, one commit
+(4a8ff29ad on main, over fc4609eeb); the audit (`docs/build-inventory/program/evidence/parity-today/AUDIT.md`): no
+blocker. Both parity tests run fresh locally (`--nocache_test_results`: the Postgres one red on the one DRIFT before,
+both green after); `//gates:local` 359 pass, 2 skipped (the two guards incompatible on this Mac); the lane query empty;
+CI run 38492848369 on the core lane, every platform, green on the core lane's three platform jobs and the linux-arm
+warehouse job; main's own run on the landing, 38493945113, green on every job.

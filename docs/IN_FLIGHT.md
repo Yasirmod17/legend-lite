@@ -984,15 +984,16 @@ gave Postgres's answer; what does not finish is scale. The fixes, measured by th
   proposed separately), and `greatest`/`least` nested deep (each level writes its operands three or four times).
 
 **The Compiler Rewrite line, 2026-10-14 -- two notes for this line.**
-- **Landed 2026-10-14 (branch `core/parity-today`, one commit over fc4609eeb; its runs in GATES "The spelling of now
-  compared with `CURRENT_DATE`"): a roll-forward in this line's corpus, its owner without a live session.**
-  `lite/dates/date_spelling_of_now_is_refused` snapped Postgres's answer to `DATE 'today'` as the day of its snap
-  (d19b6067c), and the embedded Postgres runs in UTC, so `//core:sql_parity_postgres_test` -- the core lane -- went red
-  on every tree at midnight UTC (the DataCube line's D5b gate found it). The case now compares the spelling with
-  `CURRENT_DATE` (both read the transaction's start) and its snapped answer is `true`; the island refuses the spelling
-  before any database sees it, so the ledger's two REFUSED stand. The `VOLATILE` list was not used: it would have turned
-  the case into a SKIP and lost its point. Files: `lite/dates.yaml`, `postgres-answers.jsonl`. If the branch fixed it
-  another way, the branch's way wins at its rebase.
+- **Landed 2026-10-14 (4a8ff29ad on main, branch `core/parity-today`, one commit over fc4609eeb; run 38492848369 on the
+  core lane, every platform, green on the core lane's three platform jobs and the linux-arm warehouse job; main's own
+  run 38493945113 green on every job; GATES "The spelling of now compared with `CURRENT_DATE`"): a roll-forward in this
+  line's corpus, its owner without a live session.** `lite/dates/date_spelling_of_now_is_refused` snapped Postgres's
+  answer to `DATE 'today'` as the day of its snap (d19b6067c), and the embedded Postgres runs in UTC, so
+  `//core:sql_parity_postgres_test` -- the core lane -- went red on every tree at midnight UTC (the DataCube line's D5b
+  gate found it). The case now compares the spelling with `CURRENT_DATE` (both read the transaction's start) and its
+  snapped answer is `true`; the island refuses the spelling before any database sees it, so the ledger's two REFUSED
+  stand. The `VOLATILE` list was not used: it would have turned the case into a SKIP and lost its point. Files:
+  `lite/dates.yaml`, `postgres-answers.jsonl`. If the branch fixed it another way, the branch's way wins at its rebase.
 - **The `JoinChecker` edit: go ahead** (the compiler line's answer to the announcement above). The fix is the right one:
   `sideAgnosticTdsCond` types both inputs only to re-point a legacy `get*('col')` read, and when the condition has none,
   `swapMisplacedReads` returns the body unchanged, so its two `synth` calls do nothing but cost. Three asks. (1) The
